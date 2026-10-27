@@ -5,6 +5,8 @@ another (providers/decisions/protocol.py decide; providers/decisions/selection.p
 _decide_with_retries). The test loads one decision's script before the decision. Each request
 takes the next entry: an Answer is returned in the smallest body the client accepts
 (providers/decisions/protocol.py decide), a Failure as the error status and body it names.
+A question with fewer than two options takes no entry and is refused with HTTP 400, as OpenAI's
+upstream refused one in a 10-27 run; whether JEV's does is not known.
 Every request is kept in arrival order, with its path, lower-cased headers and raw body.
 """
 
@@ -78,6 +80,14 @@ class DecisionsStub:
     def _respond(self, path: str, headers: dict, body: bytes) -> tuple[int, dict]:
         self.requests.append(Received(path, headers, body))
         index = len(self.requests) - 1
+        request = json.loads(body)
+        criteria = request["questions"][QUESTION_KEY]["criteria"]
+        if len(criteria) < 2:
+            return 400, _error(
+                400,
+                f'OpenAI Decisions needs at least 2 choices; question "{QUESTION_KEY}" has '
+                f"{len(criteria)}",
+            )
         if not self._script:
             self.unscripted += 1
             # HTTP 400 is FATAL for the per-question retry (entity/model.py
@@ -87,8 +97,6 @@ class DecisionsStub:
         entry = self._script.pop(0)
         if isinstance(entry, Failure):
             return entry.status, _error(entry.status, entry.message)
-        request = json.loads(body)
-        criteria = request["questions"][QUESTION_KEY]["criteria"]
         if entry.choice not in criteria:
             self.off_script.append((index, entry.choice))
             return 400, _error(400, f"scripted choice {entry.choice!r} is not offered")

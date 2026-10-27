@@ -422,19 +422,97 @@ def test_luna_screen_pointer_at_1000_is_the_last_column(tmp_path):
 
 
 @pytest.mark.parametrize("api", list(APIS))
+def test_a_frame_with_one_candidate_asks_no_question(api, tmp_path):
+    """A frame with nothing to act on offers wait alone, and OpenAI's upstream refuses a question
+    with one option. The decision is wait without a question (selection.py ChoiceDecision._choose):
+    no request and no usage, which its step, trajectory row, provider-usage row, generation record
+    and settlement report as complete, and the episode goes on."""
+    _, records = _play(
+        api,
+        script.ONE_CANDIDATE,
+        tmp_path,
+        task=ReplayTask(),
+        instruction=TASK_INSTRUCTION,
+        scene=script.loading_scene(script.ONE_CANDIDATE_FRAMES),
+    )
+    alone, after = records
+    zero = {"input_tokens": 0, "output_tokens": 0}
+    assert alone["requests"] == []
+    assert alone["result"]["raw"] == '{"action": "wait"}'
+    assert alone["commit"] == {"status": "wait", "detail": ""}
+    assert alone["action_history_entry"]["executed"] == "wait"
+    runtime = _runtime(alone)
+    assert (runtime["jev_candidate_count"], runtime["jev_selected_candidate"]) == (1, "wait")
+    assert runtime["jev_calls"] == [] and runtime["jev_transport_retries"] == []
+    assert runtime["jev_response"] is None and runtime["jev_question"] is None
+    assert alone["result"]["usage"] == zero
+    assert alone["result"]["provider_usage_missing_reason"] is None
+    assert len(after["requests"]) == 1
+    assert json.loads(after["result"]["raw"]) == {"action": "click", "target": "P1"}
+    rows = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
+    (row,) = [row for row in rows if row["tick"] == 0]
+    assert row["action_protocol"]["valid_action"] and row["action_protocol"]["candidate_count"] == 1
+    assert row["usage"]["provider_usage"] == zero
+    assert (row["usage"]["provider_input_tokens"], row["usage"]["provider_output_tokens"]) == (0, 0)
+    assert row["usage"]["provider_usage_missing_reason"] is None
+    audits = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    assert [(a["tick"], a["status"], a["stale"], a["usage"]) for a in map(json.loads, audits)] == [
+        (0, "reported", False, zero),
+        (1, "reported", False, {"input_tokens": 1000, "output_tokens": 1}),
+    ]
+    events = _trace_events(tmp_path)
+    first = [e for e in events if e["payload"].get("scope", {}).get("decision") == 0]
+    assert not any(e["event"] in {"ModelRequestSent", "ModelResponseReceived"} for e in first)
+    attempts = [e["payload"] for e in first if e["event"] == "ModelAttemptFinished"]
+    assert [(a["kind"], a["outcome"], a["usage"]) for a in attempts] == [("generation", "ok", zero)]
+    settlement = episode_records.account_tokens(alone["result"], None)
+    assert alone["result"]["token_accounting"]["provider_usage_status"] == "reported"
+    inputs = TokenAccounting([settlement]).summary()["counts"]["provider_input_tokens"]
+    assert (inputs["total"], inputs["complete"]) == (0, True)
+
+
+def test_luna_hold_pair_second_of_two_keys_asks_no_question(tmp_path):
+    """With two declared keys, the held pair's second key is the one left: it is taken without a
+    question (selection.py ChoiceDecision._compose_hold), and the duration is asked next."""
+    _, (held, waited) = _play(
+        "openai_decisions",
+        script.TWO_KEY_HOLD,
+        tmp_path,
+        task=script.ReplayTwoKeyGameTask(),
+        instruction=script.GAME_INSTRUCTION,
+        scene=script.GAME_SCENE,
+    )
+    assert _criteria_sizes(held)[1:] == [2, 3]
+    phases = [call["phase"] for call in _runtime(held)["jev_calls"]]
+    assert phases == ["gui_action", "hold_key_1", "hold_duration"]
+    assert json.loads(held["result"]["raw"]) == {
+        "action": "hold_key",
+        "key": "ArrowLeft+Space",
+        "duration": 0.5,
+    }
+    assert _runtime(held)["jev_key_composition"]["keys"] == ["ArrowLeft", "Space"]
+    assert held["result"]["usage"] == {"input_tokens": 3030, "output_tokens": 3}
+    assert waited["result"]["raw"] == '{"action": "wait"}'
+
+
+@pytest.mark.parametrize("api", list(APIS))
 def test_candidate_overflow(api, tmp_path):
-    """Too many candidates: a rejected group is bisected (selection.py _choose); a rejected
-    one-option question ends the decision, since no history is dropped at question time."""
+    """Too many candidates: a rejected group is bisected (selection.py _choose). A single option
+    is never asked, so once every group of a round is split down to single options the round
+    has made no progress, and the decision ends, since no history is dropped at question time."""
     header, records = _play(
         api, script.CANDIDATE_OVERFLOW, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION
     )
     split, failed = records
     assert _criteria_sizes(split) == [11, 5, 6, 2]
     assert [len(s["candidates"]) for s in _runtime(split)["jev_context_splits"]] == [11]
-    assert _criteria_sizes(failed) == [20, 10, 5, 2, 1]
+    assert _criteria_sizes(failed) == [20] + 2 * [10, 5, 2, 3, 2, 5, 2, 3, 2]
     assert len({json.dumps(body["state"]) for body in _bodies(failed)}) == 1
     assert failed["result"]["invalid_category"] == "provider"
     assert failed["result"]["invalid_reason"] == "provider_request_failed"
+    assert failed["result"]["invalid_detail"] == (
+        "ChoiceContextLimitError('JEV cannot compare even two candidates within the context limit')"
+    )
     assert failed["commit"] is None and failed["action_history_entry"] is None
     _settle("overflow", header, records, tmp_path)
 

@@ -563,15 +563,16 @@ def test_decisions_context_limit_splits_the_candidates(
 ):
     _, events, stub = _decide(client_type, model, provider, [status], tmp_path, monkeypatch)
     attempts = _payloads(events, "ModelAttemptFinished")
-    # All three are rejected, each half is asked alone, then the two winners meet.
-    assert [a["outcome"] for a in attempts] == ["context_limit", "ok", "ok", "ok"]
-    assert [a["criteria_count"] for a in attempts] == [3, 1, 2, 2]
+    # All three are rejected; the half of one wins without a question, the other half is asked
+    # alone, then the two winners meet.
+    assert [a["outcome"] for a in attempts] == ["context_limit", "ok", "ok"]
+    assert [a["criteria_count"] for a in attempts] == [3, 2, 2]
     (split,) = _payloads(events, "HistoryChanged")
     assert split["kind"] == "choice_candidate_split" and split["trigger"] == "fallback"
     assert split["policy_item"] is None  # the context policy has no item for it yet
     assert split["policy_version"] == CONTEXT_POLICY_VERSION  # as the runtime's records carry
     assert split["choice"]["candidates"] == ["a", "b", "c"]
-    assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 4
+    assert len(_payloads(events, "ModelRequestSent")) == len(stub.requests) == 3
 
 
 def test_jev_estimates_the_history_it_sends(tmp_path, monkeypatch):

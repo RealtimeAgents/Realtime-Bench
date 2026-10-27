@@ -300,6 +300,17 @@ GAME_DECISIONS = [
 ]
 
 
+class ReplayTwoKeyGameTask(ReplayGameTask):
+    """The game page with two declared keys: a held pair's second key has one option left."""
+
+    keys = ("ArrowLeft", "Space")
+
+
+# The pair's first key is ArrowLeft, its second Space without a question
+# (selection.py ChoiceDecision._compose_hold).
+TWO_KEY_HOLD = [decision("game_hold_pair", "0", "0.5"), wait()]
+
+
 # Failures -------------------------------------------------------------------------------------
 # One retry: a transient 503 on the second question of a composition (selection.py
 # ChoiceDecision._decide_with_retries).
@@ -316,9 +327,11 @@ TOO_LARGE = Failure(413, "Request exceeds the model's context window")
 # round 1.
 CANDIDATE_OVERFLOW = [
     decision(TOO_LARGE, "click_P1", "pan_up_R1", "click_P1"),
-    # Frame 2 offers 20: halves of 10, 5, 2, then one option. History is never reduced at
-    # question time; the error ends the decision.
-    decision(TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE, TOO_LARGE),
+    # Frame 2 offers 20, and every question is rejected: each group is split until its halves
+    # are single options, which win without a question, so the 19 questions of the split tree
+    # leave all 20 as winners. History is never reduced at question time; the round's lack of
+    # progress ends the decision.
+    decision(*[TOO_LARGE] * 19),
 ]
 # History too long: the first decisions of the long script under a small declared window
 # (test_decisions.py PRESSURE_WINDOWS). Before decision 12 the runtime archives the oldest ten
@@ -363,6 +376,27 @@ def terms_scene(terms_frame: int) -> dict:
 
     return {"probe": probe}
 
+
+def loading_scene(loading: set[int]) -> dict:
+    """The form, with no control and no canvas on the frames ``loading``: wait is their only
+    candidate (harnesses/jev/candidates.py observation_candidates), as it was on
+    rt_grocery_substitution's first frame in a 10-27 run."""
+
+    def probe(frame: int, *, text_observation: bool = False) -> dict:
+        window = frames.probe(frame, text_observation=text_observation)
+        if frame in loading:
+            nothing = {"actionable_now": [], "visible_but_unavailable": [], "canvas_surfaces": []}
+            window.update(nothing)
+            window["windows"][0].update(nothing)
+        return window
+
+    return {"probe": probe}
+
+
+# Decision 0 sees frame 1, which offers wait alone, and asks no question; decision 1 is the long
+# script's first.
+ONE_CANDIDATE_FRAMES = {1}
+ONE_CANDIDATE = [decision(status="wait"), WEB_LONG[0]]
 
 # Decision 4 sees the terms; the decisions around it are the long script's.
 LARGE_OBSERVATION = WEB_LONG[:6]
