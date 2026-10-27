@@ -48,6 +48,7 @@ from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
+from realtime_framework.providers.capture import response_statuses
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
@@ -928,13 +929,19 @@ class LiteLLMDriver(StatelessEncoder):
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         kwargs["logger_fn"] = observe
-        response = await self._sdk.acompletion(**kwargs)
+        with response_statuses() as statuses:
+            response = await self._sdk.acompletion(**kwargs)
         if not response.choices:
             raise RuntimeError("LiteLLM returned no response choices")
         message = response.choices[0].message.model_dump(exclude_none=True)
+        # LiteLLM answers a 400 saying the output limit was reached with an empty completion of
+        # its own, whose prompt count it estimated (llms/openai/common_utils.py
+        # build_output_token_limit_response): a reply the provider refused reported no usage. Only
+        # a hooked client sees the status; the generic API takes the estimate.
+        refused = any(status >= 400 for status in statuses)
         metadata = {
             "complete_response": True,
-            "usage": self._reported_usage(raw, response),
+            "usage": None if refused else self._reported_usage(raw, response),
             "message": message,
             "backend_route": self._backend_route(),
         }

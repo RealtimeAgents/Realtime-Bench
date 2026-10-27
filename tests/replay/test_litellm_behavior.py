@@ -702,22 +702,35 @@ def _output_limit(index, received):
     return Answer(400, json.dumps(body).encode())
 
 
-def test_an_output_limit_400_becomes_an_empty_reply_with_estimated_usage(tmp_path):
+@pytest.mark.parametrize(
+    "adapter_type, model_name, status_code",
+    [("chat_completions", "replay-vlm", 400), ("litellm", "openai/replay-vlm", None)],
+)
+def test_an_output_limit_400_becomes_an_empty_reply_with_estimated_usage(
+    tmp_path, adapter_type, model_name, status_code
+):
     """A non-streamed 400 whose message says the output limit was reached (llms/openai/
     common_utils.py:133-135) is returned as a successful empty completion, finish_reason
     ``length``, with no completion tokens and prompt tokens LiteLLM counts itself (:148-162,
-    :189-201; llms/openai/openai.py:534-537). The driver yields that usage as reported; only the
-    trace's 400 response shows what the provider said."""
+    :189-201; llms/openai/openai.py:534-537). chat_completions' hooked client sees the 400, and
+    the driver yields no usage for it (bug #16). The generic API has no hooked client, its
+    logged reply looks like a provider's, and the driver still yields the estimate as
+    reported."""
     with HttpStub(_output_limit) as stub:
-        config = _model(stub.origin, "chat_completions", "replay-vlm", "/v1", chat_stream=False)
+        config = _model(stub.origin, adapter_type, model_name, "/v1", chat_stream=False)
         generated = _generate(config, tmp_path)
     assert generated.error is None and len(stub.requests) == 1
     assert _visible(generated.events) == []
-    usage = next(e.usage for e in generated.events if isinstance(e, UsageSnapshot))
-    assert usage["completion_tokens"] == 0 and usage["prompt_tokens"] == usage["total_tokens"] > 0
+    usages = [e.usage for e in generated.events if isinstance(e, UsageSnapshot)]
+    if adapter_type == "chat_completions":
+        assert usages == []
+    else:
+        (usage,) = usages
+        assert usage["completion_tokens"] == 0
+        assert usage["prompt_tokens"] == usage["total_tokens"] > 0
     assert isinstance(generated.events[-1], GenerationBoundary)
     (response,) = [e["payload"] for e in generated.trace if e["event"] == "ModelResponseReceived"]
-    assert response["status_code"] == 400
+    assert response["status_code"] == status_code
 
 
 def test_a_streamed_output_limit_400_fails_closed(tmp_path):
