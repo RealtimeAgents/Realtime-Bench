@@ -7,6 +7,7 @@ history rendered as Decisions state.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from realtime_framework.entity.events import (
@@ -24,6 +25,7 @@ from realtime_framework.entity.model import (
     TransportFailure,
     TransportFailureError,
     exception_chain,
+    retry_cancel_event,
 )
 from realtime_framework.providers.decisions.selection import SELECTION_POLICY, ChoiceDecision
 
@@ -58,6 +60,15 @@ class DecisionEncoder(StatelessEncoder, ChoiceClient):
             if decision.calls:
                 exc.partial_usage = dict(decision.usage)
             raise
+        except asyncio.CancelledError:
+            # Stopping the execution thread cancels a decision given up on that is still under
+            # way, which it would report as a RetryCancelled without that usage
+            # (harnesses/default/execution_thread.py run).
+            if not (decision.calls and retry_cancel_event().is_set()):
+                raise
+            cancelled = RetryCancelled("generation abandoned while its operation ran")
+            cancelled.partial_usage = dict(decision.usage)
+            raise cancelled from None
         metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)
 

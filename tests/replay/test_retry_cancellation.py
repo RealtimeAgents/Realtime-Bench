@@ -882,3 +882,50 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
         "cancelled_request_usage_not_reported",
     )
     assert token_record(cancelled)["provider_usage_status"] == "partial"
+
+
+def test_decision_closed_between_questions(tmp_path, monkeypatch):
+    """Decision API. As in test_decision_abort_between_questions, but the agent is closed while
+    decision 1's text-edit question is about to be asked, as main() closes it once the drain
+    has given up on that worker: the close cancels the generation and stops the execution
+    thread, which cancels the decision under way (harnesses/default/execution_thread.py stop).
+    The question answered before is the usage of the generation given up on all the same
+    (decision 37): its cancelled attempt's record and a stale provider-usage row carry it."""
+    ask = selection_module.ChoiceDecision._ask
+    asked, entered, release = [], threading.Event(), threading.Event()
+
+    async def gated_ask(self, question, **kwargs):
+        asked.append(kwargs["phase"])
+        if len(asked) == 3:
+            entered.set()
+            await asyncio.to_thread(release.wait, WAIT_S)
+        return await ask(self, question, **kwargs)
+
+    monkeypatch.setattr(selection_module.ChoiceDecision, "_ask", gated_ask)
+    with DecisionsStub(upstream="openai") as stub:
+        episode = _decision_episode(stub, tmp_path, monkeypatch)
+        agent = episode.agent
+        try:
+            run_decisions(episode, [decision("click_P1")], stub)
+            stub.load(decision("compose_text", ADA, SPACE, LOVELACE, "finish").script)
+            observation = episode.frames.capture(1)
+            box, done = _generate_in_worker(episode, observation, decision=1)
+            assert entered.wait(WAIT_S), "the text-edit question was not reached"
+            agent.close()
+            assert done.wait(WAIT_S), "the closed worker never returned"
+        finally:
+            release.set()
+            episode.finish()
+    assert "error" not in box, repr(box.get("error"))
+    assert box["pending"].result["stale"] is True
+    assert asked == ["gui_action", "gui_action", "text_edit"] and len(stub.requests) == 2
+    attempts = _trace(tmp_path, "ModelAttemptFinished")
+    accepted, answered = (
+        a["usage"] for a in attempts if a["kind"] == "choice_question" and a["outcome"] == "ok"
+    )
+    assert [a["usage"] for a in attempts if a["kind"] == "generation"] == [accepted, answered]
+    lines = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    assert [(row["tick"], row["stale"], row["usage"]) for row in map(json.loads, lines)] == [
+        (0, False, accepted),
+        (1, True, answered),
+    ]
