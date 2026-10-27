@@ -663,8 +663,11 @@ def _parameters(properties, required=(), choices=()):
     return schema
 
 
-def gui_function_declarations(*, frame_reference: bool = False):
-    """``frame_reference``: streaming, where every call also names the frame it is based on."""
+def gui_function_declarations(*, clock_mode: str, frame_reference: bool = False):
+    """``frame_reference``: streaming, where every call also names the frame it is based on.
+    The descriptions describe only the run's clock, ``clock_mode``; the schemas are the same on
+    either."""
+    token_clock = clock_mode == "token"
     coordinate = {
         "type": "number",
         "description": (
@@ -677,10 +680,15 @@ def gui_function_declarations(*, frame_reference: bool = False):
     pointer_duration = {
         **duration,
         "description": (
-            "Optional executor-side pointer interpolation duration in seconds; not a key hold. "
-            "GUI execution latency is excluded from simulated time."
+            "Optional executor-side pointer interpolation duration in seconds; not a key hold."
+            + (" GUI execution latency is excluded from simulated time." if token_clock else "")
         ),
     }
+    world_time = (
+        "Under the token clock this is simulated world time."
+        if token_clock
+        else "This is physical elapsed time."
+    )
     target = {
         "type": "string",
         "description": (
@@ -735,7 +743,7 @@ def gui_function_declarations(*, frame_reference: bool = False):
                     **duration,
                     "description": (
                         "Optional hold duration in seconds, defaults to 1. Holds the entire chord; later "
-                        "actions do not cancel it. Under the token clock this is simulated world time."
+                        "actions do not cancel it. " + world_time
                     ),
                 },
             },
@@ -773,7 +781,7 @@ def gui_function_declarations(*, frame_reference: bool = False):
                     **duration,
                     "description": (
                         "Optional wait duration in seconds. Omit to wait for the next observation. "
-                        "Under the token clock this is simulated world time."
+                        + world_time
                     ),
                 }
             },
@@ -817,8 +825,10 @@ def canonical_function_action(
     name: str, arguments: dict, *, frame_reference: bool = False
 ) -> dict:
     """The call as a JSON action object; a streaming call's frame stays in it for grounding."""
+    # Only the schemas are read, which are the same on either clock.
     declarations = {
-        item["name"]: item for item in gui_function_declarations(frame_reference=frame_reference)
+        item["name"]: item
+        for item in gui_function_declarations(clock_mode="wall", frame_reference=frame_reference)
     }
     if name not in declarations or not isinstance(arguments, dict):
         raise ValueError("unknown GUI function or invalid arguments")

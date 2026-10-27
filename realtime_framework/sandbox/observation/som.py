@@ -461,12 +461,11 @@ def build_hybrid_som(
         f"HYBRID_SOM v1 observation={obs.get('observation_id', '')} "
         f"space={action_width}x{action_height} stable={str(bool(binding.get('stable'))).lower()}"
     )
-    # A streaming action names its frame, whose marks hold for it however old the frame is.
-    scope = "current-only" if frame_number is None else "for actions naming this frame"
-    instructions = [
-        header,
-        f"REF {scope}: Pn=point; Rn@u,v=region-local 0..1000; raw coordinates allowed.",
-    ]
+    # The legend stays in the context once its frame is older, so it states only what its marks
+    # are; which screenshot's marks an action uses is the system prompt's (prompts.py). A
+    # streaming action names its frame, whose marks hold for it however old the frame is.
+    scope = "" if frame_number is None else " for actions naming this frame"
+    instructions = [header, f"REF{scope}: Pn=point; Rn@u,v=region-local 0..1000."]
     text = "\n".join(instructions + item_lines)
     unavailable = _active_items(result)[1]
     marked_bytes, mime = (None, None)
@@ -622,11 +621,8 @@ def observation_prompt_with_interactables(base_prompt: str, text: str, header: s
     This is observation data, not a model-invoked tool turn: the harness calls the read-only
     runtime for each frame and asks the model for its GUI action once.
     """
-    return (
-        base_prompt
-        + header
-        + (text or "No browser interactables were available for this screenshot.")
-        + "\nUse only these marks; otherwise use raw coordinates."
+    return base_prompt + header + (
+        text or "No browser interactables were available for this screenshot."
     )
 
 

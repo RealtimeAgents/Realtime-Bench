@@ -282,7 +282,11 @@ class NativeStreamingAgent(VisionAgentBase):
             action_channel=channel,
             format_profile=self.interaction_profile.name,
             function_declarations=(
-                tuple(gui_function_declarations(frame_reference=True))
+                tuple(
+                    gui_function_declarations(
+                        clock_mode=self.prompt_options.clock_mode, frame_reference=True
+                    )
+                )
                 if channel == "function_call"
                 else ()
             ),

@@ -670,6 +670,7 @@ from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SP
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
+from realtime_framework.harnesses.default.prompts import FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
@@ -682,6 +683,8 @@ from realtime_framework.harnesses.default.prompts import PromptOptions
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTE
 from realtime_framework.harnesses.default.prompts import UNANSWERED_STEP_NOTES
 from realtime_framework.harnesses.default.prompts import UNSUPPORTED_TERMINAL_ACTION_FEEDBACK
+from realtime_framework.harnesses.default.prompts import WALL_CLOCK_FUNCTION_CALL_ACTION_SPACE
+from realtime_framework.harnesses.default.prompts import WALL_CLOCK_FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import bind_action
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
@@ -691,9 +694,13 @@ from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADE
 class InteractionProfile:
     name: str
     action_space: str | None = None
+    # Its action space on the wall clock, where that differs.
+    wall_clock_action_space: str | None = None
     output_contract: str = STREAM_OUTPUT_CONTRACT
-    # Its output contract under a finite B (PromptOptions.finite_budget), where that differs.
+    # Its output contract under a finite B (PromptOptions.finite_budget), and on the wall clock,
+    # where those differ.
     finite_budget_output_contract: str | None = None
+    wall_clock_output_contract: str | None = None
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
     # A streaming profile's: how an action names its frame.
     frame_reference_rules: str | None = None
@@ -701,12 +708,15 @@ class InteractionProfile:
     def system_instruction(self, agent) -> str:
         """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
         configure_agent), for which the profile was chosen (interaction_profile)."""
+        options = agent.prompt_options
+        wall = options.clock_mode == "wall"
+        action_space = (wall and self.wall_clock_action_space) or self.action_space
         output_contract = (
-            self.finite_budget_output_contract
-            if agent.prompt_options.finite_budget and self.finite_budget_output_contract
-            else self.output_contract
+            (wall and self.wall_clock_output_contract)
+            or (options.finite_budget and self.finite_budget_output_contract)
+            or self.output_contract
         )
-        if self.action_space is None:
+        if action_space is None:
             return gui_system_prompt(
                 agent.task_instruction,
                 scenario_prompt=getattr(agent, "system_prompt_override", None),
@@ -718,7 +728,7 @@ class InteractionProfile:
                 None,
                 (
                     SCENARIO_ROLES[agent.task_category],
-                    self.action_space,
+                    action_space,
                     self.frame_reference_rules,
                     output_contract,
                     getattr(agent, "streaming_note", None),
@@ -744,8 +754,10 @@ STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm")
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
     action_space=FUNCTION_CALL_ACTION_SPACE,
+    wall_clock_action_space=WALL_CLOCK_FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
     finite_budget_output_contract=FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT,
+    wall_clock_output_contract=WALL_CLOCK_FUNCTION_CALL_OUTPUT_CONTRACT,
     frame_prompt=FUNCTION_CALL_FRAME_PROMPT,
 )
 # The choice models' profiles.
@@ -777,7 +789,7 @@ MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
         "then finishes to type it. Spaces and casing are explicit."
     ),
     # Luna's transcript keeps the older frames, which JEV's digest leaves out.
-    frame_prompt="Screen observed for this decision.",
+    frame_prompt=FRAME_PROMPT,
 )
 
 MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(
@@ -818,7 +830,7 @@ STREAMING_INTERACTION_PROFILES = {
         InteractionProfile(
             "function_call",
             action_space=STREAMING_FUNCTION_CALL_ACTION_SPACE,
-            output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
+            output_contract=WALL_CLOCK_FUNCTION_CALL_OUTPUT_CONTRACT,
             frame_prompt=STREAMING_FUNCTION_CALL_FRAME_PROMPT,
             frame_reference_rules=FUNCTION_CALL_FRAME_REFERENCE_RULES,
         ),
@@ -1310,7 +1322,9 @@ class DefaultHarness(VisionAgentBase):
             action_channel=channel,
             format_profile=self.interaction_profile.name,
             function_declarations=(
-                tuple(gui_function_declarations()) if channel == "function_call" else ()
+                tuple(gui_function_declarations(clock_mode=self.prompt_options.clock_mode))
+                if channel == "function_call"
+                else ()
             ),
         )
 
