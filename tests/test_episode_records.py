@@ -309,6 +309,9 @@ def test_a_partial_usage_is_known_but_leaves_the_totals_incomplete():
     inputs = summary["counts"]["provider_input_tokens"]
     assert inputs["total"] is None and inputs["complete"] is False
     assert (inputs["known_total"], inputs["responses_with_count"]) == (2000, 1)
+    # The counts the harness makes itself stay whole.
+    post_horizon = summary["counts"]["post_horizon_output_tokens"]
+    assert (post_horizon["total"], post_horizon["complete"]) == (0, True)
     usage = trajectory_usage({"usage": failed["usage"], "_token_accounting": record})
     assert usage["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
     usage = trajectory_usage({"usage": USAGE, "_token_accounting": accepted["token_accounting"]})

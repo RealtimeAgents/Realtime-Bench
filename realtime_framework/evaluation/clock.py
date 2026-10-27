@@ -303,14 +303,14 @@ class TokenAccounting:
 
     def _add(self, record):
         self.responses += 1
-        # A partial usage adds to the known totals and leaves the totals incomplete.
-        covered = (
-            self.partial if record.get("provider_usage_status") == "partial" else self.coverage
-        )
+        # A partial usage adds to the known totals and leaves the provider's totals incomplete;
+        # the counts the harness makes itself are whole.
+        partial = record.get("provider_usage_status") == "partial"
         for key in COUNTS:
             value = _number(record, key)
             if value is not None:
                 self.sums[key] += value
+                covered = self.partial if partial and key.startswith("provider_") else self.coverage
                 covered[key] += 1
         if record.get("provider_usage_missing_reason"):
             self.missing_reasons[record["provider_usage_missing_reason"]] += 1
