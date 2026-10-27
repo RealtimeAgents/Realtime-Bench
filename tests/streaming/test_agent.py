@@ -36,9 +36,10 @@ from realtime_framework.harnesses.default.harness import action_text
 from realtime_framework.harnesses.streaming import agent as agent_module
 from realtime_framework.harnesses.streaming.agent import NativeStreamingAgent
 from realtime_framework.harnesses.streaming.feedback import execution_feedback
-from realtime_framework.providers.gemini.live import GoAwayDeadlineExceeded
+from realtime_framework.providers.gemini.live import GeminiLiveDriver, GoAwayDeadlineExceeded
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from tests.fake_clock import FakeClock
+from tests.session.test_gemini_live_streaming import FedLive, wire
 
 from .fake_live import (
     BUDGET,
@@ -1395,7 +1396,11 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
 
 class _ToolRounds(FakeLiveDriver):
     """Reports each reply's calls in its handle's completed_turn_refs, a round each, with the
-    queued acknowledgement, as Gemini Live does."""
+    queued acknowledgement, as Gemini Live does: each round before its call is handed over, and
+    the acknowledgement written after, which takes ``ack_s`` and fails once the connection is
+    closed."""
+
+    ack_s = 1.0
 
     async def request_reply(self, request):
         handle = await super().request_reply(request)
@@ -1416,6 +1421,8 @@ class _ToolRounds(FakeLiveDriver):
                     {"function_calls": [call], "function_responses": [receipt]}
                 )
             yield event
+            if isinstance(event, FunctionCall):
+                await self._until(self.clock.monotonic() + self.ack_s)
 
 
 QUEUED = {"status": "queued"}
@@ -1454,6 +1461,67 @@ def test_a_rebuilt_session_replays_a_replys_tool_rounds_as_a_turns_are(monkeypat
     ]
     assert reconnect["policy_item"] == ["tool_call_replay"]
     agent.close()
+
+
+class _FedGeminiLive(GeminiLiveDriver):
+    """Gemini Live's encoder on connections the test feeds (tests/session/
+    test_gemini_live_streaming.py FedLive), on which a queued tool acknowledgement does not
+    drain."""
+
+    def __init__(self, config, *, clock=None, streaming=False):
+        config = config.model_copy(update={"api_key": "replay-dummy-key"})
+        super().__init__(config, clock=clock, streaming=streaming)
+        self.live = FedLive()
+        self.live.stall = lambda message: wire(message) == "tool_response"
+        self.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
+
+
+@pytest.mark.parametrize("said", [False, True], ids=["silent", "said_first"])
+def test_a_reply_given_up_while_its_acknowledgement_is_written_keeps_its_call(
+    monkeypatch, clock, said
+):
+    """Decisions 24 and 25 on Gemini Live's encoder: the click is handed over, and its queued
+    acknowledgement does not drain; the abort's close waits on it, then drops the connection
+    under it. The click ran, so the reply's output stays with its tool round, which the encoder
+    recorded before it handed the click over: the session rebuilt for the next frame holds the
+    click in the tool transcript, after what the model said, and not as bare action text or
+    through its result alone."""
+    agent = make_agent(monkeypatch, clock, _FedGeminiLive)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    first = agent.driver.live.sockets[0]
+    first.close_stalls = True
+    click = {"x": 10, "y": 20, "button": "left", "frame": 2}
+    said_first = {"serverContent": {"outputTranscription": {"text": "Clicking the button."}}}
+    called = {"toolCall": {"functionCalls": [{"id": "c1", "name": "click", "args": click}]}}
+    first.answer("activityEnd", *((said_first,) if said else ()), called)
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(1.0)
+    assert [arrived.call_id for arrived in posted] == ["c1"]
+    agent.abort(7)
+    assert clock.wait(done, 10.0)
+    agent.discard(7)
+    agent.commit(_outcome(3, "applied", "c1", action=posted[0].action))
+    agent.push(observation(clock, 3))
+    rebuilt = agent.driver.live.sockets[-1]
+    seeded = [
+        (content["role"], part["text"])
+        for message in rebuilt.sent
+        if wire(message) == "client_content"
+        for content in message["client_content"]["turns"]
+        for part in content["parts"]
+        if "text" in part
+    ]
+    header = agent._context_policy.texts.gemini_tool_history_header
+    agent.close()
+    model = [text for role, text in seeded if role == "model"]
+    assert model[:-1] == (["Clicking the button."] if said else [])
+    assert model[-1].startswith(header + "\n")
+    [exchange] = json.loads(model[-1].removeprefix(header + "\n"))
+    assert exchange["function_calls"] == [{"id": "c1", "name": "click", "arguments": click}]
+    assert [receipt["id"] for receipt in exchange["function_responses"]] == ["c1"]
+    assert seeded[-1][0] == "user" and seeded[-1][1].startswith("EXECUTION RESULT")
 
 
 class _PolicyRetained(FakeLiveDriver):

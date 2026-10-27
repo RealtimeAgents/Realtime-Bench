@@ -656,10 +656,15 @@ class SessionCore:
         if connection == self.connection:
             self.pending_calls.extend(calls)
 
-    def acknowledging(self, connection: int) -> tuple[tuple, ...]:
+    def unacknowledged(self, connection: int) -> tuple[tuple, ...]:
         """The (id, name) of the calls a queued acknowledgement on ``connection`` answers: every
         one pending there, none on a connection closed since."""
-        pending = tuple(self.pending_calls) if connection == self.connection else ()
+        return tuple(self.pending_calls) if connection == self.connection else ()
+
+    def acknowledging(self, connection: int) -> tuple[tuple, ...]:
+        """The calls a queued acknowledgement on ``connection`` answers (unacknowledged), now
+        being written."""
+        pending = self.unacknowledged(connection)
         self.sending(("tool_response", call_id) for call_id, _ in pending)
         return pending
 
