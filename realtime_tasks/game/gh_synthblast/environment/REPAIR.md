@@ -19,6 +19,11 @@ The task remains `gh_synthblast` at the pinned Apache-2.0 upstream commit.
   for scoring and audit; no task adapter writes gameplay progress.
 - The catalog rules document held movement/steering controls and the native one-second `LEVEL`
   banner followed by a gameplay key to launch the next arena.
+- The companion drone never appears: the built bundle loads `js/models/Drone.json` relative to
+  `dist/`, where the model is not shipped, so the drone stays unloaded and inert. It is
+  cosmetic (it never fires, blocks or scores). The model is deliberately not added, because a
+  loaded drone draws from the shared seeded `Math.random` stream at load-timing-dependent
+  points and would shift enemy wander and drops.
 
 ## Distribution notices
 

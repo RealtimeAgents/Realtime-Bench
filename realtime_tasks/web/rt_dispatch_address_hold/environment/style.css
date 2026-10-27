@@ -48,3 +48,10 @@
     .rt-toast-stack{position:fixed;bottom:20px;right:20px;z-index:100}.rt-toast{background:#fff;border:1px solid #c2cdb8;box-shadow:0 5px 25px #0002;padding:14px;margin-top:8px;max-width:380px;border-radius:6px}.rt-toast strong,.rt-toast span{display:block}.rt-toast span{font-size:14px;margin-top:5px}
     @media(max-width:1150px){.shell{grid-template-columns:158px minmax(0,1fr)}main{padding:24px}.order-layout{grid-template-columns:minmax(360px,1fr) 240px;gap:22px}.customer-record{padding-left:20px}.item-detail{min-width:170px;gap:9px}.quantity{margin:0 9px}}
     @media(max-width:800px){.shell{grid-template-columns:120px minmax(0,1fr)}nav{padding:20px 6px}nav .sub{padding-left:26px}main{padding:20px 16px}.order-layout{grid-template-columns:1fr}.customer-record{border-left:0;border-top:1px solid #dce1d5;padding:20px 0 0}.order-source{display:none}.order-heading{gap:10px}.heading{gap:5px}h1{font-size:23px}}
+
+/* Stacked layout (<=900px): the store navigation becomes a compact strip so the order starts on the first screen. */
+@media(max-width:900px){
+.shell>nav{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;padding:8px 12px}
+nav .nav-item,nav .sub{margin:0;padding:5px 9px}
+nav .nav-label{margin:0 4px 0 10px;font-size:12px}
+}

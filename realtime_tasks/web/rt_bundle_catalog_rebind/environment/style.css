@@ -3,3 +3,15 @@
 .savebar button{color:#24282c}
 .status-options{display:grid;gap:6px}.status-option{text-align:left;padding:9px 12px;min-height:38px}.status-option.current{background:#e4eeef;border-color:#71939b;font-weight:600}
 .clock{position:absolute;left:14px;right:14px;bottom:84px;background:#f5f7f7;border:1px solid #d9dedf;border-radius:8px;padding:12px 13px;color:#24282c;font-variant-numeric:tabular-nums}.clock-head{font-size:14px;color:#687277;margin-bottom:6px}.clock-time{font-size:20px;font-weight:700;margin-bottom:8px}.clock-line{font-size:14px;margin-top:4px;line-height:1.35}.clock-line b{font-weight:650}.clock-phase{font-size:14px;font-weight:650;color:#345e49;margin-top:8px}.clock-phase.closed{color:#8a4a3a}
+
+/* Stacked layout (<=900px): compact navigation strip with the promotion clock; the owner line stays in flow instead of overlapping the editor. */
+@media(max-width:900px){
+html[data-mobile-task] body>aside{display:flex;flex-wrap:wrap;align-items:center;gap:2px 4px;padding:8px 12px}
+html[data-mobile-task] body>aside>div.tiny{padding:0 8px!important}
+aside>div[style*="bottom"]{position:static!important;order:3}
+html[data-mobile-task] aside button{width:auto;margin:0;padding:6px 10px;min-height:36px}
+aside small{margin:0 4px 0 10px}
+html[data-mobile-task] aside .clock{flex-basis:100%;margin:6px 0 4px;padding:8px 12px;display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px}
+aside .clock-head,aside .clock-time{margin:0}
+aside .clock-phase{flex-basis:100%;margin-top:2px}
+}

@@ -5,3 +5,15 @@
 #message-actions{position:absolute;left:15px;bottom:90px;background:white;border:1px solid #d3ded5;box-shadow:0 4px 15px #10251520;border-radius:6px;padding:5px;z-index:3}#message-actions button{display:block;width:100%;text-align:left}
 .clock{width:96px;font-weight:650;font-variant-numeric:tabular-nums;color:#48574d}.live-strip{display:flex;align-items:center;gap:30px;height:44px;margin-bottom:16px;padding:0 14px;background:#f5f7f5;border-radius:6px;font-size:13px;color:#48574d}.live-strip b{font-variant-numeric:tabular-nums}.live-strip .count{display:inline-block;min-width:34px;text-align:right}
 .picker-select{display:none}.picker{position:relative}.pick{display:flex;justify-content:space-between;gap:8px;width:100%;padding:10px 12px;border:1px solid #d0dbd3;border-radius:5px;background:white;color:#2d3931;font-weight:500;text-align:left}.pick[aria-expanded=true]{border-color:#346b50}.pick-list{display:grid;gap:5px;margin-top:6px;padding:6px;border:1px solid #d0dbd3;border-radius:5px;background:#fff}.pick-list.grid{grid-template-columns:repeat(4,1fr)}.pick-option{min-height:38px;padding:9px 11px;border:1px solid #e4e9e5;border-radius:5px;background:#f5f7f5;text-align:left;font-weight:500;font-size:13px}.pick-option.current{background:#dfeee4;border-color:#346b50;font-weight:700}
+
+/* Stacked layout (<=900px): a compact navigation strip, then the work area; the month and salon hours follow it. */
+@media(max-width:900px){
+body{display:flex;flex-direction:column}
+body>aside.sidebar{display:contents}
+body>header{order:0}
+.sidebar nav{order:1;flex-direction:row;flex-wrap:wrap;gap:2px 4px;padding:8px 12px;border-bottom:1px solid #e2e6e3;background:#fafbf9}
+html[data-mobile-task] .sidebar nav :is(button,span){padding:6px 10px;min-height:36px;display:inline-flex;align-items:center}
+body>main{order:2;margin-top:0}
+.sidebar .salon-hours{order:3;padding:16px 20px;border-top:1px solid #e2e6e3}
+.sidebar .month{order:4;padding:0 20px 24px;max-width:360px}
+}
