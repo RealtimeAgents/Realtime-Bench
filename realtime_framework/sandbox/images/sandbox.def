@@ -27,7 +27,9 @@ From: {{ BASE_IMAGE }}
     mkdir -p /home/user
     chmod -R a+rX /opt/guest_agent /home/user
     export DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
-    sh /opt/pin-apt.sh "{{ APT_SNAPSHOT }}" && rm /opt/pin-apt.sh
+    # Its own line, so set -e stops the build when pinning fails (left of &&, it would not).
+    sh /opt/pin-apt.sh "{{ APT_SNAPSHOT }}"
+    rm /opt/pin-apt.sh
     apt-get install -y \
         xvfb x11vnc websockify novnc \
         xfce4 xfce4-terminal dbus-x11 \
