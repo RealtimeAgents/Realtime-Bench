@@ -1352,7 +1352,9 @@ def test_closing_while_a_push_reopens_the_session_closes_what_it_opened(monkeypa
 def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkeypatch, clock):
     """As RealtimeRuntime._record_sync and _record_reconnect: each session operation is a
     HistoryChanged of the kind the driver's result reports, with the result's detail and
-    metadata, and a SessionStateChanged says whether the provider's context is known."""
+    metadata, and a rebuild with the policy items it replays the view by (decision 24), which a
+    resumed renewal replays none of; and a SessionStateChanged says whether the provider's
+    context is known."""
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, trace=trace)
     agent.bind_inbox(lambda event: None, ORIGIN)
@@ -1379,6 +1381,8 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
         ("session_resumed", "provider", "go_away"),
         ("rebuild", "recovery", "reconnect"),
     ]
+    replayed = ["tool_call_replay"]
+    assert [c["policy_item"] for c in changes] == [replayed, None, replayed]
     assert changes[1]["sync"]["provider_metadata"]["session_resumed"] is True
     states = trace.of(TraceEvent.SESSION_STATE_CHANGED)
     assert [(s["state"], s["cause"], s["generation_id"]) for s in states] == [
