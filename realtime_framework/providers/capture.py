@@ -11,6 +11,7 @@ response headers alike, are not recorded at all.
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import itertools
 import weakref
@@ -46,6 +47,22 @@ KEPT_HEADERS = frozenset(
 # llm_response_utils/get_headers.py) and Anthropic's (llms/anthropic/common_utils.py).
 KEPT_HEADER_PREFIXES = ("x-ratelimit-", "anthropic-ratelimit-")
 REDACTED = "<redacted>"
+_STATUSES: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
+    "response_statuses", default=None
+)
+
+
+@contextlib.contextmanager
+def response_statuses():
+    """Collect the HTTP status of each response a hooked client receives within this context, in
+    order. LiteLLM awaits the SDK's request in the calling task (litellm/main.py acompletion),
+    which the client's hooks run in."""
+    statuses: list[int] = []
+    token = _STATUSES.set(statuses)
+    try:
+        yield statuses
+    finally:
+        _STATUSES.reset(token)
 
 
 def header_kept(name: str) -> bool:
@@ -176,6 +193,9 @@ class HttpCapture:
         )
 
     async def _on_response(self, response: httpx.Response) -> None:
+        statuses = _STATUSES.get()
+        if statuses is not None:
+            statuses.append(response.status_code)
         stream = _RecordingStream(self, self._sent.get(response.request), response)
         self.open.add(stream)
         response.stream = stream

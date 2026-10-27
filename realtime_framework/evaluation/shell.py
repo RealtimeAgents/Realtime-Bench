@@ -61,7 +61,7 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.clock import Settlement, token_record
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,
     EpisodeResult,
@@ -276,6 +276,7 @@ class _Generation:
     # The OutputChunkReceived and InferenceCompleted payloads of the result once it is settled, on
     # the shell's thread before the kernel gets it; None for a result the kernel had given up on.
     inference: tuple[list[dict], dict] | None = None
+    settlement: Settlement | None = None  # of the result settled, its own or one synthesized
     invalid: Invalidated | None = None  # why the settled result is unusable, if it is
     echo: Entry | None = None  # the kernel's record of the result, which those are written under
     given_up: bool = False  # the kernel gave it up, and its records are written (_given_up)
@@ -324,7 +325,10 @@ class _Shell:
         self._returned: deque[_Generation] = deque()  # results the workers handed back
         self._generations: dict[int, _Generation] = {}
         self._abandoned: list[_Generation] = []
-        self._token_accounting: TokenAccounting | None = None
+        self._settlements: list[Settlement] = []  # one for each result settled, in order
+        # The generations whose settlement the shell synthesized, given up on before a result of
+        # their own was settled.
+        self._synthesized: list[_Generation] = []
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
@@ -364,7 +368,7 @@ class _Shell:
                     inputs.close()
                 except Exception:  # noqa: BLE001 - see above
                     self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
-        return self.end.result(env, self.timeline, self._token_accounting, self._drain_abandoned)
+        return self.end.result(env, self.timeline, self._settlements, self._drain_abandoned)
 
     def _episode(self) -> None:
         if self.agent_trace is None:
@@ -806,11 +810,15 @@ class _Shell:
         bounds = (held.bound_at, held.deadline)
         return any(at is not None and at <= held.returned_at for at in bounds)
 
-    def _settle(self, held: _Generation, r: dict) -> tuple[GenerationResult, tuple]:
+    def _settle(
+        self, held: _Generation, r: dict, outcome: str = "reported"
+    ) -> tuple[GenerationResult, tuple]:
         """The result's annotations, usage, token accounting, cap audit and trajectory row, in
         the runner's order (legacy_loop.py ``_decide``); what the kernel needs of it, and its
         OutputChunkReceived and InferenceCompleted payloads as they were before the trajectory
-        row."""
+        row. Its settlement goes into the episode's, with ``outcome`` (clock.py Settlement): the
+        decision of a result the kernel takes is reported unless the shell marks it otherwise
+        (_given_up, _record_unfinished)."""
         budget, clock_mode, agent = held.budget, self.config.clock_mode, self.agent
         episode_records.annotate_result(
             r,
@@ -823,10 +831,10 @@ class _Shell:
         # The clock's count is the result's own: an agent that holds its result adds its usage
         # only as it accepts it (_write_inference), so what the usage grew by until now is no count.
         # A result that names none has none: the agents create_agent makes name theirs
-        # (harnesses/registry.py). The episode has no accounting until a result is settled.
-        if self._token_accounting is None:
-            self._token_accounting = TokenAccounting()
-        episode_records.account_tokens(r, held.remaining, self._token_accounting)
+        # (harnesses/registry.py).
+        held.settlement = episode_records.account_tokens(r, held.remaining)
+        held.settlement.outcome = outcome
+        self._settlements.append(held.settlement)
         usage_after = episode_records.usage_snapshot(agent)
         if held.usage_before is not None and usage_after is not None:
             r["frame_usage"] = episode_records.frame_usage(held.usage_before, usage_after)
@@ -885,25 +893,30 @@ class _Shell:
     def _drain_abandoned(self) -> None:
         """Wait a bounded time for the workers of abandoned generations before main() closes the
         agent, after the snapshot is frozen; workers still inside a native call need the runner's
-        hard exit. Runs once."""
+        hard exit. Then a generation whose settlement was synthesized takes the result its worker
+        handed back, if it did, as what its call spent (clock.py Settlement.late). Runs once."""
         if self._drained:
             return
         self._drained = True
         pending = [held for held in self._abandoned if not held.done.is_set()]
-        if not pending:
-            return
-        seconds, clock = self.config.timing.abandoned_drain_s, self.clocks.operational
-        self.log(f"[default] draining {len(pending)} abandoned generate worker(s), <= {seconds:g}s")
-        limit = clock.time() + seconds
-        for held in pending:
-            clock.wait(held.done, max(0.0, limit - clock.time()))
-        live = sum(1 for held in pending if not held.done.is_set())
-        if live:
+        if pending:
+            seconds, clock = self.config.timing.abandoned_drain_s, self.clocks.operational
             self.log(
-                f"[default] {live} abandoned worker(s) STILL inside a native call after "
-                f"{seconds:g}s — teardown continues; the runner hard-exits so interpreter "
-                f"finalization cannot abort on them"
+                f"[default] draining {len(pending)} abandoned generate worker(s), <= {seconds:g}s"
             )
+            limit = clock.time() + seconds
+            for held in pending:
+                clock.wait(held.done, max(0.0, limit - clock.time()))
+            live = sum(1 for held in pending if not held.done.is_set())
+            if live:
+                self.log(
+                    f"[default] {live} abandoned worker(s) STILL inside a native call after "
+                    f"{seconds:g}s — teardown continues; the runner hard-exits so interpreter "
+                    f"finalization cannot abort on them"
+                )
+        for held in self._synthesized:
+            if held.done.is_set():
+                held.settlement.late = token_record(held.result)
 
     # ---- the action ---------------------------------------------------------------------------
 
@@ -1133,7 +1146,7 @@ class _Shell:
             entry = Entry(None, semantic, ops, "GenerationAbandoned", data)
             if held.inference is not None:
                 self._emit_inference(held.inference, entry)
-                self._token_accounting.leave_unreported(held.result["token_accounting"])
+                held.settlement.outcome = "unreported"
                 continue
             seconds = (
                 termination.ops_ended_at - held.started_ops
@@ -1141,7 +1154,8 @@ class _Shell:
                 else termination.ended_at - held.started_semantic
             )
             r = episode_records.abandoned_result(round(max(0.0, seconds), 2), "invalid_run")
-            self._emit_inference(self._settle(held, r)[1], entry)
+            self._emit_inference(self._settle(held, r, "abandoned")[1], entry)
+            self._synthesized.append(held)
 
     # ---- the episode trace --------------------------------------------------------------------
 
@@ -1242,9 +1256,9 @@ class _Shell:
         totals and the model timing leave out (N34). Only the move over the cap is reported, as
         skipped (kernel/turns.py on_timer), its record naming the cap also when it keeps a result
         settled before the cap was handled; the others end the episode and their decision goes
-        unreported (K-a): the token accounting leaves a result settled before, or one the totals
-        count, out of its subtotal of reported decisions, which the report checks the lifecycle
-        against (reporting.py report)."""
+        unreported (K-a): the settlement of a result settled before, or of one the totals count,
+        says so, which keeps it out of the subtotal of reported decisions the report checks the
+        lifecycle against (reporting.py report)."""
         reason, held = entry.data["reason"], self._generations.get(entry.data["generation"])
         if held is None:
             return  # its StartGeneration raised
@@ -1261,7 +1275,7 @@ class _Shell:
                 held.result["harness_timeout_reason"] = "per_move_cap"
                 self._decision.result = held.result
             else:
-                self._token_accounting.leave_unreported(held.result["token_accounting"])
+                held.settlement.outcome = "unreported"
             if bound is not None:
                 self.log(
                     f"[default] k={held.decision} generation back in "
@@ -1298,11 +1312,14 @@ class _Shell:
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"
             )
-        result, inference = self._settle(held, r)
+        if reason == "per_move_cap":
+            outcome = "reported"
+        else:
+            outcome = "abandoned" if bound is None else "unreported"
+        result, inference = self._settle(held, r, outcome)
+        self._synthesized.append(held)
         if reason == "per_move_cap":
             self._decision.result = r
-        elif bound is not None:
-            self._token_accounting.leave_unreported(r["token_accounting"])
         self._emit_inference(inference, entry)
         if result.invalid is not None and self.kernel.invalid is None:
             self._invalidate(result.invalid)  # its trajectory row could not be written

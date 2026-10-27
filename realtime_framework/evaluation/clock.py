@@ -3,6 +3,7 @@ from __future__ import annotations
 # Token accounting
 """Model-independent token audit records; unknown usage is never treated as zero."""
 from collections import Counter as Counter
+from dataclasses import dataclass as dataclass
 from decimal import Decimal as Decimal
 from decimal import InvalidOperation as InvalidOperation
 
@@ -220,8 +221,46 @@ def token_record(result):
     return record
 
 
+@dataclass
+class Settlement:
+    """One settled generation result as its episode accounts it (episode_records.py
+    account_tokens): its token record, its provider call and what came of it. The token totals,
+    the subtotal of reported decisions and the model timing are taken from the episode's
+    settlements, in the order they were settled, once it is over (TokenAccounting,
+    summarize_model_timing).
+
+    ``reported``: its decision is reported, which the lifecycle records; it counts in all three.
+    ``unreported``: the kernel gave its generation up otherwise, or the episode ended without
+    its decision; the totals and the model timing count it, the subtotal does not. ``abandoned``:
+    synthesized for a call given up on at the episode's end, which counts in none (N34)."""
+
+    record: dict
+    # When its provider call started, monotonic ns, and how long it took, seconds; None for a
+    # call that has neither, which the model timing counts as unfinished.
+    call_started_ns: int | None
+    call_latency_s: float | None
+    outcome: str = "reported"
+    # Of a call the kernel gave up on before a result of its own was settled, so that ``record``
+    # is synthesized: the token record of the result its worker handed back by the end of the
+    # drain (shell.py _drain_abandoned).
+    late: dict | None = None
+
+    @property
+    def spent(self) -> dict | None:
+        """The token record of what its call spent, as far as it is known (decision 37): that of
+        the late result when it reported usage, else its own, which an abandoned settlement has
+        none of (N34)."""
+        if self.late is not None and self.late["provider_usage_status"] != "unavailable":
+            return self.late
+        return None if self.outcome == "abandoned" else self.record
+
+
 class TokenAccounting:
-    def __init__(self):
+    """The token totals of an episode's settlements, and the subtotal of its reported
+    decisions; with ``spent``, the totals of what every call spent, the calls given up on
+    included (Settlement.spent), and no subtotal."""
+
+    def __init__(self, settlements=(), *, spent=False):
         self.responses = 0
         self.sums = Counter()
         self.coverage = Counter()
@@ -245,22 +284,33 @@ class TokenAccounting:
         self.cost_detail_coverage = Counter()
         # The responses counted above whose decision goes unreported, and their clock counts.
         self.unreported = Counter()
+        self.given_up = 0  # spent: the responses counted with the usage of a late result
+        for settlement in settlements:
+            if spent:
+                record = settlement.spent
+                if record is not None:
+                    self._add(record)
+                    self.given_up += record is settlement.late
+                continue
+            # A call given up on at the episode's end has a synthesized record and no usage: the
+            # totals stay those of the calls made (N34). One given up on at a bound counts, and
+            # leaves them incomplete (decision 48).
+            if settlement.outcome == "abandoned":
+                continue
+            self._add(settlement.record)
+            if settlement.outcome == "unreported":
+                self._leave_unreported(settlement.record)
 
-    def add(self, record):
-        # A call given up on at the episode's end has a synthesized record and no usage: the
-        # totals stay those of the calls made (N34). One given up on at a bound counts, and
-        # leaves them incomplete (decision 48).
-        if record.get("harness_abort_reason"):
-            return
+    def _add(self, record):
         self.responses += 1
-        # A partial usage adds to the known totals and leaves the totals incomplete.
-        covered = (
-            self.partial if record.get("provider_usage_status") == "partial" else self.coverage
-        )
+        # A partial usage adds to the known totals and leaves the provider's totals incomplete;
+        # the counts the harness makes itself are whole.
+        partial = record.get("provider_usage_status") == "partial"
         for key in COUNTS:
             value = _number(record, key)
             if value is not None:
                 self.sums[key] += value
+                covered = self.partial if partial and key.startswith("provider_") else self.coverage
                 covered[key] += 1
         if record.get("provider_usage_missing_reason"):
             self.missing_reasons[record["provider_usage_missing_reason"]] += 1
@@ -293,10 +343,9 @@ class TokenAccounting:
             self.cost_detail_sums[key] = self.cost_detail_sums.get(key, Decimal(0)) + amount
             self.cost_detail_coverage[key] += 1
 
-    def leave_unreported(self, record):
-        """Keep ``record``, added already, out of the reported decisions' subtotal: the kernel
-        gave its decision up, and no lifecycle record reports it (shell.py _given_up). The
-        totals keep it."""
+    def _leave_unreported(self, record):
+        """Keep ``record``, added already, out of the reported decisions' subtotal: no lifecycle
+        record reports its decision (shell.py _given_up). The totals keep it."""
         self.unreported["responses"] += 1
         value = _number(record, "clock_output_tokens")
         if value is not None:
@@ -387,19 +436,12 @@ class TokenAccounting:
 
 # Model timing
 """Model wall span and union of busy intervals, independent of process lifetime."""
-import json as json
-from pathlib import Path as Path
 
 
-def _rows(path):
-    if not path.is_file():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-
-
-def summarize_model_timing(directory, *, interaction_mode="turn_based"):
-    """A native-streaming session generates throughout, and its replies are no provider calls to
-    time (harnesses/streaming/agent.py): its timing does not apply."""
+def summarize_model_timing(settlements, *, interaction_mode="turn_based"):
+    """The provider calls of an episode's settlements (Settlement). A native-streaming session
+    generates throughout, and its replies are no provider calls to time
+    (harnesses/streaming/agent.py): its timing does not apply."""
     if interaction_mode == "streaming":
         return {
             "schema": "model-timing-v1",
@@ -415,21 +457,18 @@ def summarize_model_timing(directory, *, interaction_mode="turn_based"):
             "known_wall_span_s": None,
             "known_busy_time_s": None,
         }
-    directory = Path(directory)
     intervals, missing, errors = [], 0, []
     source = "provider_runtime"
     try:
-        for row in _rows(directory / "trajectory.jsonl"):
-            if row.get("harness_abort_reason"):
+        for settlement in settlements:
+            if settlement.outcome == "abandoned":
                 continue  # synthesized for a call given up on at the episode's end (N34)
-            runtime = row.get("realtime_runtime") or {}
-            start = runtime.get("provider_call_started_monotonic_ns")
-            duration = row.get("provider_call_wall_latency_s")
+            start, duration = settlement.call_started_ns, settlement.call_latency_s
             if start is None or duration is None:
                 missing += 1
             else:
                 intervals.append((start, start + round(duration * 1e9)))
-    except (KeyError, TypeError, ValueError, OSError) as exc:
+    except (TypeError, ValueError) as exc:
         errors.append(str(exc))
     intervals.sort()
     if any(end < start for start, end in intervals):

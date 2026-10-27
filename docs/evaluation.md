@@ -87,6 +87,33 @@ infrastructure failure, listed under **Errors**). All but `pass` score 0, and th
 passes over all tasks. If the port is taken, pass a
 range such as `--port 18081-18089`.
 
+## Usage and cost
+
+Only usage the provider reported counts, and a count it did not report stays unknown, never 0. No
+model has a rate card: a cost in USD is the one the provider reported (OpenRouter's), else
+unknown. A turn-based trial's `run_summary.json` keeps two totals:
+
+- `token_usage`, `token_accounting` and `cost_usd` (`cost_accounting`) count the responses the
+  episode settled: each call whose result came back before it was given up on, and each call
+  given up on before that at the per-move cap, the deadline or the provider watchdog, without
+  usage, which leaves them incomplete. A call given up on before its result came back because
+  the task ended or the run was invalidated does not count.
+- `spend_usd`, `spend_known_usd` and `spend_accounting` count what every model call spent, the
+  calls given up on included: a call given up on before its result was settled counts the usage
+  its result reported if it came back while the episode's abandoned calls were drained (a
+  Decision's, that of the questions it answered), and otherwise counts as above.
+  `spend_accounting` has `responses` (of them `given_up_responses`, calls given up on whose
+  usage came back), `status` and `complete`, `total_usd` (only when every response has a cost),
+  `known_usd` (the sum of the costs known), and `tokens`: the provider's input, output and total
+  tokens, each with `total`, `known_total` and `complete`. A call's own retries are not counted.
+
+In the job's report, each task has `known_spend_usd`, `spend_complete` and, when scored,
+`spend_usd`; each group has `mean_spend_usd`, the mean known spend of its scored tasks with
+one, over `spend_tasks` tasks, of which `spend_incomplete_tasks` are incomplete (the mean is
+then a lower bound), and `invalid_known_spend_usd`, the known spend of its invalid tasks.
+`mean_cost_usd` stays the mean over the tasks whose cost is complete. Archived retry attempts
+list theirs under `retry_attempts`.
+
 ## Streaming runs
 
 A streaming trial's `run_summary.json`, and each streaming group of the job's report, carry a
@@ -101,10 +128,10 @@ empty: `decisions`, `avg_delta_ticks`, `dropped_intermediate_frames`,
 `avg_frame_age_at_action_s` and `max_frame_age_at_action_s`, `token_usage` and the metrics drawn
 from the decision lifecycle, which it does not write. Its replies are no model calls to time
 either: `model_timing` is `not_applicable` and `wall_time_s` empty. Read the `streaming` section instead; the
-accepted replies' tokens are in `adapter_token_usage`. Its cost is not accounted either
-(`cost_accounting.reason` is `not_accounted_streaming`): sum the usage the provider reported
-for every reply, those given up included, from the episode trace's session messages; the
-accepted replies' tokens are a lower bound. The report scores a streaming run only where its
+accepted replies' tokens are in `adapter_token_usage`. Its cost and spend are not accounted
+either (`cost_accounting.reason` and `spend_accounting.reason` are `not_accounted_streaming`):
+sum the usage the provider reported for every reply, those given up included, from the episode
+trace's session messages; the accepted replies' tokens are a lower bound. The report scores a streaming run only where its
 streaming section is the one its episode trace gives.
 
 The two live APIs keep a session's context differently, and `context_control` says which way a
