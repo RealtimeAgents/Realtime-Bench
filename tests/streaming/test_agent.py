@@ -15,7 +15,7 @@ import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
-from realtime_framework.entity.events import FunctionCall
+from realtime_framework.entity.events import FunctionCall, UsageSnapshot
 from realtime_framework.entity.model import TRANSIENT, TransportFailureError
 from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.entity.request import Intent, ToolExchange
@@ -424,6 +424,18 @@ def test_a_discarded_reply_none_of_whose_actions_ran_adds_nothing(monkeypatch, c
     agent.close()
 
 
+class _EarlyUsage(FakeLiveDriver):
+    """Reports each reply's usage as the reply starts, not only as it ends: Gemini Live's encoder
+    reports the usage of whichever message carries it (providers/gemini/live.py)."""
+
+    async def events(self, generation):
+        usage = generation.opaque.usage
+        if usage is not None:
+            yield UsageSnapshot(generation.generation_id, 0, usage=usage)
+        async for event in super().events(generation):
+            yield event
+
+
 @pytest.mark.parametrize(
     ("status", "detail", "kept"),
     [
@@ -438,13 +450,14 @@ def test_a_reply_given_up_after_an_action_of_it_ran_keeps_its_output_where_it_be
 ):
     """Decision 25: an action of the reply ran, applied or a wait, before the reply was given
     up. The session reopened after shows the model the reply's output before that action's
-    result, as an accepted reply's; a reply none of whose actions ran adds nothing. Its usage
-    stays out of the episode's either way (decision 37)."""
-    agent = make_agent(monkeypatch, clock)
+    result, as an accepted reply's; a reply none of whose actions ran adds nothing. Its usage,
+    which came before it was given up, stays out of the episode's either way (decision 37)."""
+    agent = make_agent(monkeypatch, clock, _EarlyUsage)
     posted = []
     agent.bind_inbox(posted.append, ORIGIN)
     frame = _two_frames(agent, clock)
-    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=100.0))
+    usage = {"output_tokens": 5}
+    agent.driver.replies.append(Reply((_click("c1", 0.25, 2),), ends_at=100.0, usage=usage))
     done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
     clock.sleep(0.5)
     ran = Action.wait() if status == "wait" else posted[0].action
