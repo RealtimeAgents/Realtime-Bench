@@ -764,6 +764,26 @@ def test_a_record_of_the_last_batch_that_cannot_be_written_invalidates_the_run(k
     assert any(line.startswith("[invalid-run] harness:episode_trace_write_failed") for line in logs)
 
 
+@pytest.mark.parametrize("kind", ["SnapshotFrozen", "Termination"])
+def test_a_log_that_raises_on_the_invalid_run_of_the_last_batch_loses_the_line_only(kind):
+    """A record of the last batch cannot be written, and the log of the invalid run the shell
+    carries into the termination raises, its stdout gone: the episode still ends, invalid for
+    the write."""
+    clock = FakeClock()
+    with clock.participant():
+        result = run_streaming_episode(
+            FakeAgent(clock, ONE_CLICK),
+            FakeEnv(clock),
+            StreamingConfig(duration_s=5.0),
+            clocks=Clocks(clock, clock),
+            log=_log_raising_on("[invalid-run]"),
+            trace=_UnwritableRows(kind),
+        )
+    assert result.stop_reason == "invalid_run"
+    assert result.invalid_run["reason"] == "episode_trace_write_failed"
+    assert result.termination_record["stop_reason"] == "invalid_run"
+
+
 def test_a_failed_release_of_the_inputs_at_the_end_is_only_logged():
     """Decision 33, as on the turn-based shell: the inputs are released once the outcome is
     latched and the snapshot read. A release that raises is logged; the run stays valid and the

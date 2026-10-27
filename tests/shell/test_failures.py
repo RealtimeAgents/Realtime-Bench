@@ -652,6 +652,23 @@ def test_a_termination_record_that_cannot_be_written_invalidates_the_run(clock_m
     )
 
 
+@pytest.mark.parametrize("clock_mode", ["wall", "token"])
+def test_a_log_that_raises_on_the_invalid_run_of_the_last_batch_loses_the_line_only(clock_mode):
+    """The termination record cannot be written, and the log of the invalid run the shell
+    carries into the termination raises, its stdout gone: the episode still ends, invalid for
+    the write."""
+
+    def log(line: str) -> None:
+        if line.startswith("[invalid-run]"):
+            raise BrokenPipeError("stdout closed")
+
+    world, replies = World(ends_at=1.2, end_reason="won"), [Reply(0.5)] * 3
+    episode = run(clock_mode, 3.0, replies, world, trace=_TerminationUnwritable(), log=log)
+    assert episode.invalid["reason"] == "episode_trace_write_failed"
+    assert episode.result.stop_reason == "invalid_run"
+    assert episode.result.termination_record["stop_reason"] == "invalid_run"
+
+
 def test_a_wrap_up_that_raises_is_only_logged(monkeypatch):
     """The kernel raises, and the log of its run_exception as the first failure, once the
     termination is written, raises too: run_episode still returns, and that failure is

@@ -3,6 +3,7 @@ shells share of writing it up, whatever threads they run it on."""
 
 from __future__ import annotations
 
+import contextlib
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -47,13 +48,15 @@ def only_logged(record: dict) -> str:
 def with_unheard(termination: Termination, unheard: Invalidated | None, log) -> Termination:
     """A failure a shell found in the batch of the kernel's Finish, such as the termination
     record's own write, invalidates the run as the kernel would have, at the same end (decision
-    32)."""
+    32). A log that raises (its stdout gone) loses the line, not the termination: the shell
+    finishes on it."""
     if unheard is None or termination.invalid is not None:
         return termination
     # The end of a traceback names the exception (legacy_loop.py _invalidate).
     detail = None if unheard.detail is None else unheard.detail[-2000:]
     invalid = Invalidated(unheard.category, unheard.reason, detail)
-    log(invalid_line(invalid))
+    with contextlib.suppress(Exception):
+        log(invalid_line(invalid))
     return replace(termination, stop_reason="invalid_run", invalid=invalid)
 
 
