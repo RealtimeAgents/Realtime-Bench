@@ -18,6 +18,11 @@
     }
     #task-timer.urgent { border-color: #ffad66; color: #ffe2c6; }
     #task-timer.expired { border-color: #ff6b6b; color: #ffd2d2; }
+    /* Narrow windows/embeds: the native ARMOR/SHIELD/AMMO/PADS bars shrink with the width, so move the
+       timer below them instead of covering them. No-op above 1400px. */
+    @media (max-width: 1400px) {
+      #task-timer { top: 74px; right: 10px; min-width: 120px; padding: 6px 10px; font-size: 18px; }
+    }
   </style>
 </head>
 <body>
