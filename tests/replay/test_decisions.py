@@ -527,8 +527,8 @@ def test_jev_large_observation(tmp_path):
     _settle("large_observation", header, records, tmp_path)
 
 
-# JEV windows for decision 24 of the terms scripts, which estimates 38560 bytes with its 24 turns,
-# 37743 with 14 and 36666 with 4 (each archived turn adds its action to the ledger): the first
+# JEV windows for decision 24 of the terms scripts, which estimates 38522 bytes with its 24 turns,
+# 37705 with 14 and 36628 with 4 (each archived turn adds its action to the ledger): the first
 # needs two archived blocks; the second is below the system text and the terms alone; the third
 # holds the terms only once every turn is archived and ten actions are left out.
 ARCHIVE_WINDOWS = {
