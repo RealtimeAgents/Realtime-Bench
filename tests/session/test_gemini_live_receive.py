@@ -155,7 +155,7 @@ class Rig:
         self.live = FakeLive(scripts, self.log)
         self.driver.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
         answer = AnswerRequirements(
-            "function_call", "standard_vlm", tuple(gui_function_declarations())
+            "function_call", "standard_vlm", tuple(gui_function_declarations(clock_mode="token"))
         )
         self.seed = SessionSeed("system instruction", model, None, 1.0, answer)
         policy = current_context_policy().for_path(

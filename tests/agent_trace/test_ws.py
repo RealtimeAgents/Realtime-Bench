@@ -88,7 +88,7 @@ def _run(driver, run_dir: Path, turns: int):
     )
     channel = driver.capabilities.action_channel
     # As DefaultHarness._answer_requirements declares them (harnesses/default/harness.py).
-    declarations = tuple(gui_function_declarations()) if channel == "function_call" else ()
+    declarations = tuple(gui_function_declarations(clock_mode="wall")) if channel == "function_call" else ()
     answer = AnswerRequirements(channel, "standard_vlm", declarations)
     seed = SessionSeed("system instruction", config.model_name, None, 1.0, answer)
     system = system_block(seed.system_instruction, None)

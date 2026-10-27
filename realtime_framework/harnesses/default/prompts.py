@@ -59,11 +59,18 @@ STREAMING_POINTER_RULES = _POINTER_RULES.format(
     marks="An action's marks are read from the screenshot its frame names.",
     screenshot="the screenshot the action's frame names",
 )
-_TIMING_AND_MODIFIER_RULES = """- duration must be between 0 and 10. For hold_key and wait it is simulated world time under the
+# The prompts of a run describe only the clock it is on (user, 10-27): what time a hold or wait
+# lasts, and whether GUI execution takes any of it.
+_TOKEN_CLOCK_DURATION_RULES = """- duration must be between 0 and 10. For hold_key and wait it is simulated world time under the
   token clock; hold_key defaults to 1 and wait without duration waits for the next observation.
   For move, mouse_down/up, and drag it controls executor-side pointer interpolation only; GUI
   execution time is excluded from simulated time.
-- hold_key keeps every key in the '+'-joined chord down for its full declared duration. A later
+"""
+_WALL_CLOCK_DURATION_RULES = """- duration must be between 0 and 10. For hold_key and wait it is physical elapsed time;
+  hold_key defaults to 1 and wait without duration waits for the next observation. For move,
+  mouse_down/up, and drag it controls executor-side pointer interpolation only.
+"""
+_KEY_AND_MODIFIER_RULES = """- hold_key keeps every key in the '+'-joined chord down for its full declared duration. A later
   action does not cancel the hold; another hold on the same key can only extend it. Keys are released
   automatically at expiry and all held input is released when the episode ends. A held key
   auto-repeats like a physical keyboard (first repeat after 0.5 s, then every 0.05 s), so a game
@@ -77,21 +84,28 @@ _GESTURE_RULES = """- mouse_down remains active until the matching mouse_up; use
 """
 
 
-def _gui_json_action_space(pointer_rules: str) -> str:
+def _gui_json_action_space(pointer_rules: str, duration_rules: str) -> str:
     return (
         "AVAILABLE GUI ACTIONS (canonical JSON):\n"
         + GUI_ACTION_EXAMPLES
         + "\n- Prefer canonical JSON with double quotes. The adapter can recover one unambiguous "
         "action from\n  common wrappers or shorthand, but canonical JSON is shortest and safest.\n"
         + pointer_rules
-        + _TIMING_AND_MODIFIER_RULES
+        + duration_rules
+        + _KEY_AND_MODIFIER_RULES
         + "\n"
         + _GESTURE_RULES
     )
 
 
-GUI_JSON_ACTION_SPACE = _gui_json_action_space(TURN_POINTER_RULES)
-STREAMING_GUI_JSON_ACTION_SPACE = _gui_json_action_space(STREAMING_POINTER_RULES)
+GUI_JSON_ACTION_SPACE = _gui_json_action_space(TURN_POINTER_RULES, _TOKEN_CLOCK_DURATION_RULES)
+WALL_CLOCK_GUI_JSON_ACTION_SPACE = _gui_json_action_space(
+    TURN_POINTER_RULES, _WALL_CLOCK_DURATION_RULES
+)
+# Native streaming is on the wall clock only.
+STREAMING_GUI_JSON_ACTION_SPACE = _gui_json_action_space(
+    STREAMING_POINTER_RULES, _WALL_CLOCK_DURATION_RULES
+)
 
 # Native streaming runs nothing for a reply that holds no valid action
 # (harnesses/streaming/feedback.py).
@@ -118,7 +132,7 @@ STREAMING_OUTPUT_CONTRACT = _STREAM_OUTPUT_CONTRACT.format(
 
 
 # Model/interface-specific native-tool instructions.
-def _function_call_action_space(pointer_rules: str) -> str:
+def _function_call_action_space(pointer_rules: str, duration_rules: str) -> str:
     """The shared rules plus argument-completeness rules for move/drag/scroll and optional
     fields."""
     return (
@@ -135,7 +149,8 @@ def _function_call_action_space(pointer_rules: str) -> str:
   start at the current cursor. Never mix a reference and coordinates for the same endpoint.
 - scroll requires both dx and dy, and they must not both be zero.
 """
-        + _TIMING_AND_MODIFIER_RULES
+        + duration_rules
+        + _KEY_AND_MODIFIER_RULES
         + """ If no modifier
   is needed, omit the field entirely; do not send "none", "", or null.
 - Optional fields may be omitted; do not fill unused fields with placeholder values. For example,
@@ -145,26 +160,37 @@ def _function_call_action_space(pointer_rules: str) -> str:
     )
 
 
-FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(TURN_POINTER_RULES)
-STREAMING_FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(STREAMING_POINTER_RULES)
+FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(
+    TURN_POINTER_RULES, _TOKEN_CLOCK_DURATION_RULES
+)
+WALL_CLOCK_FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(
+    TURN_POINTER_RULES, _WALL_CLOCK_DURATION_RULES
+)
+STREAMING_FUNCTION_CALL_ACTION_SPACE = _function_call_action_space(
+    STREAMING_POINTER_RULES, _WALL_CLOCK_DURATION_RULES
+)
 _FUNCTION_CALL_OUTPUT_CONTRACT = (
     "NATIVE GUI ACTION PROTOCOL: Do not produce a spoken response or text action. "
     "Reason internally, then call exactly one GUI action function. That call fixes your "
     "decision. Its response only acknowledges queuing, not execution. After the queue "
-    "acknowledgement, end the turn silently without further calls. {token_clock} Under the "
-    "wall clock, environment time keeps advancing during generation. It executes "
-    "the action only if its timestamp remains inside the task horizon. Otherwise it executes "
-    "WAIT. The next observation includes the actual execution result. Do not assume success "
-    "from the queue acknowledgement. Use wait when no UI action is needed."
+    "acknowledgement, end the turn silently without further calls. {clock} The next "
+    "observation includes the actual execution result. Do not assume success from the queue "
+    "acknowledgement. Use wait when no UI action is needed."
 )
+# The pause clock's: the token clock with B unlimited.
 FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.format(
-    token_clock="Under the token clock, the benchmark does not advance simulated time for native "
+    clock="Under the token clock, the benchmark does not advance simulated time for native "
     "response or thought tokens."
 )
 # PromptOptions.finite_budget, as FINITE_BUDGET_OUTPUT_CONTRACT.
 FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.format(
-    token_clock="The benchmark waits for native response plus thought token usage under the "
+    clock="The benchmark waits for native response plus thought token usage under the "
     "token clock, then advances simulated time."
+)
+WALL_CLOCK_FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.format(
+    clock="Under the wall clock, environment time keeps advancing during generation. It executes "
+    "the action only if its timestamp remains inside the task horizon. Otherwise it executes "
+    "WAIT."
 )
 # Shared screenshot marker for the frame prompts. Each frame keeps its text once newer frames
 # follow, so it says only what holds for its own screenshot; the request for this turn's action
@@ -242,6 +268,8 @@ def system_prompt_for_category(category: str | None, options: PromptOptions) -> 
     role = SCENARIO_ROLES[category]
     if options.interaction_mode == "streaming":
         return _scenario_prompt(role, STREAMING_GUI_JSON_ACTION_SPACE, STREAMING_OUTPUT_CONTRACT)
+    if options.clock_mode == "wall":
+        return _scenario_prompt(role, WALL_CLOCK_GUI_JSON_ACTION_SPACE, STREAM_OUTPUT_CONTRACT)
     contract = FINITE_BUDGET_OUTPUT_CONTRACT if options.finite_budget else STREAM_OUTPUT_CONTRACT
     return _scenario_prompt(role, GUI_JSON_ACTION_SPACE, contract)
 

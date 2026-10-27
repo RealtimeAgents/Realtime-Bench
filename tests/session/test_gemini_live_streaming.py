@@ -207,7 +207,7 @@ class Rig:
         self.live = FedLive()
         self.driver.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
         self.answer = AnswerRequirements(
-            "function_call", "standard_vlm", tuple(gui_function_declarations())
+            "function_call", "standard_vlm", tuple(gui_function_declarations(clock_mode="wall"))
         )
         self.seed = SessionSeed("system instruction", model, None, 1.0, self.answer)
         self.policy = current_context_policy().for_path(

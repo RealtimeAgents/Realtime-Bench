@@ -22,6 +22,10 @@ from realtime_framework.sandbox.observation.som import build_hybrid_som
 
 LIVE_PROFILES = ("standard_vlm", "function_call")
 CLOCKS = {"wall": ("wall", None), "finite_b": ("token", 256), "pause": ("token", None)}
+# What only one clock's prompts say (prompts.py budget_clock_prompt, the duration rules and the
+# function-call output contracts; entity/actions.py gui_function_declarations).
+TOKEN_CLOCK_WORDS = ("token clock", "TOKEN CLOCK", "simulated", "kappa", "charged tokens")
+WALL_CLOCK_WORDS = ("wall clock", "WALL CLOCK", "physical elapsed time", "environment time keeps")
 
 # (whether it applies to a run's prompt options, a sentence no prompt of such a run holds, why)
 FORBIDDEN = [
@@ -35,6 +39,16 @@ FORBIDDEN = [
     (lambda o: True, "Latest screen", "decision 42: a frame stays in the context once older"),
     (lambda o: True, "CURRENT-SCREEN", "decision 42"),
     (lambda o: True, "Use current P/R marks", "decision 11: so is P6"),
+    # A run's prompts describe only the clock it is on; the pause clock is the token clock with B
+    # unlimited (user, 10-27).
+    *(
+        (lambda o: o.clock_mode == "wall", words, "a wall-clock run's has no token clock")
+        for words in TOKEN_CLOCK_WORDS
+    ),
+    *(
+        (lambda o: o.clock_mode == "token", words, "a token-clock run's has no wall clock")
+        for words in WALL_CLOCK_WORDS
+    ),
     # A frame's text and legend say only what holds for their own screenshot (user, 10-27).
     (lambda o: True, "Screen observed for this decision", "it names the newest frame's decision"),
     (lambda o: True, "current-only", "a legend's marks are its own screenshot's"),
@@ -96,7 +110,9 @@ def _compose(name: str, mode: str, clock: str):
         "SoM legend": legend["text"],
     }
     if name == "function_call":
-        texts["functions"] = json.dumps(gui_function_declarations(frame_reference=streaming))
+        texts["functions"] = json.dumps(
+            gui_function_declarations(clock_mode=clock_mode, frame_reference=streaming)
+        )
     return agent.prompt_options, texts
 
 

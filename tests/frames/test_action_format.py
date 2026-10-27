@@ -41,8 +41,8 @@ def _schemas(declarations):
 
 
 def test_streaming_functions_require_a_frame_argument():
-    turn_based = gui_function_declarations()
-    streaming = gui_function_declarations(frame_reference=True)
+    turn_based = gui_function_declarations(clock_mode="wall")
+    streaming = gui_function_declarations(clock_mode="wall", frame_reference=True)
     assert not any("frame" in schema["properties"] for schema in _schemas(turn_based))
     for item in streaming:
         schema = item["parameters_json_schema"]

@@ -390,7 +390,7 @@ def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
         {key: value for key, value in tool.items() if key != "behavior"}
         for tool in tools["functionDeclarations"]
     ]
-    assert declarations == list(gui_function_declarations(frame_reference=True))
+    assert declarations == list(gui_function_declarations(clock_mode="wall", frame_reference=True))
     assert all("frame" in d["parameters_json_schema"]["required"] for d in declarations)
     # Gemini Live confirms nothing but the setup.
     assert _delivered(episode, "sent") == [

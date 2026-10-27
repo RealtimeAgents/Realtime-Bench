@@ -32,7 +32,7 @@ SEED = SessionSeed(
     "m",
     None,
     1.0,
-    AnswerRequirements("function_call", "standard_vlm", tuple(gui_function_declarations())),
+    AnswerRequirements("function_call", "standard_vlm", tuple(gui_function_declarations(clock_mode="wall"))),
 )
 
 

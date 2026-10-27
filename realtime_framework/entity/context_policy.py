@@ -74,7 +74,10 @@ from realtime_framework.entity.records import _jsonable
 # replies, and nothing is executed, not WAIT, for a reply without a valid action; a turn's system
 # instruction asks for the newest screenshot's marks (P6), and the frame texts and SoM legends of
 # every path say only what holds for their own screenshot, not that it is this decision's or that
-# its marks are the current ones, the only ones to use.
+# its marks are the current ones, the only ones to use; a run's instructions and function
+# declarations describe only the clock it is on: on the wall clock a hold or wait lasts physical
+# elapsed time and the function-call output contract names no token clock, and on the token
+# clock that contract names no wall clock.
 CONTEXT_POLICY_VERSION = 6
 
 # Fixed model-visible texts the encoders write (item 5).
