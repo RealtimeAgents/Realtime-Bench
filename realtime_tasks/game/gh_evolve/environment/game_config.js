@@ -9,6 +9,20 @@ function readEvolveSave(c) {
 window.OPEN_SOURCE_GAME_CONFIG = {
   title: "Evolve", entry: "upstream/index.html",
   repository: "https://github.com/pmotschmann/Evolve", commit: "3436358dcd03d9f9e071d51ea071e0a78c0322e4", license: "MPL-2.0",
+  // Narrow embeds (frame width <= 768px, e.g. the user-study iframe): Bulma stacks the columns, which pushes
+  // the main Evolve column below the fold of a page that cannot scroll. Keep the columns side by side there.
+  // The rule is a no-op at wider widths, so the full-size layout is unchanged.
+  start(c) {
+    const d = c.document();
+    if (!d || !d.head || d.getElementById("benchmark-narrow-columns")) return;
+    const style = d.createElement("style");
+    style.id = "benchmark-narrow-columns";
+    style.textContent = "@media screen and (max-width:768px){" +
+      ".main>.columns:not(.is-desktop){display:flex}" +
+      ".main>.columns>.column.is-one-quarter{flex:none;width:38%}" +
+      ".main>.columns>.column.is-three-quarters{flex:none;width:62%}}";
+    d.head.appendChild(style);
+  },
   ready(c) { const d = c.document(); return Boolean(d && d.body && !d.querySelector(".loading") && d.querySelector("button, .button")); },
   state(c) {
     const d = c.document(); const w = c.window();
