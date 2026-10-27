@@ -739,6 +739,30 @@ def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_l
     )
 
 
+def test_a_failure_the_environment_reports_while_the_snapshot_is_read_invalidates_the_run():
+    """Decision 30's boundary: the snapshot is frozen once its read returned. The deadline ends
+    the episode at 3 s and the snapshot is read from then until 4 s; the key held from 2.5 s fails
+    to come up at 3.25 s, meanwhile. That failure came before the freeze: the run is invalid for
+    it, its record the environment's, and nothing is only logged."""
+    world = World(release_failures={0}, snapshot_s=1.0)
+    episode = run("wall", 3.0, [Reply(2.5, Action.hold_key("a", 0.75)), Reply(hang=True)], world)
+    assert [call for call, _, _ in episode.env.calls if call != "check_end"][-3:] == [
+        "wall_release",
+        "snapshot",
+        "release_inputs",
+    ]
+    _finalized(episode, 3.0)
+    assert episode.invalid == {
+        "category": "environment",
+        "reason": "wall_key_release_failed",
+        "detail": "keyup failed",
+    }
+    assert [p["reason"] for p in episode.trace.payloads("RunInvalidated")] == [
+        "wall_key_release_failed"
+    ]
+    assert not any(line.startswith("[cleanup]") for line in episode.logs)
+
+
 class _Cancelled(BaseException):
     """As entity/model.py RetryCancelled, which is not an Exception."""
 

@@ -852,6 +852,38 @@ def test_a_failure_the_environment_reports_once_the_snapshot_is_frozen_is_only_l
     )
 
 
+def _gives_up_while_the_snapshot_is_read(env, clock):
+    clock.timer(6.25, lambda: _gives_up_the_key(env, clock))
+
+
+def test_a_failure_the_environment_reports_while_the_snapshot_is_read_invalidates_the_run():
+    """Decision 30's boundary, as on the turn-based shell: the gate is frozen once the snapshot's
+    read returned. The read runs from 6 s to 6.5 s, and the wall clock's key-release timer gives
+    a key up for good at 6.25 s, meanwhile. That failure came before the freeze: the run is
+    invalid for it, ended at the deadline, and nothing is only logged."""
+    logs: list[str] = []
+    result, env, _ = _episode(
+        6.0, ONE_CLICK, env_setup=_gives_up_while_the_snapshot_is_read, logs=logs
+    )
+    assert env.intervals[-1] == ("snapshot", 6.0, 6.5)
+    assert result.termination == Termination(
+        "invalid_run",
+        "deadline",
+        6.0,
+        6.5,
+        6.0,
+        6.5,
+        Invalidated("environment", "wall_key_release_failed", "keyup"),
+    )
+    assert result.stop_reason == "invalid_run"
+    assert result.invalid_run == {
+        "category": "environment",
+        "reason": "wall_key_release_failed",
+        "detail": "keyup",
+    }
+    assert not any(line.startswith("[cleanup]") for line in logs)
+
+
 def _log_raising_on(prefix: str):
     """A log whose stdout is gone for the lines that start with ``prefix``."""
 
