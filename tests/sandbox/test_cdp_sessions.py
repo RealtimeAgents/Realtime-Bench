@@ -126,6 +126,41 @@ def test_a_session_whose_registrations_fail_is_closed_and_the_next_call_register
     ]
 
 
+def test_a_session_whose_registration_is_refused_is_closed_and_the_next_call_registers_them_again():
+    """Chrome answers the reconnected session's registration of the seed with an error. The
+    documents created on that session would run without the seed: the call that reconnected
+    fails before it sends its own command, and the next call opens another session and
+    registers them there."""
+    with FakeCDP(values={"1": 1}) as fake:
+        client = cdp.client_for(fake.port)
+        try:
+            clock.cdp_install_document_script(fake.port, "seed()")
+            fake.refused = {"Page.addScriptToEvaluateOnNewDocument"}
+            fake.drop()
+            with pytest.raises(ConnectionClosed):
+                client.evaluate("1", timeout=ROOMY)
+            refused_at = len(fake.commands)
+            with pytest.raises(
+                RuntimeError, match="Page.addScriptToEvaluateOnNewDocument on a new session"
+            ):
+                client.evaluate("1", timeout=ROOMY)
+            fake.refused = set()
+            sent = len(fake.commands)
+            assert client.evaluate("1", timeout=ROOMY) == 1
+        finally:
+            cdp.close_port(fake.port)
+        assert fake.connections == 3
+    assert [c["method"] for c in fake.commands[refused_at:sent]] == [
+        "Page.enable",
+        "Page.addScriptToEvaluateOnNewDocument",
+    ]
+    assert [c["method"] for c in fake.commands[sent:]] == [
+        "Page.enable",
+        "Page.addScriptToEvaluateOnNewDocument",
+        "Runtime.evaluate",
+    ]
+
+
 def test_a_client_asked_for_by_target_leaves_the_default_client_on_its_page():
     """The capture probes each page target by id (cdp.py _probe_one); the clock and the task's
     state reads ask for the default client, which must stay on the page it found."""

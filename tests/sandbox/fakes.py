@@ -27,6 +27,7 @@ CLOSE_TIMEOUT_S = 1.0  # bounds each WebSocket closing handshake once the fake s
 
 _FRAME_NAVIGATED = json.dumps({"method": "Page.frameNavigated", "params": {}})
 _BUDGET_EXPIRED = json.dumps({"method": "Emulation.virtualTimeBudgetExpired", "params": {}})
+_REFUSED = {"code": -32000, "message": "refused"}
 
 
 def _png() -> bytes:
@@ -42,9 +43,10 @@ class FakeCDP:
     """One page target on 127.0.0.1: GET /json lists it and its WebSocket answers CDP commands.
 
     In ``"reply"`` mode each command gets one unrelated event, then a reply shaped like a
-    ``Runtime.evaluate`` result whose value is ``values[params["expression"]]``. In ``"flood"``
-    mode no command is answered: unrelated events stream from the moment a connection opens until
-    it closes. ``mode`` applies to connections opened after it is set.
+    ``Runtime.evaluate`` result whose value is ``values[params["expression"]]``; a command whose
+    method is in ``refused`` gets a CDP error instead, as Chrome answers one it refuses. In
+    ``"flood"`` mode no command is answered: unrelated events stream from the moment a connection
+    opens until it closes. ``mode`` applies to connections opened after it is set.
     """
 
     def __init__(
@@ -60,6 +62,7 @@ class FakeCDP:
         self.json_delay = json_delay
         self.handshake_delay = handshake_delay
         self.commands: list[dict] = []
+        self.refused: set[str] = set()
         self.json_requests = 0
         self.connections = 0
         self._values = values or {}
@@ -143,6 +146,9 @@ class FakeCDP:
         params = command.get("params") or {}
         value = self._values.get(params.get("expression"))
         websocket.send(_FRAME_NAVIGATED)
+        if command.get("method") in self.refused:
+            websocket.send(json.dumps({"id": command["id"], "error": _REFUSED}))
+            return
         websocket.send(
             json.dumps(
                 {"id": command["id"], "result": {"result": {"type": "object", "value": value}}}
