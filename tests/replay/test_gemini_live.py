@@ -335,6 +335,7 @@ def run_episode(
     tmp_path: Path,
     *,
     setup_closes: dict[str, tuple[int, str]] | None = None,
+    connection_closes: dict[int, tuple[int, str]] | None = None,
     before_initialize=None,
 ) -> tuple[list[dict], list[dict], LiveStub]:
     """Run one script against the stub; returns the baseline records, the raw results and the
@@ -346,6 +347,7 @@ def run_episode(
         history_format=preset.history_format,
         ack_options=preset.ack_options,
         setup_closes=setup_closes,
+        connection_closes=connection_closes,
     ) as stub:
         # Both are read when the driver builds its client, inside build_episode.
         env.setenv("GOOGLE_GEMINI_BASE_URL", stub.base_url)
@@ -750,6 +752,35 @@ def test_resume_failure_short(live_env, tmp_path):
         "session_release",
         "connection_close",
     ]
+
+
+def test_a_repair_whose_rebuild_is_closed_transiently_keeps_the_generation(live_env, tmp_path):
+    """Bug #12, as decision 35 for OpenAI Realtime: the goAway of decision 0 comes without a
+    resumption handle, so the repair after the generation replays the history on a new session,
+    whose setup the server closes with a transient 1011. The repair comes back broken instead of
+    raising the close (live.py GeminiLiveDriver._sync_history): the decision keeps its output and
+    fails as history_sync_failed, not as a stream interrupted after its output, which drops it."""
+    preset = TOOL_TRANSCRIPT
+    config = catalog_config(preset.model)
+    scenario = LONG_SCENARIO[:1]
+    turns = [turn_script(0, scenario[0], preset, resumable=False, go_away=True)]
+    _, (result,), stub = run_episode(
+        "repair-closed",
+        config,
+        preset.model,
+        scenario,
+        turns,
+        preset,
+        live_env,
+        tmp_path,
+        connection_closes={2: (1011, "Internal error.")},
+    )
+    assert stub.violations == [] and stub.unused_turns == 0
+    assert result["invalid_reason"] == "history_sync_failed"
+    assert "Internal error." in result["invalid_detail"]
+    assert result["raw"] == scenario[0].reply
+    assert result["action"].action_type.value == "click"
+    assert result["realtime_runtime"]["history_sync"]["disposition"] == "broken"
 
 
 def test_a_call_its_function_schema_rejects_executes_wait(live_env, tmp_path):

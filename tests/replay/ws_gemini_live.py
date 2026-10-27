@@ -133,7 +133,8 @@ class LiveStub:
     ``ack_options`` are the client's Live options the checks depend on (live.py
     LIVE_PROTOCOL_OPTIONS, LIVE_HISTORY_OPTIONS; gemini/session.py
     SessionCore.tool_response_options). ``setup_closes`` maps a resumption handle to the close code
-    and reason that answer a setup resuming with it.
+    and reason that answer a setup resuming with it, ``connection_closes`` a connection number to
+    those that answer its setup.
     """
 
     def __init__(
@@ -145,12 +146,14 @@ class LiveStub:
         history_format: str,
         ack_options: dict,
         setup_closes: dict[str, tuple[int, str]] | None = None,
+        connection_closes: dict[int, tuple[int, str]] | None = None,
     ):
         self._turns = [list(turn) for turn in turns]
         self._api_key = api_key
         self._history_format = history_format
         self._ack_options = dict(ack_options)
         self._setup_closes = dict(setup_closes or {})
+        self._connection_closes = dict(connection_closes or {})
         self.cert_file, self._key_file = self_signed_certificate(cert_dir)
         self.events: list[dict] = []  # {"conn", "dir", "msg"} in arrival order
         self.violations: list[str] = []
@@ -311,6 +314,9 @@ class LiveStub:
         self._check(session == self._first_setup, f"conn {conn}: setup differs from conn 1")
         if handle in self._setup_closes:
             await self._close(ws, conn, *self._setup_closes[handle])
+            return False
+        if conn in self._connection_closes:
+            await self._close(ws, conn, *self._connection_closes[conn])
             return False
         return True
 

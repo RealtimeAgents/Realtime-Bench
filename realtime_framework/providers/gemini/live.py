@@ -1434,10 +1434,15 @@ class GeminiLiveDriver(SessionLifecycle):
                 },
             )
         except Exception as exc:
-            # Preserve typed transport failures so the outer zero-output retry gate can safely
-            # rebuild the session. Converting them to a string-only BROKEN result would discard the
-            # WebSocket close code and make a later retry impossible to classify.
-            if self.classify_transport_error(exc).retryable:
+            # Before a generation, preserve typed transport failures so the outer zero-output
+            # retry gate can safely rebuild the session. Converting them to a string-only BROKEN
+            # result would discard the WebSocket close code and make a later retry impossible to
+            # classify. A repair after a generation, the only sync with a current generation,
+            # breaks the session instead, and the turn keeps its result (decision 35).
+            if (
+                request.current_generation is None
+                and self.classify_transport_error(exc).retryable
+            ):
                 raise
             return HistorySyncResult(
                 SyncDisposition.BROKEN,
