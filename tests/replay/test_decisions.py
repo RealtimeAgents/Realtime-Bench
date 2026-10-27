@@ -383,6 +383,8 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     answered = questions[1]["usage"]
     assert result["usage"] == answered
     assert result["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
+    rows = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
+    assert [row["usage"]["provider_usage"] for row in rows if row["tick"] == 1] == [answered]
     generations = [a for a in attempts if a["kind"] == "generation"]
     assert [(a["outcome"], a["usage"]) for a in generations][-1] == ("failed", answered)
     assert failed["token_usage"] == accepted["token_usage"]

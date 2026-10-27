@@ -866,11 +866,15 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
         a["usage"] for a in attempts if a["kind"] == "choice_question" and a["outcome"] == "ok"
     )
     assert [a["usage"] for a in attempts if a["kind"] == "generation"] == [accepted, answered]
-    rows = map(json.loads, (tmp_path / "provider-usage.jsonl").read_text().splitlines())
+    lines = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    rows = [json.loads(line) for line in lines]
     assert [(r["tick"], r["stale"], r["status"], r["usage"]) for r in rows] == [
         (0, False, "reported", accepted),
         (1, True, "reported", answered),
     ]
+    # The stale row names the generation its cancelled attempt was of.
+    (given_up,) = [a for a in attempts if (a["kind"], a["outcome"]) == ("generation", "cancelled")]
+    assert rows[1]["generation_id"] == given_up["scope"]["generation_id"] is not None
     assert agent.token_usage["responses"] == 1
     assert agent.token_usage["input_tokens"] == accepted["input_tokens"]
     assert (cancelled["usage"], cancelled["provider_usage_missing_reason"]) == (
