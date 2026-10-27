@@ -61,7 +61,7 @@ from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import Settlement
+from realtime_framework.evaluation.clock import Settlement, token_record
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,
     EpisodeResult,
@@ -326,6 +326,9 @@ class _Shell:
         self._generations: dict[int, _Generation] = {}
         self._abandoned: list[_Generation] = []
         self._settlements: list[Settlement] = []  # one for each result settled, in order
+        # The generations whose settlement the shell synthesized, given up on before a result of
+        # their own was settled.
+        self._synthesized: list[_Generation] = []
         self._decision: _Decision | None = None
         self._captures = 0
         self._started: Entry | None = None  # the InferenceStarted record StartGeneration writes
@@ -890,25 +893,30 @@ class _Shell:
     def _drain_abandoned(self) -> None:
         """Wait a bounded time for the workers of abandoned generations before main() closes the
         agent, after the snapshot is frozen; workers still inside a native call need the runner's
-        hard exit. Runs once."""
+        hard exit. Then a generation whose settlement was synthesized takes the result its worker
+        handed back, if it did, as what its call spent (clock.py Settlement.late). Runs once."""
         if self._drained:
             return
         self._drained = True
         pending = [held for held in self._abandoned if not held.done.is_set()]
-        if not pending:
-            return
-        seconds, clock = self.config.timing.abandoned_drain_s, self.clocks.operational
-        self.log(f"[default] draining {len(pending)} abandoned generate worker(s), <= {seconds:g}s")
-        limit = clock.time() + seconds
-        for held in pending:
-            clock.wait(held.done, max(0.0, limit - clock.time()))
-        live = sum(1 for held in pending if not held.done.is_set())
-        if live:
+        if pending:
+            seconds, clock = self.config.timing.abandoned_drain_s, self.clocks.operational
             self.log(
-                f"[default] {live} abandoned worker(s) STILL inside a native call after "
-                f"{seconds:g}s — teardown continues; the runner hard-exits so interpreter "
-                f"finalization cannot abort on them"
+                f"[default] draining {len(pending)} abandoned generate worker(s), <= {seconds:g}s"
             )
+            limit = clock.time() + seconds
+            for held in pending:
+                clock.wait(held.done, max(0.0, limit - clock.time()))
+            live = sum(1 for held in pending if not held.done.is_set())
+            if live:
+                self.log(
+                    f"[default] {live} abandoned worker(s) STILL inside a native call after "
+                    f"{seconds:g}s — teardown continues; the runner hard-exits so interpreter "
+                    f"finalization cannot abort on them"
+                )
+        for held in self._synthesized:
+            if held.done.is_set():
+                held.settlement.late = token_record(held.result)
 
     # ---- the action ---------------------------------------------------------------------------
 
@@ -1147,6 +1155,7 @@ class _Shell:
             )
             r = episode_records.abandoned_result(round(max(0.0, seconds), 2), "invalid_run")
             self._emit_inference(self._settle(held, r, "abandoned")[1], entry)
+            self._synthesized.append(held)
 
     # ---- the episode trace --------------------------------------------------------------------
 
@@ -1308,6 +1317,7 @@ class _Shell:
         else:
             outcome = "abandoned" if bound is None else "unreported"
         result, inference = self._settle(held, r, outcome)
+        self._synthesized.append(held)
         if reason == "per_move_cap":
             self._decision.result = r
         self._emit_inference(inference, entry)

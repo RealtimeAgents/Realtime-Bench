@@ -123,6 +123,7 @@ from realtime_framework.evaluation.reporting import invalid_evaluation
 from realtime_framework.evaluation.reporting import resolve_run_identity
 from realtime_framework.evaluation.reporting import save_evaluation
 from realtime_framework.evaluation.reporting import summarize_cost
+from realtime_framework.evaluation.reporting import summarize_spend
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.config import OUTPUT_CLOCK_POLICY
 from realtime_framework.evaluation.config import INTERACTABLES_PROTOCOL
@@ -949,10 +950,15 @@ def main():
                 for name in ("input_tokens", "output_tokens", "total_tokens")
             }
             tok["responses"] = token_accounting["responses"]
-        cost_accounting = summarize_cost(
-            token_accounting,
-            # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
-            unaccounted="not_accounted_streaming" if spec.interaction_mode == "streaming" else None,
+        # The streaming shell accounts no reply's tokens (episode_records.account_tokens).
+        unaccounted = "not_accounted_streaming" if spec.interaction_mode == "streaming" else None
+        cost_accounting = summarize_cost(token_accounting, unaccounted=unaccounted)
+        # After the drain, which gave the calls given up on the results that came back late.
+        spent = TokenAccounting(settlements, spent=True)
+        spend_accounting = summarize_spend(
+            spent.summary() if settlements else None,
+            given_up=spent.given_up,
+            unaccounted=unaccounted,
         )
         from realtime_framework.evaluation.clock import summarize_model_timing
 
@@ -1088,6 +1094,9 @@ def main():
             "cost_status": cost_accounting.get("status"),
             "cost_source": cost_accounting.get("source"),
             "cost_accounting": cost_accounting,
+            "spend_usd": spend_accounting["total_usd"],
+            "spend_known_usd": spend_accounting["known_usd"],
+            "spend_accounting": spend_accounting,
             "token_usage_source": "provider_reported_inference_responses",
             "token_accounting": token_accounting,
             "token_clock_sources": (
@@ -1407,6 +1416,7 @@ def _write_emergency_summary(
         validate_decision_count=False,
     )
     cost_accounting = summarize_cost(None)
+    spend_accounting = summarize_spend(None)
     invalid_run = failures[0]
     _atomic_write_json(
         path,
@@ -1438,6 +1448,9 @@ def _write_emergency_summary(
             "cost_status": cost_accounting["status"],
             "cost_source": cost_accounting["source"],
             "cost_accounting": cost_accounting,
+            "spend_usd": None,
+            "spend_known_usd": None,
+            "spend_accounting": spend_accounting,
             **run_metrics,
         },
     )

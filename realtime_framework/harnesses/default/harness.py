@@ -1324,15 +1324,20 @@ class DefaultHarness(VisionAgentBase):
         )
 
     @staticmethod
-    def _cancelled_result(latency: float) -> dict:
-        return {
+    def _cancelled_result(latency: float, usage: dict | None = None) -> dict:
+        """The result of a generation an abort cancelled: of a Decision given up on after some
+        of its questions were answered, their usage, without the question asked when it was."""
+        result = {
             "action": None,
             "thinking": "",
             "raw": "",
             "latency": latency,
-            "usage": None,
+            "usage": usage,
             "stale": True,
         }
+        if usage is not None:
+            result["provider_usage_missing_reason"] = "cancelled_request_usage_not_reported"
+        return result
 
     def _invalid_observation_result(self, proof, latency=0.0):
         protocol = {
@@ -1658,15 +1663,17 @@ class DefaultHarness(VisionAgentBase):
                 runtime_result = retry.run(send)
         except RetryCancelled as exc:
             # A Decision given up on after some of its questions were answered carries their
-            # usage, which discarding it records as stale (decision 37).
+            # usage, which discarding it records as stale, and the shell as what it spent
+            # (decision 37).
+            answered = getattr(exc, "partial_usage", None)
             generation.staged = _Staged(
                 unattached,
                 inspection_executions,
                 observation=prepared[-1],
                 generation_id=request.generation_id,
-                partial_usage=getattr(exc, "partial_usage", None),
+                partial_usage=answered,
             )
-            return self._cancelled_result(self.clock.monotonic() - started)
+            return self._cancelled_result(self.clock.monotonic() - started, answered)
         except Exception as exc:
             # Only the failure record() kept as final becomes an invalid decision; anything else
             # raised on the way (by record() itself, the backoff, the output check) propagates,

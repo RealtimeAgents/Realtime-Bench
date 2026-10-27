@@ -35,6 +35,7 @@ from realtime_framework.entity.model import (
     TransportFailure,
     retry_cancellation,
 )
+from realtime_framework.evaluation.clock import token_record
 
 from ..fake_clock import FakeClock
 from .build import build_episode, wait_for_abort
@@ -826,7 +827,8 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
     (selection.py _ask). That question sends nothing, and records its first attempt as
     cancelled. The question answered before is the usage of the generation given up on, kept
     as for any other model's (decision 37): in its cancelled attempt's record and in a stale
-    provider-usage row, not in the agent's usage."""
+    provider-usage row, not in the agent's usage. The cancelled result the worker hands the shell
+    carries it too, as what the call spent, without the question it was cut at."""
     ask = selection_module.ChoiceDecision._ask
     asked, entered, release = [], threading.Event(), threading.Event()
 
@@ -853,6 +855,7 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
         finally:
             release.set()
             episode.finish()
+    cancelled = box["pending"].result
     assert asked == ["gui_action", "gui_action", "text_edit"]
     assert len(stub.requests) == 2 and stub.unscripted == 0 and stub.unload() == 4
     assert len(agent.history.turns) == len(agent.history.actions) == 1
@@ -870,3 +873,8 @@ def test_decision_abort_between_questions(tmp_path, monkeypatch):
     ]
     assert agent.token_usage["responses"] == 1
     assert agent.token_usage["input_tokens"] == accepted["input_tokens"]
+    assert (cancelled["usage"], cancelled["provider_usage_missing_reason"]) == (
+        answered,
+        "cancelled_request_usage_not_reported",
+    )
+    assert token_record(cancelled)["provider_usage_status"] == "partial"

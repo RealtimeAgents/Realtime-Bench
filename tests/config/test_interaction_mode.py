@@ -240,9 +240,10 @@ def test_a_run_summary_says_why_its_cost_is_unknown(
 ):
     """The streaming shell accounts no reply's tokens (episode_records.account_tokens runs on the
     turn-based shell's), so a streaming run's cost is unknown for that, not for a lack of replies
-    (low 2)."""
+    (low 2), and so is what its calls spent."""
     summary = run_main(tmp_path, monkeypatch, "--interaction-mode", interaction_mode)
     assert (summary["cost_usd"], summary["cost_accounting"]["reason"]) == (None, reason)
+    assert (summary["spend_usd"], summary["spend_accounting"]["reason"]) == (None, reason)
 
 
 @pytest.mark.parametrize(

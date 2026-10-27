@@ -240,13 +240,27 @@ class Settlement:
     call_started_ns: int | None
     call_latency_s: float | None
     outcome: str = "reported"
+    # Of a call the kernel gave up on before a result of its own was settled, so that ``record``
+    # is synthesized: the token record of the result its worker handed back by the end of the
+    # drain (shell.py _drain_abandoned).
+    late: dict | None = None
+
+    @property
+    def spent(self) -> dict | None:
+        """The token record of what its call spent, as far as it is known (decision 37): that of
+        the late result when it reported usage, else its own, which an abandoned settlement has
+        none of (N34)."""
+        if self.late is not None and self.late["provider_usage_status"] != "unavailable":
+            return self.late
+        return None if self.outcome == "abandoned" else self.record
 
 
 class TokenAccounting:
     """The token totals of an episode's settlements, and the subtotal of its reported
-    decisions."""
+    decisions; with ``spent``, the totals of what every call spent, the calls given up on
+    included (Settlement.spent), and no subtotal."""
 
-    def __init__(self, settlements=()):
+    def __init__(self, settlements=(), *, spent=False):
         self.responses = 0
         self.sums = Counter()
         self.coverage = Counter()
@@ -270,7 +284,14 @@ class TokenAccounting:
         self.cost_detail_coverage = Counter()
         # The responses counted above whose decision goes unreported, and their clock counts.
         self.unreported = Counter()
+        self.given_up = 0  # spent: the responses counted with the usage of a late result
         for settlement in settlements:
+            if spent:
+                record = settlement.spent
+                if record is not None:
+                    self._add(record)
+                    self.given_up += record is settlement.late
+                continue
             # A call given up on at the episode's end has a synthesized record and no usage: the
             # totals stay those of the calls made (N34). One given up on at a bound counts, and
             # leaves them incomplete (decision 48).

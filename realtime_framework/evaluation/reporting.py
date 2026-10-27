@@ -267,6 +267,38 @@ def summarize_cost(token_accounting: dict | None, *, unaccounted: str | None = N
     return _unavailable(token_accounting, reason)
 
 
+def summarize_spend(
+    spent: dict | None, *, given_up: int = 0, unaccounted: str | None = None
+) -> dict:
+    """What a run's model calls spent, those given up on included (decision 37), from the token
+    totals of what every call spent (clock.py TokenAccounting, ``spent``): the provider-reported
+    cost as summarize_cost reads it, and the provider's token counts. ``given_up`` of the
+    responses are calls given up on whose usage came back late. A total is None unless every
+    response has it; the known total sums those that do, so a run whose last call the deadline
+    cut keeps the cost of the others, marked incomplete."""
+    cost = summarize_cost(spent, unaccounted=unaccounted)
+    counts = (spent or {}).get("counts") or {}
+    return {
+        "schema": "realtime_bench.spend_accounting.v1",
+        "currency": "USD",
+        "scope": "inference_responses_including_given_up",
+        "responses": (spent or {}).get("responses", 0),
+        "given_up_responses": given_up,
+        "status": cost["status"],
+        "complete": cost["complete"],
+        "reason": cost["reason"],
+        "total_usd": cost["total_usd"],
+        "known_usd": cost["known_cost_usd"],
+        "tokens": {
+            name: {
+                key: (counts.get(f"provider_{name}") or {}).get(key)
+                for key in ("total", "known_total", "complete")
+            }
+            for name in ("input_tokens", "output_tokens", "total_tokens")
+        },
+    }
+
+
 # Run metrics
 """Aggregate publication-facing metrics for one completed benchmark run."""
 
@@ -1504,6 +1536,9 @@ def report(root):
                     cost = (summary.get("cost_accounting") or {})
                     row["known_cost_usd"] = _number(cost.get("known_cost_usd"))
                     row["cost_status"] = cost.get("status", "unknown")
+                    spend = summary.get("spend_accounting") or {}
+                    row["known_spend_usd"] = _number(spend.get("known_usd"))
+                    row["spend_complete"] = bool(spend.get("complete"))
                     matched = summary_ok(
                         path,
                         require_scored=True,
@@ -1591,6 +1626,7 @@ def report(root):
                         cost_usd=_number(cost.get("total_usd")) if cost.get("complete") else None,
                         cost_source=cost.get("source"),
                         cost_status=cost.get("status", "unknown"),
+                        spend_usd=_number(spend.get("total_usd")),
                         world_time_s=summary.get("world_time_s"),
                         wall_latency_s=[value for value in latency if value is not None],
                         # Exclude partially recorded tasks from pooled token distributions.
@@ -1614,6 +1650,9 @@ def report(root):
         scored = [row for row in rows if row["status"] == "scored"]
         passed = sum(row["solved"] for row in scored)
         costs = [row["cost_usd"] for row in scored if row["cost_usd"] is not None]
+        # A run's known spend, also when it is incomplete: a mean over complete ones only would
+        # leave out the runs whose last call the deadline cut.
+        spent = [row for row in scored if row["known_spend_usd"] is not None]
         tokens = [value for row in scored for value in row["charged_tokens"]]
         total_decisions = sum(row["decisions"] for row in scored)
         token_distribution = distribution(tokens, "tokens", total_decisions)
@@ -1651,12 +1690,12 @@ def report(root):
                 ),
                 "invalid": sum(row["status"] == "invalid" for row in rows),
                 "invalid_known_spend_usd": sum(
-                    row["known_cost_usd"]
+                    row["known_spend_usd"]
                     for row in rows
-                    if row["status"] == "invalid" and row.get("known_cost_usd") is not None
+                    if row["status"] == "invalid" and row.get("known_spend_usd") is not None
                 )
                 if any(
-                    row["status"] == "invalid" and row.get("known_cost_usd") is not None
+                    row["status"] == "invalid" and row.get("known_spend_usd") is not None
                     for row in rows
                 )
                 else None,
@@ -1665,6 +1704,11 @@ def report(root):
                 "mean_cost_usd": sum(costs) / len(costs) if costs else None,
                 "cost_tasks": len(costs),
                 "cost_unknown_or_partial_tasks": len(scored) - len(costs),
+                "mean_spend_usd": (
+                    sum(row["known_spend_usd"] for row in spent) / len(spent) if spent else None
+                ),
+                "spend_tasks": len(spent),
+                "spend_incomplete_tasks": sum(not row["spend_complete"] for row in spent),
                 "wall_latency_s": distribution(
                     [v for row in scored for v in row["wall_latency_s"]], "seconds", total_decisions
                 ),
@@ -1692,6 +1736,7 @@ def report(root):
         try:
             summary = json.loads(path.read_text())
             cost = (summary.get("cost_accounting") or {})
+            spend = summary.get("spend_accounting") or {}
             output["retry_attempts"].append(
                 {
                     "summary": str(path),
@@ -1699,6 +1744,8 @@ def report(root):
                     "cost_status": cost.get("status", "unknown"),
                     "known_cost_usd": cost.get("known_cost_usd"),
                     "total_cost_usd": cost.get("total_usd"),
+                    "known_spend_usd": spend.get("known_usd"),
+                    "total_spend_usd": spend.get("total_usd"),
                 }
             )
         except (OSError, ValueError):

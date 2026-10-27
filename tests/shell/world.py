@@ -26,6 +26,7 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.evaluation.reporting import summarize_spend
 from realtime_framework.evaluation.shell import run_episode
 from realtime_framework.sandbox.actions import TAP_HOLD_S
 
@@ -354,6 +355,12 @@ class Episode:
     def token_accounting(self) -> dict:
         """The token totals main() takes from the episode's settlements (runner.py main)."""
         return TokenAccounting(self.result.settlements).summary()
+
+    def spend_accounting(self) -> dict:
+        """What the episode's calls spent, as main() takes it from the episode's settlements once
+        the abandoned workers are drained (runner.py main)."""
+        spent = TokenAccounting(self.result.settlements, spent=True)
+        return summarize_spend(spent.summary(), given_up=spent.given_up)
 
     @property
     def invalid(self) -> dict | None:

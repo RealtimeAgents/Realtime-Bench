@@ -13,7 +13,11 @@ import pytest
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import TokenAccounting, summarize_model_timing
+from realtime_framework.evaluation.clock import (
+    TokenAccounting,
+    summarize_model_timing,
+    token_record,
+)
 from realtime_framework.evaluation.kernel.events import Invalidated
 from realtime_framework.evaluation.reporting import trajectory_usage
 
@@ -335,6 +339,38 @@ def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtota
             }
         },
     }  # fmt: skip
+
+
+def test_what_the_calls_spent_counts_the_usage_of_those_given_up_on_once():
+    """Decision 37: what the calls spent counts each settled result's usage once, also one the
+    kernel gave up on once it was settled (bug #29). A call given up on before that counts the
+    usage of the result its worker handed back late in place of its synthesized record, or that
+    record when the late result reported none; one the episode's end gave up on counts only such
+    a late result (N34)."""
+    settled = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    given_up = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    settlements = [episode_records.account_tokens(r, None) for r in (settled, given_up)]
+    settlements[1].outcome = "unreported"
+    late = {"usage": USAGE, "provider_protocol_family": "chat_completions"}
+    for result, outcome, came_back in (
+        (episode_records.timed_out_result(2.0, "wall_deadline"), "unreported", late),
+        (episode_records.timed_out_result(2.0, "wall_deadline"), "unreported", None),
+        (episode_records.timed_out_result(2.0, "wall_deadline"), "unreported", {"usage": None}),
+        (episode_records.abandoned_result(0.9, "task_end"), "abandoned", late),
+        (episode_records.abandoned_result(0.9, "task_end"), "abandoned", None),
+    ):
+        settlements.append(episode_records.account_tokens(result, None))
+        settlements[-1].outcome = outcome
+        settlements[-1].late = None if came_back is None else token_record(came_back)
+    totals = TokenAccounting(settlements).summary()
+    assert (totals["responses"], totals["reported_decisions"]["responses"]) == (5, 1)
+    spent = TokenAccounting(settlements, spent=True)
+    assert (spent.responses, spent.given_up) == (6, 2)
+    inputs = spent.summary()["counts"]["provider_input_tokens"]
+    assert (inputs["known_total"], inputs["responses_with_count"], inputs["complete"]) == (
+        4000, 4, False,
+    )  # fmt: skip
+    assert "reported_decisions" not in spent.summary()
 
 
 def test_the_model_timing_leaves_out_a_call_the_episodes_end_gave_up_on():

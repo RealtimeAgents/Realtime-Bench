@@ -19,6 +19,7 @@ from realtime_framework.evaluation.reporting import (
     EpisodeTrace,
     episode_outcome,
     report,
+    summarize_cost,
     summarize_run_metrics,
 )
 from tests.config.test_interaction_mode import WEB, _report_root
@@ -38,7 +39,7 @@ USAGE = {
 }
 
 
-def _task(
+def _group(
     root: Path,
     lifecycle: list[dict],
     token_accounting: dict,
@@ -46,9 +47,11 @@ def _task(
     *,
     horizon_s: float,
     solved: bool = False,
+    **fields,
 ) -> dict:
-    """report()'s row for one task whose run left this lifecycle, token accounting and
-    termination record, in a local report root as runner.main() leaves one (_report_root)."""
+    """report()'s group of one task whose run left this lifecycle, token accounting, termination
+    record and run summary ``fields``, in a local report root as runner.main() leaves one
+    (_report_root)."""
     _report_root(root, "turn_based")
     run_dir = root / "cell" / WEB
     path = run_dir / "run_summary.json"
@@ -61,6 +64,7 @@ def _task(
         max_minutes=horizon_s / 60,
         solved=solved,
         verification={"resolved": solved, "evaluation_version": 1},
+        **fields,
     )
     summary["outcome"] = episode_outcome(summary)["outcome"]
     path.write_text(json.dumps(summary))
@@ -68,7 +72,12 @@ def _task(
         "".join(json.dumps(record) + "\n" for record in lifecycle)
     )
     (group,) = report(root)["groups"]
-    (task,) = group["tasks"]
+    return group
+
+
+def _task(*args, **kwargs) -> dict:
+    """report()'s row for that task (_group)."""
+    (task,) = _group(*args, **kwargs)["tasks"]
     return task
 
 
@@ -176,6 +185,89 @@ def test_a_move_skipped_with_its_settled_result_leaves_a_valid_run_scored(tmp_pa
     task = _task(tmp_path, env.lifecycle, accounting, result.termination_record, horizon_s=4.0)
     assert (task["status"], task["outcome"], task.get("error")) == ("scored", "timeout", None)
     assert task["charged_tokens"] == [40] * 4
+
+
+COSTED = {**USAGE, "usage": {**USAGE["usage"], "cost": 0.25}}  # the provider reports its cost
+
+
+@pytest.mark.parametrize(
+    "replies, world, responses, given_up",
+    [
+        # The deadline cuts the second generation; aborted, its call comes back with its usage.
+        pytest.param(
+            [Reply(0.5, CLICK, fields=COSTED), Reply(hang=True, fields=COSTED)],
+            World(),
+            2,
+            1,
+            id="deadline-cut",
+        ),
+        # Settled, then discarded for the deadline the kernel handles first (bug #29).
+        pytest.param(
+            [Reply(2.9, CLICK, fields=COSTED)],
+            World(slow_checks=[(2.0, 2.5, 1.5)]),
+            1,
+            0,
+            id="settled-then-discarded",
+        ),
+        # The task's end gives the only generation up; aborted, its call comes back with its
+        # usage, which the token totals leave out (N34).
+        pytest.param(
+            [Reply(2.0, CLICK, fields=COSTED)],
+            World(ends_at=0.5, end_reason="lost"),
+            1,
+            1,
+            id="task-end",
+        ),
+    ],
+)
+def test_what_a_run_spent_counts_every_call_once(replies, world, responses, given_up):
+    """Decision 37: what the run's calls spent counts each call's usage once: a settled result's,
+    also one the kernel gave up on after it was settled, and for a call given up on before that,
+    the usage it came back with by the end of the drain (shell.py _drain_abandoned). Each call
+    reports its cost, so the spend is complete."""
+    spend = run("wall", 3.0, replies, world).spend_accounting()
+    assert (spend["responses"], spend["given_up_responses"]) == (responses, given_up)
+    assert (spend["status"], spend["total_usd"], spend["known_usd"]) == (
+        "complete",
+        0.25 * responses,
+        0.25 * responses,
+    )
+    assert spend["tokens"]["input_tokens"] == {
+        "total": 1000 * responses, "known_total": 1000 * responses, "complete": True,
+    }  # fmt: skip
+
+
+def test_a_run_the_deadline_cut_reports_what_it_is_known_to_have_spent(tmp_path):
+    """The deadline cuts the second generation, whose call comes back with no usage: the run's
+    cost and its spend are incomplete. The spend keeps the first call's cost, which the group's
+    mean spend takes, marked incomplete; the mean cost, over complete costs, has none (decision
+    37)."""
+    episode = run("wall", 3.0, [Reply(0.5, CLICK, fields=COSTED), Reply(hang=True)], World())
+    accounting = episode.token_accounting()
+    spend = episode.spend_accounting()
+    assert (spend["responses"], spend["given_up_responses"], spend["status"]) == (2, 0, "partial")
+    group = _group(
+        tmp_path,
+        episode.env.lifecycle,
+        accounting,
+        episode.result.termination_record,
+        horizon_s=3.0,
+        cost_accounting=summarize_cost(accounting),
+        spend_accounting=spend,
+    )
+    (task,) = group["tasks"]
+    assert (task["status"], task["cost_usd"], task["known_cost_usd"]) == ("scored", None, 0.25)
+    assert (task["spend_usd"], task["known_spend_usd"], task["spend_complete"]) == (
+        None,
+        0.25,
+        False,
+    )
+    assert (group["mean_cost_usd"], group["cost_tasks"]) == (None, 0)
+    assert (group["mean_spend_usd"], group["spend_tasks"], group["spend_incomplete_tasks"]) == (
+        0.25,
+        1,
+        1,
+    )
 
 
 @pytest.mark.parametrize(
