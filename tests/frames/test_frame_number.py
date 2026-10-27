@@ -91,6 +91,29 @@ def test_the_mark_badges_keep_clear_of_the_frame_number(monkeypatch, clock):
         assert box[2] <= frame[0] or box[0] >= frame[2] or box[3] <= frame[1] or box[1] >= frame[3]
 
 
+def test_the_frame_number_the_marks_keep_clear_of_is_the_one_drawn(monkeypatch, clock):
+    """The marks are laid out before the frame takes its number (harnesses/default/harness.py
+    bind_observation): the badge they keep clear of is the one drawn after, on frame 10 as well,
+    whose number is a digit wider than frame 9's."""
+    badges = []
+    frame_number_badge = som._frame_number_badge
+
+    def recording(draw, frame, font):
+        badges.append(frame_number_badge(draw, frame, font))
+        return badges[-1]
+
+    monkeypatch.setattr(som, "_frame_number_badge", recording)
+    agent = make_agent(monkeypatch, clock)
+    agent.bind_tool_runtime(som.ToolRuntime())
+    source = FrameSource(ReplayTask(), text_observation=False, fps=1.0, probe=_corner_probe)
+    for tick in range(10):
+        agent.push(source.capture(tick))
+    agent.close()
+    kept_clear, drawn = badges[0::2], badges[1::2]
+    assert kept_clear == drawn
+    assert [label for _, label in drawn] == [f"FRAME {n}" for n in range(1, 11)]
+
+
 def _sent_images(stub) -> list[bytes]:
     """The screenshot of each request's newest frame, as the model received it."""
     images = []
