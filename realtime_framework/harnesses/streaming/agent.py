@@ -89,10 +89,11 @@ from realtime_framework.entity.request import (
     CanonicalRequest,
     ContentBlock,
 )
-from realtime_framework.evaluation.kernel.events import Invalidated, Outcome
+from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import (
     ActionArrived,
     CallsCancelled,
+    FrameFoundInvalid,
     SessionPrepared,
     SessionPreparing,
 )
@@ -358,17 +359,18 @@ class NativeStreamingAgent(VisionAgentBase):
         """Enter the frame in the frame table and put it into the session, readied first, and
         record it sent. Raises when it did not go in. A frame whose inspection is invalid, as
         one whose elements kept changing while it was captured, does not go in: it invalidates
-        the run, as a turn-based decision on it does (harnesses/default/harness.py)."""
+        the run unless the episode stopped first (kernel/streaming.py FrameFoundInvalid), as a
+        turn-based decision on it does (harnesses/default/harness.py)."""
         value, execution, record = bind_observation(
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
         pushed = _Pushed(record, value, execution)
         proof = value.inspection
+        key = observation.metadata.get("observation_id")
         if proof is not None and not proof.get("valid"):
             self._finish_inspection(pushed, "inspection_protocol_error")
-            self._post(Invalidated("harness", "inspection_protocol_error", proof["protocol_error"]))
+            self._post(FrameFoundInvalid(key, proof["protocol_error"]))
             raise RuntimeError(f"the frame's inspection is invalid: {proof['protocol_error']}")
-        key = observation.metadata.get("observation_id")
         try:
             with (
                 trace_scope(phase="push", observation_id=value.observation_id),

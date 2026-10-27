@@ -1236,29 +1236,16 @@ class GeminiLiveDriver(SessionLifecycle):
                 self._core.calls_received(
                     [(call.id, call.name) for call in calls], received.connection
                 )
-                call_records = []
-                for call in calls:
-                    arguments = dict(call.args or {})
-                    call_record = {
+                call_records = [
+                    {
                         "id": call.id or "",
                         "name": call.name or "",
-                        "arguments": arguments,
+                        "arguments": dict(call.args or {}),
                     }
-                    call_records.append(call_record)
-                    sequence += 1
-                    yield FunctionCall(
-                        received.generation_id,
-                        sequence,
-                        raw_type,
-                        call.id or "",
-                        call.name or "",
-                        arguments,
-                        received_at=received.at if self.streaming else None,
-                        **numbers,
-                    )
+                    for call in calls
+                ]
                 # Acknowledge every pending call as queued; the next observation carries its
                 # execution result.
-                acknowledged = self._core.acknowledging(received.connection)
                 function_responses = [
                     self.types.FunctionResponse(
                         id=call_id,
@@ -1266,21 +1253,10 @@ class GeminiLiveDriver(SessionLifecycle):
                         response=dict(response),
                         **self._core.tool_response_options,
                     )
-                    for call_id, name in acknowledged
+                    for call_id, name in self._core.unacknowledged(received.connection)
                 ]
-                # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
-                # prevents its acknowledgement from triggering another model generation while
-                # the current decision drains through authoritative terminal usage. Calls read on
-                # a connection closed since have none to write, which google-genai refuses.
-                if function_responses:
-                    try:
-                        await bound(
-                            session.send_tool_response(function_responses=function_responses)
-                        )
-                    except BaseException:
-                        self._core.acknowledgement_failed(acknowledged, received.connection)
-                        raise
-                    self._core.acknowledgement_sent(acknowledged, received.connection)
+                # The round is recorded before its calls are handed over: a streaming reply
+                # given up while its acknowledgement is written keeps it (agent.py _give_up).
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
                 completed_refs["native_tool_exchanges"].append(
@@ -1300,6 +1276,32 @@ class GeminiLiveDriver(SessionLifecycle):
                 generation.metadata["tool_response_policy"] = (
                     "queue_acknowledgement_before_execution"
                 )
+                for call_record in call_records:
+                    sequence += 1
+                    yield FunctionCall(
+                        received.generation_id,
+                        sequence,
+                        raw_type,
+                        call_record["id"],
+                        call_record["name"],
+                        call_record["arguments"],
+                        received_at=received.at if self.streaming else None,
+                        **numbers,
+                    )
+                acknowledged = self._core.acknowledging(received.connection)
+                # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
+                # prevents its acknowledgement from triggering another model generation while
+                # the current decision drains through authoritative terminal usage. Calls read on
+                # a connection closed since have none to write, which google-genai refuses.
+                if acknowledged:
+                    try:
+                        await bound(
+                            session.send_tool_response(function_responses=function_responses)
+                        )
+                    except BaseException:
+                        self._core.acknowledgement_failed(acknowledged, received.connection)
+                        raise
+                    self._core.acknowledgement_sent(acknowledged, received.connection)
             if received.interrupted:
                 sequence += 1
                 yield GenerationBoundary(
