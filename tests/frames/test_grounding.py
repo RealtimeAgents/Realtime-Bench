@@ -190,6 +190,33 @@ def test_an_action_naming_a_mark_its_frame_lacks_is_a_grounding_failure(tmp_path
     ) in _request_texts(stub.requests[1])
 
 
+def test_a_region_the_frame_has_named_without_a_point_in_it_is_no_grounding_failure(tmp_path):
+    """Only a mark the frame lacks is a grounding failure (decision 5). R1 is a region of the
+    frame, and a drag end in it takes a point in it (Rn@u,v): without one the output holds no
+    valid action, and the model is told so, not that R1 is not a mark of the screenshot."""
+    steps = [
+        Step('{"action": "drag", "start": "R1", "end": "P1", "duration": 0.5}', status="wait"),
+        Step('{"action": "wait"}', status="wait"),
+    ]
+    with ChatCompletionsStub(replies(steps)) as stub:
+        episode = open_episode(stub, tmp_path)
+        try:
+            results = [decide(episode, k, step.status)[1] for k, step in enumerate(steps)]
+        finally:
+            episode.finish()
+    protocol = results[0]["action_protocol"]
+    assert protocol["protocol_failure"] == "invalid_action_output"
+    assert "unknown_mark" not in protocol
+    assert protocol["grounding"]["resolutions"] == [
+        {"error": "region_point_requires_local_coordinates", "mark": "R1", "reference": "R1"}
+    ]
+    assert (
+        "EXECUTION RESULT: actual=wait(); requested=invalid_action; status=wait. "
+        "NOTE: your previous response was not exactly one valid action, so WAIT was executed. "
+        "Output one actual action with its arguments and nothing else. (invalid_action_output)"
+    ) in _request_texts(stub.requests[1])
+
+
 def test_a_turn_based_inspection_row_keeps_the_last_resolution_of_its_output(tmp_path):
     """The tool trace row of a decision's inspection keeps the last resolution its output made,
     while its protocol keeps the first naming a mark the frame lacks, as the action asked for: of
