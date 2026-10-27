@@ -4,6 +4,10 @@ A frame's text and SoM legend stay in the context once newer frames follow, so n
 newest of a request says what holds only for the newest one; which screenshot's marks an action
 uses is said once, in the system instruction (user, 10-27).
 
+A run's prompts and function declarations describe only the clock it is on: a wall-clock run's
+say nothing of the token clock, and a token-clock or pause run's (the token clock with B
+unlimited) nothing of the wall clock (user, 10-27).
+
 A request's model-visible texts are a stateless request's body, a canonical request's blocks and
 answer, and the client messages of each OpenAI Realtime or Gemini Live connection, whose session
 keeps them. The baselines that record only digests of their requests show no text.
@@ -37,6 +41,15 @@ WRITES_MARKS = "AVAILABLE GUI ACTIONS"
 # A legend line naming one mark, or the page's keys (som.py _mark_map): page content, not the
 # harness's.
 PAGE_LINE = re.compile(r"[PRU]\d+ |KEYS ")
+# What only one clock's prompts say, case aside (tests/harness/test_prompts.py).
+TOKEN_CLOCK_WORDS = ("token clock", "simulated", "kappa", "charged tokens")
+WALL_CLOCK_WORDS = ("wall clock", "physical elapsed time", "environment time keeps")
+# The clock note of each clock's system instruction (prompts.py budget_clock_prompt).
+CLOCK_NOTES = {
+    "wall": ("WALL CLOCK: ",),
+    "finite_b": ("TOKEN CLOCK: ", " charged tokens/frame;"),
+    "pause": ("TOKEN CLOCK: ", "B is unlimited"),
+}
 
 
 def _read(path: Path) -> list[dict]:
@@ -91,6 +104,21 @@ def _system_texts(texts: list[str]) -> list[str]:
     return [text for text in texts if text.startswith(tuple(SCENARIO_ROLES.values()))]
 
 
+def clock(records: list[dict]) -> str:
+    """The baseline's clock, from its header: "wall", "finite_b" or "pause". A header that names
+    none, and a canonical snapshot, which has none, is of build_episode's default wall clock
+    (tests/replay/build.py)."""
+    header = next((record for record in records if record["record"] == "header"), {})
+    named = header.get("clock", header.get("clock_mode", "wall"))
+    if isinstance(named, dict):
+        mode, tokens = named.get("mode", named.get("clock_mode")), named.get("tokens_per_frame")
+    else:
+        mode, tokens = named, header.get("tokens_per_frame")
+    if mode == "wall":
+        return "wall"
+    return "pause" if tokens is None else "finite_b"
+
+
 def test_the_baselines_show_their_requests():
     shown = {path.name for path in BASELINES if any(conversations(_read(path)))}
     digests_only = {
@@ -112,6 +140,25 @@ def test_older_frames_say_nothing_only_the_newest_holds(path):
         for system in _system_texts(texts):
             if WRITES_MARKS in system:
                 found += [(rule, "system") for rule in MARK_RULES if system.count(rule) != 1]
+    assert found == []
+
+
+@pytest.mark.parametrize("path", BASELINES, ids=lambda path: path.stem)
+def test_the_prompts_describe_only_the_run_s_clock(path):
+    records = _read(path)
+    run_clock = clock(records)
+    other = WALL_CLOCK_WORDS if run_clock != "wall" else TOKEN_CLOCK_WORDS
+    found = []
+    for texts in conversations(records):
+        systems = _system_texts(texts)
+        assert systems, "a request without its system instruction"
+        found += [
+            (note, "system") for system in systems for note in CLOCK_NOTES[run_clock]
+            if note not in system
+        ]
+        found += [
+            (word, text[:120]) for text in texts for word in other if word in text.lower()
+        ]
     assert found == []
 
 
