@@ -929,3 +929,60 @@ def test_decision_closed_between_questions(tmp_path, monkeypatch):
         (0, False, accepted),
         (1, True, answered),
     ]
+
+
+def test_decision_aborted_during_its_last_question_attempt(tmp_path, monkeypatch):
+    """Decision API. Decision 1's first question picks compose_text; its text-edit question gets
+    HTTP 503 three times, and the stub holds its fourth, last allowed attempt when the kernel
+    aborts the generation. The abort closes the client, which ends that attempt with an error
+    the question has no retry left for: the generation fails after the kernel gave it up,
+    rather than being cancelled. The question answered before is the usage of the generation
+    given up on all the same (decision 37): the failed result the shell gets back carries it,
+    and discarding that result records it in a stale provider-usage row."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    arrived, release = threading.Event(), threading.Event()
+    with DecisionsStub(upstream="openai") as stub:
+        respond = stub._respond
+
+        def held(path, headers, body):
+            # Request 0 is decision 0's, 1 the first question's, 2 to 4 the 503s.
+            if len(stub.requests) == 5:
+                arrived.set()
+                release.wait(WAIT_S)
+            return respond(path, headers, body)
+
+        monkeypatch.setattr(stub, "_respond", held)
+        episode = _decision_episode(stub, tmp_path, monkeypatch)
+        agent = episode.agent
+        try:
+            run_decisions(episode, [decision("click_P1")], stub)
+            fail = QuestionFailure(503, "Provider returned error")
+            stub.load(
+                decision("compose_text", fail, fail, fail, ADA, SPACE, LOVELACE, "finish").script
+            )
+            observation = episode.frames.capture(1)
+            box, done = _generate_in_worker(episode, observation, decision=1)
+            assert arrived.wait(WAIT_S), "the last attempt of the text-edit question never came"
+            _abort_like_the_kernel(agent)
+            assert done.wait(WAIT_S), "the abandoned worker never returned"
+            agent.discard(GENERATION)
+        finally:
+            release.set()
+            episode.finish()
+    assert "error" not in box, repr(box.get("error"))
+    result = box["pending"].result
+    attempts = _trace(tmp_path, "ModelAttemptFinished")
+    accepted, answered = (
+        a["usage"] for a in attempts if a["kind"] == "choice_question" and a["outcome"] == "ok"
+    )
+    assert (result["invalid_reason"], result["usage"]) == ("provider_unavailable", answered)
+    assert [(a["outcome"], a["usage"]) for a in attempts if a["kind"] == "generation"] == [
+        ("ok", accepted),
+        ("failed", answered),
+    ]
+    lines = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    assert [(row["tick"], row["stale"], row["usage"]) for row in map(json.loads, lines)] == [
+        (0, False, accepted),
+        (1, True, answered),
+    ]
+    assert agent.token_usage["input_tokens"] == accepted["input_tokens"]

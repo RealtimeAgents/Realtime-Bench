@@ -1121,14 +1121,16 @@ def action_text(action: Action) -> str:
 class _Staged:
     """What accepting a generation's result writes into the history. Discarding it writes no
     history: it ends the tool calls and records the usage of a result that came back, or of the
-    questions a Decision cancelled before its result answered."""
+    questions a Decision answered before it was cancelled or failed."""
 
     unattached: str  # the feedback no turn carries when it started
     inspections: list  # its observation's tool calls, still open
-    result: RuntimeTurnResult | None = None  # None when it was cancelled before any result
+    # None when it was cancelled or failed before any result: accepting a failed result writes
+    # nothing.
+    result: RuntimeTurnResult | None = None
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
-    # A cancelled generation's id, and the usage of the Decision questions it answered.
+    # A cancelled or failed generation's id, and the usage of the Decision questions it answered.
     generation_id: str | None = None
     partial_usage: dict | None = None
 
@@ -1436,7 +1438,7 @@ class DefaultHarness(VisionAgentBase):
     def _write(self, generation: _Generation) -> None:
         """An accepted result joins the history: its turn, its action record and its usage."""
         staged = generation.staged
-        if staged is None:
+        if staged is None or staged.result is None:
             return
         result = staged.result
         self._record_provider_usage(staged, generation.decision, stale=False)
@@ -1743,6 +1745,15 @@ class DefaultHarness(VisionAgentBase):
             if partial_usage is not None:
                 # Its token record is partial: the usage is known, not complete (decision 19).
                 result["provider_usage_missing_reason"] = "failed_request_usage_not_reported"
+                # Discarding the failed result records that usage as stale, as for a cancelled
+                # one (decision 37); its tool calls are ended above.
+                generation.staged = _Staged(
+                    unattached,
+                    [],
+                    observation=prepared[-1],
+                    generation_id=request.generation_id,
+                    partial_usage=partial_usage,
+                )
             return result
 
         output = runtime_result.output
