@@ -61,7 +61,8 @@ and a capture out with it: the shell takes the snapshot next after them, bounded
 the action's budget and the capture's (N32), as the turn-based shell takes it right after the
 action on its one thread (evaluation/streaming_shell.py ``_freeze``). An abort out holds nothing of
 that up; the episode finishes once it is answered, so that the agent is done with it before it is
-closed.
+closed. A push out holds up neither the snapshot nor the finish, and a frame found invalid once
+the episode stopped changes nothing (FrameFoundInvalid).
 """
 
 from __future__ import annotations
@@ -151,6 +152,20 @@ class FramePushed:
     error: str | None = None
 
     priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class FrameFoundInvalid:
+    """The agent found the inspection of the frame it pushes invalid, as for one whose elements
+    kept changing while it was captured, and kept the frame out of the session; posted before the
+    push is answered. The run is invalid for it, as a turn-based decision on that frame makes it,
+    unless the episode stopped first: the turn-based clock discards a decision's result, and the
+    inspection in it, that comes after the end."""
+
+    observation_id: str | None
+    detail: str  # the inspection's protocol error
+
+    priority: ClassVar[Priority] = Priority.CONTROL
 
 
 @dataclass(frozen=True)
@@ -294,7 +309,8 @@ class StreamingPolicy:
     def settled(self) -> bool:
         """Nothing is out whose answer can still change the run: an action executing, a capture
         or an end check whose failure invalidates it, or feedback; nor an abort, which the agent
-        is to be done with before it is closed. A push changes nothing then."""
+        is to be done with before it is closed. A push changes nothing of it then: a frame found
+        invalid once the episode stopped is not judged (``_found_invalid``)."""
         return (
             self._lane is _Lane.IDLE
             and not self._capturing
@@ -329,6 +345,8 @@ class StreamingPolicy:
                 self._captured(event)
             case FramePushed():
                 self._pushed(event)
+            case FrameFoundInvalid():
+                self._found_invalid(event)
             case SessionPreparing() | SessionPrepared():
                 self._prepared(event)
             case GenerationAborted():
@@ -554,6 +572,12 @@ class StreamingPolicy:
         if self._queued is not None and self._aborting is None and not self._stopped():
             queued, self._queued = self._queued, None
             self._push(queued)
+
+    def _found_invalid(self, event: FrameFoundInvalid) -> None:
+        """Judged only before the episode stopped, whether it finishes before the push is
+        answered or not."""
+        if not self._stopped():
+            self.kernel.invalidate("harness", "inspection_protocol_error", event.detail)
 
     def _prepared(self, event: SessionPreparing | SessionPrepared) -> None:
         """The agent starts preparing the session, which is no push stuck in it, or the session

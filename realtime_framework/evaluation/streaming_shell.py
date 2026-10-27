@@ -112,9 +112,9 @@ class StreamingKernelAgent(KernelAgent, Protocol):
     def bind_inbox(self, post: Callable[[object], None], origin: float) -> None:
         """Before the episode: where a reply's ActionArrived and CallsCancelled go
         (kernel/streaming.py), each posted as its message comes and before ``generate``
-        returns, and SessionPreparing and SessionPrepared as the session's preparation starts
-        and ends; and the episode's origin on the wall clock (``env.t0``), from which the
-        semantic seconds the actions carry count."""
+        returns, SessionPreparing and SessionPrepared as the session's preparation starts
+        and ends, and FrameFoundInvalid before a push raises for it; and the episode's origin on
+        the wall clock (``env.t0``), from which the semantic seconds the actions carry count."""
 
     def push(self, observation: Observation) -> None:
         """PushFrame: put the frame into the session. Raises when it did not go out; only that

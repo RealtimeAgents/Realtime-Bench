@@ -321,3 +321,66 @@ def test_a_frame_whose_inspection_is_invalid_invalidates_the_run_whenever_replie
     assert [c[1] for c in agent.driver.calls if c[0] == "push"] == ["obs-1", "obs-2"]
     assert ("c3", "applied") not in [(a["call_id"], a["result"]) for a in agent.action_history]
     assert env.counts.get("execute", 0) == 0
+
+
+class _SlowInspection(ToolRuntime):
+    """Inspecting obs-3 takes ``seconds``, as building its SoM may."""
+
+    def __init__(self, clock, seconds: float):
+        super().__init__(None, clock=clock)
+        self.seconds = seconds
+
+    def inspect(self, observation, **fields):
+        if observation.metadata.get("observation_id") == "obs-3":
+            self.clock.sleep(self.seconds)
+        return super().inspect(observation, **fields)
+
+
+def _bad_frame_near_the_deadline(monkeypatch, inspection_s: float, snapshot_s: float):
+    """Frame 3, captured at 2.75 s, kept changing while it was captured; the deadline is 2.9 s."""
+    clock = FakeClock()
+    with clock.participant():
+        agent = make_agent(monkeypatch, clock)
+        agent.bind_tool_runtime(_SlowInspection(clock, inspection_s))
+        agent.driver.replies += [Reply(ends_at=1.0)] * 10
+        env = _InspectedEnv(clock, "obs-3")
+        env.seconds["snapshot"] = snapshot_s
+        result = run_streaming_episode(
+            agent,
+            env,
+            StreamingConfig(duration_s=2.9),
+            clocks=Clocks(clock, clock),
+            log=lambda message: None,
+        )
+        agent.close()
+    return result, [c[1] for c in agent.driver.calls if c[0] == "push"]
+
+
+@pytest.mark.parametrize("snapshot_s", [0.05, 1.0])
+def test_a_frame_whose_inspection_is_found_invalid_once_the_episode_stopped_changes_nothing(
+    monkeypatch, snapshot_s
+):
+    """Frame 3's inspection takes 0.4 s: it is found invalid at 3.15 s, past the deadline.
+    Whether the episode has finished by then or still waits for its snapshot, the run stays
+    valid, as the turn-based clock discards a decision's result, its inspection with it, that
+    comes after the end; and the frame never goes in."""
+    result, pushes = _bad_frame_near_the_deadline(monkeypatch, 0.4, snapshot_s)
+    assert (result.invalid_run, result.stop_reason) == (None, "time_limit")
+    assert result.termination.ended_at == 2.9
+    assert pushes == ["obs-1", "obs-2"]
+
+
+@pytest.mark.parametrize("snapshot_s", [0.05, 1.0])
+def test_a_frame_whose_inspection_is_found_invalid_before_the_deadline_invalidates_the_run(
+    monkeypatch, snapshot_s
+):
+    """The same frame, found invalid at 2.85 s, before the deadline: the run is invalid then,
+    however long the snapshot takes."""
+    result, pushes = _bad_frame_near_the_deadline(monkeypatch, 0.1, snapshot_s)
+    assert result.invalid_run == {
+        "category": "harness",
+        "reason": "inspection_protocol_error",
+        "detail": "interactables_binding_unstable",
+    }
+    assert result.termination.ended_at == 2.85
+    assert pushes == ["obs-1", "obs-2"]
