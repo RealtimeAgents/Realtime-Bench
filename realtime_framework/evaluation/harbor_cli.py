@@ -126,7 +126,13 @@ def suite_dataset(suite: str, selected: list[str]) -> dict:
         link = folder / task
         if not (link.is_symlink() and link.resolve() == sources[0]):
             link.unlink(missing_ok=True)
-            link.symlink_to(sources[0], target_is_directory=True)
+            try:
+                link.symlink_to(sources[0], target_is_directory=True)
+            except FileExistsError:
+                # Concurrent jobs on other lanes that select as many tasks share this folder, and
+                # one of them made the same link between the unlink and here.
+                if link.resolve() != sources[0]:
+                    raise
     for entry in folder.iterdir():
         if entry.name not in categories:
             entry.unlink()
