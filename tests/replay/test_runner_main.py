@@ -506,6 +506,91 @@ def test_a_failure_after_the_first_is_kept_and_keeps_a_re_evaluated_run_invalid(
     assert not scored(tmp_path)
 
 
+class FailingActionGuest(FakeGuest):
+    """Its action endpoint fails as a dead guest's does: the environment latches the run invalid
+    (sandbox/actions.py _execution_failed)."""
+
+    def execute_action(self, action):
+        raise RuntimeError("guest action endpoint down")
+
+
+def test_the_failure_the_environment_latched_comes_before_those_main_finds_after_it(tmp_path):
+    """The click fails and the environment latches the run invalid; after the episode the scene
+    capture fails to close. The environment latched its failure while the episode ran, before
+    main() found the other: the run is invalid for it, and its summary lists both."""
+    clock = FakeClock(1_000_000.0)
+    guest = FailingActionGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, scene_capture=FailingCloseCapture(clock)
+    )
+    assert summary["invalid_run"] == {
+        "category": "environment",
+        "reason": "action_execution_failed",
+        "detail": "guest action endpoint down",
+    }
+    assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == [
+        ("environment", "action_execution_failed"),
+        ("environment", "cdp_close_failed"),
+    ]
+
+
+class UnhealthySnapshotTask(FakeTask):
+    """Its frozen snapshot says the environment was not healthy (runner.py _invalid_snapshot)."""
+
+    def evaluation_snapshot(self):
+        self.clock.now += SNAPSHOT_S
+        return {"kind": "fake", "state": {"ok": False}}
+
+
+class RaisingEvaluatorTask(UnhealthySnapshotTask):
+    def evaluate_snapshot(self, snapshot):
+        raise RuntimeError("evaluator crashed")
+
+
+def test_an_evaluator_that_raises_writes_its_own_failure_to_the_trace(tmp_path):
+    """The frozen snapshot says the environment was unhealthy, and then the evaluator raises.
+    The run is invalid for the first failure, which main() writes last, as the run's verdict;
+    the RunInvalidated it writes as the evaluator raises is the evaluator's own."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = RaisingEvaluatorTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    assert summary["invalid_run"]["reason"] == "snapshot_environment_unhealthy"
+    records = [
+        json.loads(line)
+        for line in (tmp_path / "run" / "episode_trace.jsonl").read_text().splitlines()
+    ]
+    invalidated = [record["payload"] for record in records if record["event"] == "RunInvalidated"]
+    assert [(payload["category"], payload["reason"]) for payload in invalidated] == [
+        ("evaluator", "evaluation_exception"),
+        ("environment", "snapshot_environment_unhealthy"),
+    ]
+    assert invalidated[0]["detail"].rstrip().endswith("RuntimeError: evaluator crashed")
+
+
+def test_a_snapshot_judged_invalid_keeps_its_reason_though_its_record_then_fails(
+    tmp_path, monkeypatch
+):
+    """The frozen snapshot says the environment was unhealthy, and then its trace record fails,
+    its hash raising. The run is invalid for the first of the two, as for any failures main()
+    finds, and its summary lists both."""
+
+    def broken(value):
+        raise RuntimeError("snapshot hash failed")
+
+    monkeypatch.setattr(runner, "canonical_sha256", broken)
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = UnhealthySnapshotTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    assert summary["invalid_run"]["reason"] == "snapshot_environment_unhealthy"
+    assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == [
+        ("environment", "snapshot_environment_unhealthy"),
+        ("environment", "evaluation_snapshot_failed"),
+    ]
+
+
 def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path, monkeypatch):
     """jev-1.13 is excluded from maintained results and runs only with ALLOW_EXPERIMENTAL_MODEL:
     its run is experimental, and so is it re-evaluated, with the progress of the new
@@ -690,12 +775,14 @@ class NotReadyGuest(FakeGuest):
 def test_a_run_that_fails_to_set_up_in_a_used_run_dir_leaves_its_own_summary(tmp_path):
     """The first run scores; the second, with the same run id, fails before its episode, as the
     guest is not ready, and main() lets the failure out to the emergency summary. The run
-    directory's summary is the second run's setup error; the first run's is moved aside."""
+    directory's summary is the second run's setup error, which reads none of the first run's
+    decisions left in the directory; the first run's summary is moved aside."""
     clock, guest = FakeClock(1_000_000.0), FakeGuest()
     first = run_main(
         tmp_path, FakeTask(clock, guest, "task_success", True), FakeAgent(clock), clock, guest
     )
     assert first["run_status"] == "scored"
+    assert first["decision_wall_latency_s"]["sample_count"] == 1
     run_dir = tmp_path / "run"
     written = (run_dir / "run_summary.json").read_text()
 
@@ -712,6 +799,7 @@ def test_a_run_that_fails_to_set_up_in_a_used_run_dir_leaves_its_own_summary(tmp
     )
     assert "RuntimeError: guest not ready" in seen["escaped"]
     assert (summary["run_status"], summary["stop_reason"]) == ("invalid", "setup_error")
+    assert summary["decision_wall_latency_s"]["sample_count"] == 0
     assert (run_dir / "run_summary.pre_retry.json").read_text() == written
 
 
