@@ -538,6 +538,48 @@ def test_an_output_kept_late_moves_on_the_place_of_the_reply_after_it(monkeypatc
     agent.close()
 
 
+@pytest.mark.parametrize(
+    "click_ran_first", [True, False], ids=["click_ran_first", "accepted_first"]
+)
+def test_two_outputs_that_began_at_one_place_go_there_in_the_order_their_replies_were_asked_for(
+    monkeypatch, clock, click_ran_first
+):
+    """Decision 25: the first reply is given up while its click runs, and the second starts on
+    the same frame, as the kernel starts the next reply once its watchdog gave one up: both
+    outputs began at one place. Whether the click ran before the second reply was accepted or
+    after, the first's output stands before the second's, and both before the click's result."""
+    agent = make_agent(monkeypatch, clock)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies += [
+        Reply((_click("c1", 0.25, 2),), ends_at=100.0),
+        Reply((_click("c1", 0.25, 2),), ends_at=1.0),
+    ]
+    done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.abort(7)
+    assert clock.wait(done, 1.0)
+    agent.discard(7)
+    replied, _ = _on_worker(clock, lambda: agent.generate(8, 4, frame, BUDGET))
+    clock.sleep(0.5)
+    ran = _outcome(3, "applied", "c1", action=posted[0].action)
+    if click_ran_first:
+        agent.commit(ran)
+    assert clock.wait(replied, 1.0)
+    agent.accept(8)
+    if not click_ran_first:
+        agent.commit(ran)
+    agent.push(observation(clock, 3))
+    assert agent.driver.calls[-1][2][3:] == (
+        "d3.output",
+        "d4.output",
+        "d3.c1.feedback",
+        "f3.frame",
+    )
+    agent.close()
+
+
 def test_a_reply_discarded_before_its_abort_keeps_its_output_once_its_click_ran(monkeypatch, clock):
     """The reply ended as the kernel gave it up: its discard, on the shell's thread, comes
     before its abort, on the abort lane."""
