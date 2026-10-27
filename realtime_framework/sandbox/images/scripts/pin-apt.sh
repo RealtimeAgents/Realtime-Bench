@@ -5,8 +5,12 @@ set -eu
 snapshot="$1"
 . /etc/os-release
 rm -f /etc/apt/sources.list /etc/apt/sources.list.d/*
-# Snapshot Release files are signed but intentionally stale.
-echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99snapshot
+# Snapshot Release files are signed but intentionally stale. The Ubuntu snapshot service answers
+# 503 under load, so a fetch retries with apt's growing delay before the build fails.
+{
+    echo 'Acquire::Check-Valid-Until "false";'
+    echo 'Acquire::Retries "10";'
+} > /etc/apt/apt.conf.d/99snapshot
 case "$ID" in
 ubuntu)
     archive="https://snapshot.ubuntu.com/ubuntu/$snapshot"
