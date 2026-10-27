@@ -48,6 +48,16 @@
       background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1); color: #e8edf3; font-weight: 600; }
     #clockbar .last .label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: #9aa6b2; }
     #game-frame { flex: 1 1 auto; min-height: 0; width: 100%; border: 0; display: block; }
+    /* Narrow embeds (e.g. user-study iframe): keep every clock-bar item inside the width. No-op above 700px. */
+    @media (max-width: 700px) {
+      #clockbar { gap: 12px; padding: 0 12px; }
+      #clockbar .turn { min-width: 0; }
+      #clockbar .clock, #clockbar .clock.wide { min-width: 140px; }
+      #clockbar .clock .label { font-size: 12px; letter-spacing: 0; }
+      #clockbar .clock .value { font-size: 30px; }
+      #clockbar .last { flex-direction: column; align-items: flex-start; gap: 0; padding: 3px 10px; border-radius: 10px; white-space: nowrap; }
+      #clockbar .last .label { font-size: 10px; }
+    }
   </style>
 </head>
 <body>
