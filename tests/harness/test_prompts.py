@@ -35,17 +35,21 @@ FORBIDDEN = [
     (lambda o: True, "Latest screen", "decision 42: a frame stays in the context once older"),
     (lambda o: True, "CURRENT-SCREEN", "decision 42"),
     (lambda o: True, "Use current P/R marks", "decision 11: so is P6"),
+    # A frame's text and legend say only what holds for their own screenshot (user, 10-27).
+    (lambda o: True, "Screen observed for this decision", "it names the newest frame's decision"),
+    (lambda o: True, "current-only", "a legend's marks are its own screenshot's"),
+    (lambda o: True, "Use only these marks", "an older frame's are not the ones to use"),
     # Decision 6: a streaming action's marks and coordinates are read from the frame it names,
     # however old; a streaming frame is no decision's; no WAIT runs for what is not executed.
     *(
         (lambda o: o.interaction_mode == "streaming", sentence, "decision 6")
         for sentence in (
-            "Never reuse a mark from an earlier screenshot",
+            "reuse a mark from an earlier screenshot",
             "Never reuse an older screenshot's mark",
+            "newest screenshot's P/R marks",
             "Current-screenshot",
             "current screenshot",
             "current P/R marks",
-            "REF current-only",
             "this decision",
             "per decision",
             "the harness executes WAIT",
@@ -107,6 +111,42 @@ def test_no_prompt_says_what_is_false_for_its_run(profile, mode, clock):
         if sentence in text
     ]
     assert found == []
+
+
+# Words that hold only for the newest frame. A frame's text and SoM legend stay in the context once
+# newer frames follow, so they say none of them (user, 10-27); JEV's digest keeps no older
+# observation (default/request.py _digest_items), and its frame text is left as it is (decision 7).
+NEWEST_ONLY = ("current", "newest", "latest", "this decision", "only these", "Use only")
+# Which screenshot's marks an action uses, and the coordinates without a suitable one, are said
+# once, in the system instruction of every profile whose model writes marks.
+MARK_RULES = {
+    "turn_based": (
+        "P/R marks belong only to the screenshot that supplies them.",
+        "Use the newest screenshot's P/R marks when\n  supplied;",
+        "If no suitable mark exists, replace target with x/y",
+    ),
+    "streaming": (
+        "P/R marks belong only to the screenshot that supplies them.",
+        "An action's marks are read from the screenshot its frame names.",
+        "If no suitable mark exists, replace target with x/y",
+    ),
+}
+
+
+@pytest.mark.parametrize(("profile", "mode", "clock"), list(_runs()))
+def test_frames_say_only_what_holds_for_their_screenshot(profile, mode, clock):
+    _, texts = _compose(profile, mode, clock)
+    places = ("SoM legend",) if profile == "jev_decisions" else ("frame", "SoM legend")
+    found = [
+        (word, where)
+        for where in places
+        for word in NEWEST_ONLY
+        if word.lower() in texts[where].lower()
+    ]
+    assert found == []
+    if profile in LIVE_PROFILES:
+        system = texts["system instruction"]
+        assert [rule for rule in MARK_RULES[mode] if system.count(rule) != 1] == []
 
 
 def test_every_profile_has_a_run():

@@ -231,7 +231,7 @@ def test_context_preset_sends_past_reasoning(stream, tmp_path):
 # with its image allowance (providers/context.py estimated_request_tokens), plus few archived
 # actions: from decision 1 the runtime archives every earlier turn to fit, and from decision 16
 # the ledger alone outgrows the window.
-LEDGER_WINDOW = (16096, 4096)
+LEDGER_WINDOW = (15984, 4096)
 LEDGER_OMISSIONS = (16, 26, 36, 46, 56)  # the decisions that leave out the next ten actions
 
 

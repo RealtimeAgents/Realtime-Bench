@@ -670,6 +670,7 @@ from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_ACTION_SP
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
+from realtime_framework.harnesses.default.prompts import FRAME_PROMPT
 from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
@@ -777,7 +778,7 @@ MULTIMODAL_CHOICE_PROFILE = InteractionProfile(
         "then finishes to type it. Spaces and casing are explicit."
     ),
     # Luna's transcript keeps the older frames, which JEV's digest leaves out.
-    frame_prompt="Screen observed for this decision.",
+    frame_prompt=FRAME_PROMPT,
 )
 
 MULTIMODAL_GAME_CHOICE_PROFILE = InteractionProfile(

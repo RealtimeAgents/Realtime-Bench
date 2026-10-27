@@ -29,6 +29,7 @@ from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.clock import TokenAccounting
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.harnesses.default.prompts import FRAME_PROMPT
 from realtime_framework.providers.decisions.questions import GAME_INSTRUCTIONS
 from realtime_framework.providers.decisions.questions import GROUP_NOTE
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
@@ -222,7 +223,7 @@ def _check_luna_frames(records: list[dict]) -> None:
         for body in _bodies(record):
             text = "".join(entry for entry in body["state"] if isinstance(entry, str))
             assert text.count("Observation: ") == text.count(
-                "Observation: Screen observed for this decision." + FRAME_INTERACTABLES_HEADER
+                "Observation: " + FRAME_PROMPT + FRAME_INTERACTABLES_HEADER
             ) + text.count("Observation: " + FOLDED_VISUAL_PLACEHOLDER)
 
 
@@ -714,8 +715,8 @@ def test_history_overflow_exhausted(tmp_path, monkeypatch):
 # digest. Luna's holds the system text and the current frame and few archived actions, so from
 # decision 1 every earlier turn is archived.
 LEDGER_RUNS = {
-    "jev_decisions": ((10024, 1024), (28, 34)),
-    "openai_decisions": ((13000, 4000), (25, 31)),
+    "jev_decisions": ((9986, 1024), (28, 34)),
+    "openai_decisions": ((12939, 4000), (25, 31)),
 }
 
 

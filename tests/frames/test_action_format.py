@@ -97,7 +97,8 @@ def test_a_streaming_call_keeps_its_frame_for_grounding():
 # run has replies, not decisions.
 STREAMING_SENTENCES = [
     (
-        "Never reuse a mark from an earlier screenshot.",
+        "Use the newest screenshot's P/R marks when\n  supplied; never reuse a mark from an earlier "
+        "screenshot.",
         "An action's marks are read from the screenshot its frame names.",
     ),
     (

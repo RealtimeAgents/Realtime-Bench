@@ -46,8 +46,12 @@ _POINTER_RULES = """- P/R marks belong only to the screenshot that supplies them
 - Pointer coordinates may be omitted for click variants, mouse_down/up, and scroll only to act at
   the current cursor position. When present, x and y must be supplied together.
 """
+# Which screenshot's marks an action uses is said here, not on a frame, whose text stays in the
+# context once older.
 TURN_POINTER_RULES = _POINTER_RULES.format(
-    marks="Never reuse a mark from an earlier screenshot.", screenshot="the current screenshot"
+    marks="Use the newest screenshot's P/R marks when\n"
+    "  supplied; never reuse a mark from an earlier screenshot.",
+    screenshot="the current screenshot",
 )
 # A streaming action's marks and coordinates are read from the frame it names
 # (FRAME_REFERENCE_RULES).
@@ -163,14 +167,11 @@ FINITE_BUDGET_FUNCTION_CALL_OUTPUT_CONTRACT = _FUNCTION_CALL_OUTPUT_CONTRACT.for
     "token clock, then advances simulated time."
 )
 # Shared screenshot marker for the frame prompts. Each frame keeps its text once newer frames
-# follow, so it names the screen of its own decision.
-FRAME_PROMPT = "Screen observed for this decision."
-
-# Which screenshot's marks to use, said so that it stays true on an older frame.
-FRAME_MARKS_PROMPT = " Use the newest screenshot's P/R marks when supplied."
+# follow, so it says only what holds for its own screenshot; the request for this turn's action
+# after it stays true as well.
+FRAME_PROMPT = "Screenshot."
 FUNCTION_CALL_FRAME_PROMPT = (
-    FRAME_PROMPT + FRAME_MARKS_PROMPT + " Submit exactly one GUI action by calling its function. "
-    "Do not speak."
+    FRAME_PROMPT + " Submit exactly one GUI action by calling its function. Do not speak."
 )
 # A streamed frame is no decision's: an action names whichever frame it is based on.
 STREAMING_FRAME_PROMPT = "Streamed screenshot; its number is in its FRAME label."
@@ -247,9 +248,7 @@ def system_prompt_for_category(category: str | None, options: PromptOptions) -> 
 
 # Stateful text-output VLM sessions can under-weight an old system message, so each frame repeats only
 # the wire format. Scenario role and task objective remain exclusively in the session seed.
-TEXT_ACTION_FRAME_PROMPT = (
-    FRAME_PROMPT + FRAME_MARKS_PROMPT + " Output exactly one action and nothing else."
-)
+TEXT_ACTION_FRAME_PROMPT = FRAME_PROMPT + " Output exactly one action and nothing else."
 STREAMING_TEXT_ACTION_FRAME_PROMPT = (
     STREAMING_FRAME_PROMPT
     + " Output exactly one action, with the frame it is based on, and nothing else."
