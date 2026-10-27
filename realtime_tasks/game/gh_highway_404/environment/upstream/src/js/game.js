@@ -16,6 +16,7 @@ const TITLE_SCREEN = 0;
 const GAME_SCREEN = 1;
 const END_SCREEN = 2;
 let screen = TITLE_SCREEN;
+let booted = false;     // set once onload has built the title screen; input before that is ignored
 
 let countdown;          // in seconds
 let teapotsCollected;
@@ -671,6 +672,8 @@ function setupTitleScreen() {
 }
 
 function startGame() {
+  // a key or click during loading would load the level, then onload's setupTitleScreen() would wipe it
+  if (!booted) return;
   konamiIndex = 0;
   countdown = MAX_GAME_TIME;
   teapotsCollected = 0;
@@ -1323,7 +1326,8 @@ onload = async (e) => {
   blit();
 
   // load sound assets (long)
-  speak = await initSpeech();
+  // initSpeech() rejects when the browser exposes no voices; play without speech instead of hanging
+  speak = await initSpeech().catch(() => () => {});
   [HIGHWAY_404_SONG] = loadSongs([HIGHWAY_404_SONG]);
 
   // load title screen
@@ -1340,6 +1344,7 @@ onload = async (e) => {
   addEventListener('keydown', onkeydown);
   addEventListener('keyup', onkeyup);
 
+  booted = true;
   toggleLoop(true);
 };
 
@@ -1634,7 +1639,7 @@ function renderDebugTouchBound(_minX, _maxX, _minY, _maxY, color) {
 window.highway404BenchmarkState = function() {
   const elapsed = Number.isFinite(countdown) ? MAX_GAME_TIME - countdown : 0;
   return {
-    phase: screen === TITLE_SCREEN ? 'title' : (screen === END_SCREEN ? 'game_over' : 'playing'),
+    phase: !booted ? 'loading' : screen === TITLE_SCREEN ? 'title' : (screen === END_SCREEN ? 'game_over' : 'playing'),
     survival_seconds: Math.max(0, elapsed),
     score: Number.isFinite(countdown) ? calculateScore() : 0,
     teapots_collected: teapotsCollected || 0,

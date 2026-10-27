@@ -69,7 +69,7 @@
     },
     {
       "path": "dist/game.js",
-      "sha256": "b136ca5bd563ad4069d665672f4d896416442b235736657e3762c373a7e9cf59",
+      "sha256": "8133e00353986637033632775eca0f3f74cf28a888d6c3502a19cd92fdc6ff09",
       "upstream_blob": null,
       "match": false,
       "upstream_path": null,
@@ -77,7 +77,7 @@
     },
     {
       "path": "dist/index.html",
-      "sha256": "75200ea89eee41aef02875b36a9d067984364ca5ed1ab8257bea5f94efa44098",
+      "sha256": "732c88493cca71fc6f6c5dd9d8855500e86d5096c62aa3773f5c1814d6d0f7a0",
       "upstream_blob": null,
       "match": false,
       "upstream_path": null,
@@ -198,7 +198,7 @@
     },
     {
       "path": "src/js/game.js",
-      "sha256": "c342230b48709d40a754c5dd11412e1b9371847aa90072aa6774cfa56f0f16ba",
+      "sha256": "2a633db91247b05ba290d620d20e0eed41623e80fac2ba8429961a38ee618499",
       "upstream_blob": "e6afb8c4094389464e5f24a467a511e747ee66c8",
       "match": false,
       "upstream_path": "src/js/game.js",

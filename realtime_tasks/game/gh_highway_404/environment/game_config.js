@@ -7,7 +7,17 @@ function highwaySnapshot(context) {
 window.OPEN_SOURCE_GAME_CONFIG = {
   title: "Highway 404", entry: "upstream/dist/index.html",
   repository: "https://github.com/herebefrogs/highway-404", commit: "9bbf0de17a49dc424f53b1f076573b6a789baa9d", license: "MIT",
-  start(context) { for (const delay of [400, 1000]) context.later(delay, () => { const s = highwaySnapshot(context); if (!s || s.phase === "title") context.press("Space", " ", 32, 80); }); },
+  // The game loads asynchronously (images, voices, music) and reports phase "loading" until its
+  // title screen exists; poll until then so Space starts the real level instead of a half-built one.
+  start(context) {
+    const tick = (left) => {
+      const s = highwaySnapshot(context);
+      if (s && s.phase === "playing") return;
+      if (s && s.phase === "title") context.press("Space", " ", 32, 80);
+      if (left > 0) context.later(250, () => tick(left - 1));
+    };
+    context.later(400, () => tick(60));
+  },
   ready(context) { const s = highwaySnapshot(context); return Boolean(s && s.phase === "playing"); },
   signal(context) { return highwaySnapshot(context); },
   state(context) {

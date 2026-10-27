@@ -4,7 +4,7 @@
 - Commit: `9bbf0de17a49dc424f53b1f076573b6a789baa9d`
 - License: MIT; preserved in `upstream/LICENSE`.
 - Build: `npm ci --ignore-scripts && npm run clean && npm run build:js && npm run build:html`; optional ZIP recompression is not part of the runtime.
-- Adaptation: fixed pre-load RNG seed and a read-only snapshot of native countdown, car, collectibles, and screen state. The benchmark objective combines one native teapot with 30 seconds of survival to require both collection and sustained navigation. Road schedule, speed, hazards, and collision behavior are unchanged.
+- Adaptation: fixed pre-load RNG seed and a read-only snapshot of native countdown, car, collectibles, and screen state. The benchmark objective combines one native teapot with 30 seconds of survival to require both collection and sustained navigation. Startup is hardened: input before the asynchronous load finishes no longer starts a level that the title-screen setup then erases (which left the road empty and the teapot missing), and a browser with no speech voices plays silently instead of hanging on the loading screen. Road schedule, speed, hazards, and collision behavior are unchanged.
 
 ## Source and asset audit
 
