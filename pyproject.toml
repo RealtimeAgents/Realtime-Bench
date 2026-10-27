@@ -35,7 +35,7 @@ include = ["realtime_framework*", "realtime_tasks*"]
 # A checkout whose framework sources or runtime dependencies differ reports "<version>+dev".
 [tool.rtbench.harness]
 version = "1.0"
-hash = "f582f3da4ca20803e75d9036b1bd7fe3b0b6766741ed9a148915f8acc796c7ca"
+hash = "64127ec9aa30de94227cfe1641538487008897fab2d7cecb9d389094ef746041"
 
 [tool.ruff]
 line-length = 100
