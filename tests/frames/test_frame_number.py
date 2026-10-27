@@ -110,3 +110,27 @@ def test_turn_based_screenshots_are_the_som_images(tmp_path):
             episode.finish()
     for image, proof in zip(_sent_images(stub), proofs, strict=True):
         assert hashlib.sha256(image).hexdigest() == proof["marked_image_sha256"]
+
+
+class _MarkedImages(som.ToolRuntime):
+    """The SoM runtime, keeping the marked screenshot of each frame it inspects."""
+
+    def __init__(self):
+        super().__init__()
+        self.marked: list[bytes] = []
+
+    def inspect(self, observation, **fields) -> dict:
+        execution = super().inspect(observation, **fields)
+        self.marked.append(execution["image_bytes"])
+        return execution
+
+
+def test_a_streaming_screenshot_is_its_som_image_with_its_frame_number_over_it(monkeypatch, clock):
+    agent = make_agent(monkeypatch, clock)
+    runtime = _MarkedImages()
+    agent.bind_tool_runtime(runtime)
+    agent.push(FrameSource(ReplayTask(), text_observation=False, fps=1.0).capture(0))
+    agent.close()
+    [marked] = runtime.marked
+    [frame] = [item.block for item in agent.driver.views[-1].items if item.block.kind == "frame"]
+    assert frame.image.data == render_frame_number(marked, 1)
