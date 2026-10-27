@@ -89,9 +89,11 @@ range such as `--port 18081-18089`.
 
 ## Usage and cost
 
-Only usage the provider reported counts, and a count it did not report stays unknown, never 0. No
-model has a rate card: a cost in USD is the one the provider reported (OpenRouter's), else
-unknown. A turn-based trial's `run_summary.json` keeps two totals:
+Only usage the provider reported counts, and a count it did not report stays unknown, never 0. A
+Decision that takes its only option without asking, as on a frame that offers only a wait, makes
+no call: its usage is a known 0, and it still counts as one response. No model has a rate card: a
+cost in USD is the one the provider reported (OpenRouter's), else unknown. A turn-based trial's
+`run_summary.json` keeps two totals:
 
 - `token_usage`, `token_accounting` and `cost_usd` (`cost_accounting`) count the responses the
   episode settled: each call whose result came back before it was given up on, and each call
