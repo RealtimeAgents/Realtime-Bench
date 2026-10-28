@@ -633,7 +633,9 @@ def test_abort_mid_stream_is_no_failure_and_its_response_stays_the_attempts(
     generation once the runtime has read output. The abort's interrupt closes the stream
     (providers/litellm.py interrupt): the attempt received output, yet it is recorded as
     cancelled, not as provider_stream_interrupted, which a stream cut off by the provider is
-    (test_openrouter.py). The response is recorded as the interrupt closed it, cut short, in the
+    (test_openrouter.py), and its inspection ends superseded_by_timeout as a given-up
+    decision's does (harness.py DefaultHarness._drop), not action_round_error. The response is
+    recorded as the interrupt closed it, cut short, in the
     attempt's scope rather than the abort's (providers/capture.py _RecordingStream)."""
     (reply,) = replies([STEP])
     read = threading.Event()
@@ -660,6 +662,7 @@ def test_abort_mid_stream_is_no_failure_and_its_response_stays_the_attempts(
             episode.finish()
     assert len(stub.requests) == 1 and stub.unscripted == 0
     assert _attempts(tmp_path) == [(1, "cancelled", None)]
+    assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
     (sent,) = _trace(tmp_path, "ModelRequestSent")
     (received,) = _trace(tmp_path, "ModelResponseReceived")
     assert received["request_seq"] == sent["capture_seq"]
