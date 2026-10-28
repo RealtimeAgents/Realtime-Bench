@@ -15,6 +15,7 @@ from pathlib import Path as Path
 from realtime_framework.clock import episode_clocks
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
 from realtime_framework.entity.config import EnvironmentBudgetConfig
@@ -557,6 +558,23 @@ class GuestEnvironment:
                 "ctrl/meta+scroll is disabled: it zooms the browser instead of scrolling the page"
             )
 
+    def _reject_outside_screenshot(self, action):
+        """Refuse a point outside the screenshot the model was sent, which the conversion to
+        desktop pixels would clamp onto the screen's edge (FrameGeometry.image_to_screen_point)."""
+        if action.coordinate_space != "model_image_px":
+            return
+        width, height = FrameGeometry.from_dict(action.coordinate_transform).image_size
+        params = action.parameters or {}
+        for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
+            x, y = params.get(x_key), params.get(y_key)
+            if not (isinstance(x, (int, float)) and isinstance(y, (int, float))):
+                continue
+            if not (0 <= x < width and 0 <= y < height):
+                raise ActionRejected(
+                    f"{action.action_type.value} point ({x}, {y}) lands outside the screenshot, "
+                    f"which is {width}x{height} pixels"
+                )
+
     def _reject_outside_page(self, action):
         """Refuse pointer input outside the page viewport (browser toolbar, tabs, desktop)."""
         rect = getattr(self.scene_capture, "page_rect", None)
@@ -582,6 +600,7 @@ class GuestEnvironment:
             self._reject_browser_shortcut(action)
         elif action.action_type.value in POINTER_ACTIONS:
             self._reject_zoom_scroll(action)
+            self._reject_outside_screenshot(action)
             self._reject_outside_page(action)
 
     def _ensure_page_focus(self):
