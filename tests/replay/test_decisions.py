@@ -364,8 +364,9 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     """Decision 19: decision 1's first question picks compose_text, and its first text-edit
     question gets HTTP 400 (fatal, not retried). The failed step's usage is that of the question
     it answered, its cost included, marked incomplete, as the failed question's is not known; the
-    episode's token totals and cost take it as known but not complete. A failed step is not
-    accepted, so neither the agent's usage nor the provider-usage audit counts it a second time."""
+    episode's token totals and cost take it as known but not complete. Accepting the failed step
+    writes no history and adds nothing to the agent's usage; its provider-usage row has the usage
+    its token record counts, as the kernel accepted it, not stale."""
     key, upstream = APIS["openai_decisions"]
     with DecisionsStub(upstream=upstream) as stub:
         config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
@@ -409,7 +410,12 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     assert [(a["outcome"], a["usage"]) for a in generations][-1] == ("failed", answered)
     assert failed["token_usage"] == accepted["token_usage"]
     rows = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
-    assert [(row["tick"], row["stale"]) for row in map(json.loads, rows)] == [(0, False)]
+    rows = [json.loads(line) for line in rows]
+    assert [(row["tick"], row["status"], row["stale"], row["usage"]) for row in rows] == [
+        (0, "reported", False, accepted["result"]["usage"]),
+        (1, "reported", False, answered),
+    ]
+    assert rows[1]["generation_id"] == generations[-1]["scope"]["generation_id"]
     # Settled as the runner settles each result (evaluation/episode_records.py account_tokens).
     accounting = TokenAccounting([episode_records.account_tokens(result, None)])
     record = result["token_accounting"]
