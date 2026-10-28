@@ -280,6 +280,7 @@ class TokenAccounting:
         }
         self.reported_cost_usd = Decimal(0)
         self.reported_cost_coverage = 0
+        self.partial_cost = 0  # the responses whose partial usage's cost the sum holds
         self.cost_detail_sums: dict[str, Decimal] = {}
         self.cost_detail_coverage = Counter()
         # The responses counted above whose decision goes unreported, and their clock counts.
@@ -303,8 +304,8 @@ class TokenAccounting:
 
     def _add(self, record):
         self.responses += 1
-        # A partial usage adds to the known totals and leaves the provider's totals incomplete;
-        # the counts the harness makes itself are whole.
+        # A partial usage adds to the known totals and leaves the provider's totals and cost
+        # incomplete; the counts the harness makes itself are whole.
         partial = record.get("provider_usage_status") == "partial"
         for key in COUNTS:
             value = _number(record, key)
@@ -332,7 +333,10 @@ class TokenAccounting:
             reported_cost = None
         if reported_cost is not None and reported_cost.is_finite() and reported_cost >= 0:
             self.reported_cost_usd += reported_cost
-            self.reported_cost_coverage += 1
+            if partial:
+                self.partial_cost += 1
+            else:
+                self.reported_cost_coverage += 1
         for key, value in (record.get("provider_cost_details") or {}).items():
             try:
                 amount = Decimal(str(value))
@@ -414,7 +418,9 @@ class TokenAccounting:
             "provider_reported_cost": {
                 "currency": "USD",
                 "known_total_usd": (
-                    str(self.reported_cost_usd) if self.reported_cost_coverage else None
+                    str(self.reported_cost_usd)
+                    if self.reported_cost_coverage or self.partial_cost
+                    else None
                 ),
                 "responses_with_cost": self.reported_cost_coverage,
                 "complete": bool(self.responses and self.reported_cost_coverage == self.responses),

@@ -261,7 +261,7 @@ def summarize_cost(token_accounting: dict | None, *, unaccounted: str | None = N
         )
     reason = (
         "provider_reported_cost_incomplete"
-        if reported.get("responses_with_cost")
+        if reported_total is not None
         else "no_provider_cost_or_rate_card"
     )
     return _unavailable(token_accounting, reason)

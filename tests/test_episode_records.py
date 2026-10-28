@@ -19,7 +19,7 @@ from realtime_framework.evaluation.clock import (
     token_record,
 )
 from realtime_framework.evaluation.kernel.events import Invalidated
-from realtime_framework.evaluation.reporting import trajectory_usage
+from realtime_framework.evaluation.reporting import summarize_cost, trajectory_usage
 
 OBSERVATION = Observation(b"png", 1_000.5, 3.0, {"observation_id": "o3"})
 BATCH = [{"observation_id": "o3", "tick": 3.0, "timestamp": 1_000.5}]
@@ -316,6 +316,31 @@ def test_a_partial_usage_is_known_but_leaves_the_totals_incomplete():
     assert usage["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
     usage = trajectory_usage({"usage": USAGE, "_token_accounting": accepted["token_accounting"]})
     assert usage["provider_usage_missing_reason"] is None
+
+
+def test_the_cost_of_a_partial_usage_is_known_but_leaves_the_cost_incomplete():
+    """A failed Decision step's partial usage carries the cost of the questions it answered, not
+    the failed question's (decision 19). Like its counts, the episode's known cost takes it and
+    the cost is no longer complete, also when it is the only cost the provider reported."""
+    accepted = {"usage": {"input_tokens": 2809, "output_tokens": 0, "cost": 0.0002809}}
+    failed = {
+        "usage": {"input_tokens": 3810, "output_tokens": 0, "cost": 0.000381},
+        "provider_usage_missing_reason": "failed_request_usage_not_reported",
+    }
+    settlements = [episode_records.account_tokens(r, None) for r in (accepted, failed)]
+    assert failed["token_accounting"]["provider_reported_cost_usd"] == "0.000381"
+    summary = TokenAccounting(settlements).summary()
+    reported = summary["provider_reported_cost"]
+    assert (reported["known_total_usd"], reported["responses_with_cost"]) == ("0.0006619", 1)
+    assert reported["complete"] is False
+    cost = summarize_cost(summary)
+    assert (cost["status"], cost["total_usd"], cost["known_cost_usd"], cost["reason"]) == (
+        "partial", None, 0.0006619, "provider_reported_cost_incomplete",
+    )  # fmt: skip
+    cost = summarize_cost(TokenAccounting(settlements[1:]).summary())
+    assert (cost["status"], cost["known_cost_usd"], cost["reason"]) == (
+        "partial", 0.000381, "provider_reported_cost_incomplete",
+    )  # fmt: skip
 
 
 def test_a_call_whose_decision_goes_unreported_stays_out_of_the_reported_subtotal():
