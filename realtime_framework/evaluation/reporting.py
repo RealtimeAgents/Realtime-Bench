@@ -1582,13 +1582,9 @@ def report(root):
                             raise ValueError("Streaming section does not match the episode trace")
                         records = []
                     else:
-                        records = [
-                            json.loads(line)
-                            for line in (path.parent / "action_lifecycle.jsonl")
-                            .read_text()
-                            .splitlines()
-                            if line
-                        ]
+                        # A run that made no decision wrote no lifecycle; read it as the run's
+                        # own metrics did (summarize_run_metrics).
+                        records = _load_lifecycle(path.parent / "action_lifecycle.jsonl")
                     if len(records) != summary["decisions"] or len(
                         {r["decision"] for r in records}
                     ) != len(records):

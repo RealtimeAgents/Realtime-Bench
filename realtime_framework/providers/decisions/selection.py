@@ -67,8 +67,9 @@ class ChoiceDecision:
         if not candidates:
             raise ValueError("JEV requires at least one candidate action")
         choice = await self._choose(candidates, self.choice.instructions, phase="gui_action")
-        # The deciding action-choice call; composition calls that follow stay in jev_calls.
-        decisive = self.calls[-1]
+        # The deciding action-choice call, none for a lone candidate; composition calls that
+        # follow stay in jev_calls.
+        decisive = self.calls[-1] if self.calls else None
         action = candidates[choice]["action"]
         composition = None
         pointer_composition = None
@@ -82,8 +83,8 @@ class ChoiceDecision:
         return {
             "action": action,
             "usage": self.usage,
-            "jev_response": decisive["response"],
-            "jev_question": decisive["question"],
+            "jev_response": decisive["response"] if decisive else None,
+            "jev_question": decisive["question"] if decisive else None,
             "jev_calls": self.calls,
             "candidate_count": len(candidates),
             "candidate_criteria_bytes": sum(
@@ -159,7 +160,9 @@ class ChoiceDecision:
         """Compare every remaining candidate; winners of separate groups meet in a new Choice.
 
         Groups use the client's option boundary. A context rejection bisects that group
-        losslessly. Probabilities are never compared across different questions.
+        losslessly. A group of one wins without a question: there is nothing to choose, and
+        OpenAI's upstream refuses a question with fewer than two options. Probabilities are never
+        compared across different questions.
         """
         remaining = list(candidates)
         round_index = 0
@@ -170,6 +173,10 @@ class ChoiceDecision:
             group_index = 0
             while groups:
                 group = groups.pop(0)
+                if len(group) == 1:
+                    winners.extend(group)
+                    group_index += 1
+                    continue
                 question = {
                     "type": "choice",
                     "instructions": instructions + (GROUP_NOTE if len(group) < len(remaining) else ""),
@@ -186,8 +193,6 @@ class ChoiceDecision:
                     with trace_scope(choice=question_scope):
                         reply = await self._ask(question, phase=phase, text_state=text_state)
                 except ChoiceContextLimitError:
-                    if len(group) == 1:
-                        raise
                     middle = len(group) // 2
                     self.context_splits.append(
                         {
