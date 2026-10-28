@@ -43,9 +43,9 @@ ENDPOINT = DEFAULT_MOONSHOT_BASE_URL + "/chat/completions"
 MAX_TICKS = 60
 # Decision k observes tick k (steps.py). On the finite clock its cap is
 # min(native, floor((MAX_TICKS - k) * B)) (kernel/turns.py _captured, episode_records.py
-# decision_budget). kimi-k3's native limit is 1048576 (configs/models/kimi-k3.yaml), so with this
+# decision_budget). kimi-k3's native limit is 131072 (configs/models/kimi-k3.yaml), so with this
 # B the native limit applies through
-# decision 28 and the remaining clock from decision 29 (1015808) down to decision 59 (32768).
+# decision 56 and the remaining clock from decision 57 (98304) down to decision 59 (32768).
 TOKENS_PER_FRAME = 32768
 # As for chat_completions: the default policies (entity/config.py effective_visual_fold_policy,
 # effective_detailed_history_policy) fold the oldest 10 screenshots of a request holding 21

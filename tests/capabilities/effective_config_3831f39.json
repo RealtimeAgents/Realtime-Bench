@@ -5418,7 +5418,7 @@
    "key": "kimi-k3",
    "key_env": "MOONSHOT_API_KEY",
    "model_name": "kimi-k3",
-   "native_output_limit": 1048576,
+   "native_output_limit": 131072,
    "native_output_limit_source": "endpoint",
    "pricing": null,
    "provider": "moonshot",
@@ -5450,7 +5450,7 @@
    "fps": 1.0,
    "model_name": "kimi-k3",
    "model_revision": null,
-   "native_output_limit": 1048576,
+   "native_output_limit": 131072,
    "native_output_limit_source": "endpoint",
    "provider_options": {},
    "reasoning_effort": "low",
@@ -5546,7 +5546,7 @@
       "fps": 1.0,
       "model_name": "kimi-k3",
       "model_revision": null,
-      "native_output_limit": 1048576,
+      "native_output_limit": 131072,
       "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
@@ -5554,7 +5554,7 @@
       "temperature_policy": "provider_default",
       "upstream_provider": null
      },
-     "native_output_limit": 1048576,
+     "native_output_limit": 131072,
      "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
@@ -5562,7 +5562,7 @@
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
       "parameter": "max_tokens",
-      "uncapped_value": 1048576
+      "uncapped_value": 131072
      },
      "provider_sdk_versions": {
       "litellm": "1.106.1",
@@ -5583,7 +5583,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7b2aec54cf4d8654760a159bd72aa19ab10a9cd0595ad09f8889af7c0c44a39d"
+    "hash": "9a4ddf4d2ad44fafc638050f260768eecbfef030e4cd73c8593227fb66724fd0"
    },
    "token/None": {
     "config": {
@@ -5672,7 +5672,7 @@
       "fps": 1.0,
       "model_name": "kimi-k3",
       "model_revision": null,
-      "native_output_limit": 1048576,
+      "native_output_limit": 131072,
       "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
@@ -5680,7 +5680,7 @@
       "temperature_policy": "provider_default",
       "upstream_provider": null
      },
-     "native_output_limit": 1048576,
+     "native_output_limit": 131072,
      "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
@@ -5688,7 +5688,7 @@
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
       "parameter": "max_tokens",
-      "uncapped_value": 1048576
+      "uncapped_value": 131072
      },
      "provider_sdk_versions": {
       "litellm": "1.106.1",
@@ -5709,7 +5709,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e1ca1cb75177ab8ddc32cacac55e403b1b7cfda7362a835636c972ec26fd0b09"
+    "hash": "ac094efb40fe91393120dfd1346cde299a1be76f5a9908dce95860eb475add06"
    },
    "wall/None": {
     "config": {
@@ -5798,7 +5798,7 @@
       "fps": 1.0,
       "model_name": "kimi-k3",
       "model_revision": null,
-      "native_output_limit": 1048576,
+      "native_output_limit": 131072,
       "native_output_limit_source": "endpoint",
       "provider_options": {},
       "reasoning_effort": "low",
@@ -5806,7 +5806,7 @@
       "temperature_policy": "provider_default",
       "upstream_provider": null
      },
-     "native_output_limit": 1048576,
+     "native_output_limit": 131072,
      "native_output_limit_source": "endpoint",
      "output_clock_policy": "finite_provider_native_usage_horizon_capped_or_unlimited_act_then_frame_v16",
      "per_move_cap_s": null,
@@ -5814,7 +5814,7 @@
      "provider_output_cap_policy": "no_benchmark_derived_provider_cap",
      "provider_output_limit": {
       "parameter": "max_tokens",
-      "uncapped_value": 1048576
+      "uncapped_value": 131072
      },
      "provider_sdk_versions": {
       "litellm": "1.106.1",
@@ -5835,7 +5835,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4d662540d9eb8af012a290e4f716bc2f966b99a9ca35de2ade270da914f53b36"
+    "hash": "58043195b61478fddfebf485b7bc2f4e3312dc9b3407a12b9862517a3c0b89b3"
    }
   },
   "vendor": "moonshot"
