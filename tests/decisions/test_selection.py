@@ -122,7 +122,7 @@ def test_a_round_without_progress_ends_the_decision(count, sizes):
     assert str(caught.value) == NO_PROGRESS
     assert client.sizes == sizes
     assert decision.calls == []
-    assert decision.usage == {"input_tokens": 0, "output_tokens": 0}
+    assert decision.usage == {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
     outcomes = [
         payload["outcome"]
         for event, payload in trace.events
@@ -151,7 +151,8 @@ class _AnsweringClient(_OneOptionClient):
 
 def test_a_lone_candidate_is_chosen_without_a_question():
     """A frame offering one candidate has nothing to choose from: it is the action, and the
-    decision asks no question and reports no call and no usage (ChoiceDecision.run)."""
+    decision asks no question and reports no call, and no usage and no cost: a known 0
+    (ChoiceDecision.run)."""
     client = _AnsweringClient()
     result = asyncio.run(ChoiceDecision(client, _request(1), trace=_Trace()).run())
     assert client.sizes == []
@@ -159,7 +160,39 @@ def test_a_lone_candidate_is_chosen_without_a_question():
     assert (result["selected_candidate"], result["candidate_count"]) == ("c0", 1)
     assert result["jev_calls"] == [] and result["retries"] == []
     assert result["jev_response"] is None and result["jev_question"] is None
-    assert result["usage"] == {"input_tokens": 0, "output_tokens": 0}
+    assert result["usage"] == {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
+
+
+class _CostingClient(_AnsweringClient):
+    """An _AnsweringClient whose replies report the next of ``costs``, in USD, with their usage,
+    as OpenRouter's do, and no cost once they run out."""
+
+    def __init__(self, costs):
+        super().__init__()
+        self.costs = list(costs)
+
+    async def decide(self, state, question):
+        reply = await super().decide(state, question)
+        if self.costs:
+            reply.usage["cost"] = self.costs.pop(0)
+        return reply
+
+
+# Three replies' costs in a 10-27 JEV run; summed as floats they make 0.0006368039999999999.
+COSTS = (0.000182868, 0.000229824, 0.000224112)
+
+
+def test_a_decision_costs_what_its_questions_cost():
+    """A decision over 510 candidates asks three questions, one per group of 255 and one between
+    the two winners, and costs what the three replies report. One whose last reply reports no
+    cost has an unknown cost, not that of the others."""
+    client = _CostingClient(COSTS)
+    result = asyncio.run(ChoiceDecision(client, _request(510), trace=_Trace()).run())
+    assert client.sizes == [255, 255, 2]
+    assert result["usage"] == {"input_tokens": 3000, "output_tokens": 3, "cost": 0.000636804}
+    client = _CostingClient(COSTS[:2])
+    result = asyncio.run(ChoiceDecision(client, _request(510), trace=_Trace()).run())
+    assert result["usage"] == {"input_tokens": 3000, "output_tokens": 3}
 
 
 def test_a_lone_group_wins_without_a_question():

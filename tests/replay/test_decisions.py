@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import FIXED_TEXTS, LEDGER_OMISSION
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.reporting import summarize_cost
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.harnesses.default.prompts import FRAME_PROMPT
@@ -42,7 +44,7 @@ from .build import build_episode
 from .frames import ReplayTask
 from .scenario import OUTSIDE_PAGE, TASK_INSTRUCTION
 from .steps_decisions import run_decisions
-from .stub_decisions import DecisionsStub, Failure
+from .stub_decisions import Answer, DecisionsStub, Failure
 
 BASELINES = Path(__file__).parent / "baselines"
 DUMMY_KEY = "replay-dummy-key"
@@ -124,6 +126,20 @@ def _criteria_sizes(record: dict) -> list[int]:
 
 def _runtime(record: dict) -> dict:
     return record["result"]["realtime_runtime"]
+
+
+def _costed(decision, costs):
+    """``decision`` with each answer's usage also reporting the next of ``costs`` in USD, as every
+    reply of the 10-27 and 10-28 Luna and JEV runs did: ``{input_tokens, output_tokens, cost}``."""
+    costs = iter(costs)
+    entries = tuple(
+        entry
+        if isinstance(entry, Failure)
+        else Answer(entry.choice, {**entry.usage, "cost": next(costs)})
+        for entry in decision.script
+    )
+    assert next(costs, None) is None, "more costs than answers"
+    return replace(decision, script=entries)
 
 
 def _check_requests(api: str, records: list[dict]) -> None:
@@ -347,9 +363,9 @@ def test_luna_question_retries_spent(tmp_path, monkeypatch):
 def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     """Decision 19: decision 1's first question picks compose_text, and its first text-edit
     question gets HTTP 400 (fatal, not retried). The failed step's usage is that of the question
-    it answered, marked incomplete, as the failed question's is not known; the episode's token
-    totals take it as known but not complete. A failed step is not accepted, so neither the
-    agent's usage nor the provider-usage audit counts it a second time."""
+    it answered, its cost included, marked incomplete, as the failed question's is not known; the
+    episode's token totals and cost take it as known but not complete. A failed step is not
+    accepted, so neither the agent's usage nor the provider-usage audit counts it a second time."""
     key, upstream = APIS["openai_decisions"]
     with DecisionsStub(upstream=upstream) as stub:
         config = catalog.to_model_config(key, fps=1.0, reasoning_effort="fixed").model_copy(
@@ -362,8 +378,10 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
             (accepted, failed), _ = run_decisions(
                 episode,
                 [
-                    script.decision("click_P1"),
-                    script.decision("compose_text", Failure(400, "bad request")),
+                    _costed(script.decision("click_P1"), [0.0002809]),
+                    _costed(
+                        script.decision("compose_text", Failure(400, "bad request")), [0.000381]
+                    ),
                 ],
                 stub,
             )
@@ -382,6 +400,7 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
         (1, "failed"),
     ]
     answered = questions[1]["usage"]
+    assert answered == {"input_tokens": 1000, "output_tokens": 1, "cost": 0.000381}
     assert result["usage"] == answered
     assert result["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
     rows = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
@@ -396,12 +415,17 @@ def test_luna_decision_that_fails_after_a_question_keeps_its_usage(tmp_path):
     record = result["token_accounting"]
     assert record["provider_usage_status"] == "partial"
     assert record["provider_usage_missing_reason"] == "failed_request_usage_not_reported"
-    inputs = accounting.summary()["counts"]["provider_input_tokens"]
+    summary = accounting.summary()
+    inputs = summary["counts"]["provider_input_tokens"]
     assert (inputs["total"], inputs["known_total"], inputs["complete"]) == (
         None,
         answered["input_tokens"],
         False,
     )
+    cost = summarize_cost(summary)
+    assert (cost["status"], cost["total_usd"], cost["known_cost_usd"]) == (
+        "partial", None, 0.000381,
+    )  # fmt: skip
 
 
 def test_luna_screen_pointer_at_1000_is_the_last_column(tmp_path):
@@ -425,8 +449,8 @@ def test_luna_screen_pointer_at_1000_is_the_last_column(tmp_path):
 def test_a_frame_with_one_candidate_asks_no_question(api, tmp_path):
     """A frame with nothing to act on offers wait alone, and OpenAI's upstream refuses a question
     with one option. The decision is wait without a question (selection.py ChoiceDecision._choose):
-    no request and no usage, which its step, trajectory row, provider-usage row, generation record
-    and settlement report as complete, and the episode goes on."""
+    no request, and no usage and no cost, which its step, trajectory row, provider-usage row,
+    generation record and settlement report as complete, and the episode goes on."""
     _, records = _play(
         api,
         script.ONE_CANDIDATE,
@@ -436,7 +460,7 @@ def test_a_frame_with_one_candidate_asks_no_question(api, tmp_path):
         scene=script.loading_scene(script.ONE_CANDIDATE_FRAMES),
     )
     alone, after = records
-    zero = {"input_tokens": 0, "output_tokens": 0}
+    zero = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
     assert alone["requests"] == []
     assert alone["result"]["raw"] == '{"action": "wait"}'
     assert alone["commit"] == {"status": "wait", "detail": ""}
@@ -467,8 +491,45 @@ def test_a_frame_with_one_candidate_asks_no_question(api, tmp_path):
     assert [(a["kind"], a["outcome"], a["usage"]) for a in attempts] == [("generation", "ok", zero)]
     settlement = episode_records.account_tokens(alone["result"], None)
     assert alone["result"]["token_accounting"]["provider_usage_status"] == "reported"
-    inputs = TokenAccounting([settlement]).summary()["counts"]["provider_input_tokens"]
+    summary = TokenAccounting([settlement]).summary()
+    inputs = summary["counts"]["provider_input_tokens"]
     assert (inputs["total"], inputs["complete"]) == (0, True)
+    cost = summarize_cost(summary)
+    assert (cost["status"], cost["total_usd"]) == ("complete", 0.0)
+
+
+@pytest.mark.parametrize("api", list(APIS))
+def test_a_decision_costs_what_its_questions_cost(api, tmp_path):
+    """Decision 0 asks one question; decision 1 composes "Ada Lovelace" in five, whose costs
+    summed as floats make 0.0014970040000000001. Each decision costs the sum of its replies'
+    costs, which its result, trajectory row and provider-usage row carry, and the episode's cost
+    is the provider's and complete."""
+    decisions = [
+        _costed(script.WEB_LONG[0], [0.0002809]),
+        _costed(script.WEB_LONG[1], [0.000381, 0.0004792, 0.000182868, 0.000229824, 0.000224112]),
+    ]
+    _, records = _play(api, decisions, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION)
+    usages = [
+        {"input_tokens": 1000, "output_tokens": 1, "cost": 0.0002809},
+        {"input_tokens": 5100, "output_tokens": 5, "cost": 0.001497004},
+    ]
+    assert [r["result"]["usage"] for r in records] == usages
+    rows = [json.loads(line) for line in (tmp_path / "trajectory.jsonl").read_text().splitlines()]
+    assert [row["usage"]["provider_usage"] for row in rows if row["type"] == "decision"] == usages
+    audits = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
+    assert [(a["tick"], a["usage"]) for a in map(json.loads, audits)] == list(enumerate(usages))
+    summary = TokenAccounting(
+        [episode_records.account_tokens(r["result"], None) for r in records]
+    ).summary()
+    assert [r["result"]["token_accounting"]["provider_reported_cost_usd"] for r in records] == [
+        "0.0002809",
+        "0.001497004",
+    ]
+    assert summary["provider_reported_cost"]["known_total_usd"] == "0.001777904"
+    cost = summarize_cost(summary)
+    assert (cost["status"], cost["source"], cost["total_usd"]) == (
+        "complete", "provider_reported_usage_cost", 0.001777904,
+    )  # fmt: skip
 
 
 def test_luna_hold_pair_second_of_two_keys_asks_no_question(tmp_path):
