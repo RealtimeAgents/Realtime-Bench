@@ -495,6 +495,22 @@ def test_audio_without_an_audio_token_breakdown_fails_the_reply():
     assert asyncio.run(run()) == "Gemini returned audio without an AUDIO response token breakdown"
 
 
+def test_a_total_equal_to_the_prompt_is_a_zero_response_whatever_the_thoughts():
+    """The usage of a turn that thought and then spoke its action instead of calling a function
+    (Gemini 3.1 Flash Live, rt_room_move_maintenance decision 20, 10-28): the server's total leaves
+    the thoughts out and protobuf omits the zero response count. Subtracting the thoughts from the
+    zero residual made the response negative and voided the episode."""
+    usage = live.GeminiLiveDriver._usage_dict(
+        {"promptTokenCount": 29733, "totalTokenCount": 29733, "thoughtsTokenCount": 1101}
+    )
+    assert (
+        usage["input_tokens"],
+        usage["output_tokens"],
+        usage["visible_output_tokens"],
+        usage["native_response_tokens_source"],
+    ) == (29733, 1101, 0, "total_minus_prompt")
+
+
 def realtime_input_with(key: str):
     return lambda message: key in message.get("realtime_input", {})
 
