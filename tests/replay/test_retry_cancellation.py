@@ -766,6 +766,64 @@ def test_session_abort_during_backoff_does_not_reconnect(tmp_path, monkeypatch):
     assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
 
 
+class _StallingStub(RealtimeStub):
+    """Streams response ``stalled`` up to its first text delta and sends nothing more, and
+    answers no response.cancel, as the server answered most of the responses an episode's end
+    gave up on."""
+
+    def __init__(self, *args, stalled: int, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._stalled = stalled
+
+    def _answer(self, connection, frame):
+        if frame.get("type") == "response.cancel":
+            return [], None
+        return super()._answer(connection, frame)
+
+    def _respond(self, connection):
+        answers, close = super()._respond(connection)
+        if len(self.responses) != self._stalled:
+            return answers, close
+        types = [answer["type"] for answer in answers]
+        return answers[: types.index("response.output_text.delta") + 1], close
+
+
+def test_session_abort_mid_response_is_no_failure(tmp_path):
+    """Session API (OpenAI Realtime). Response 1 stalls after its first text, and the kernel
+    aborts the generation once the runtime has read it. The server answers the abort's
+    response.cancel with nothing, so the abort closes the connection once its wait for the
+    response is over (providers/openai_realtime.py), and the reply ends with it, a fatal error
+    for the turn: the attempt is recorded once, as cancelled, not as failed."""
+    read = threading.Event()
+    with _StallingStub(realtime_replies([STEP]), stalled=1) as stub:
+        episode = _session_episode(stub, tmp_path)
+        agent = episode.agent
+        events = agent.driver.events
+
+        async def reading(generation):
+            async for event in events(generation):
+                yield event
+                if isinstance(event, TextDelta):
+                    read.set()
+
+        agent.driver.events = reading
+        try:
+            stub.wait_for_session_update()
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert read.wait(WAIT_S), "no output was read"
+            _abort_like_the_kernel(agent)
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+        connections = stub.finish()
+    assert stub.violations == [] and stub.unscripted == 0
+    (connection,) = stub.connections
+    assert [e["type"] for e in connection.events].count("response.cancel") == 1
+    assert len(connections) == 1
+    assert _attempts(tmp_path) == [(1, "cancelled", None)]
+
+
 def test_abort_while_readying_after_a_failure_sends_no_request(openrouter_env, tmp_path):  # noqa: F811
     """Stateless API. Attempt 1 gets HTTP 503, which leaves the runtime dirty
     (RealtimeRuntime.run_turn); a stateless driver has no session to recover, so attempt 2 only
