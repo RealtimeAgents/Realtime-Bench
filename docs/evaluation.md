@@ -101,7 +101,8 @@ incomplete. A turn-based trial's `run_summary.json` keeps two totals:
   episode settled: each call whose result came back before it was given up on, and each call
   given up on before that at the per-move cap, the deadline or the provider watchdog, without
   usage, which leaves them incomplete. A call given up on before its result came back because
-  the task ended or the run was invalidated does not count.
+  the task ended or the run was invalidated does not count. The provider may still bill such a
+  call, so the totals can be slightly low even when marked complete.
 - `spend_usd`, `spend_known_usd` and `spend_accounting` count what every model call spent, the
   calls given up on included: a call given up on before its result was settled counts the usage
   its result reported if it came back while the episode's abandoned calls were drained (a
