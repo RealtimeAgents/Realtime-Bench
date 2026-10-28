@@ -44,9 +44,10 @@ from .frames import CLOCK_ORIGIN, ReplayTask
 from .loop import commit_statuses, run_loop
 from .scenario import CLICK_NAME, TASK_INSTRUCTION, replies
 from .scenario_decisions import ADA, LOVELACE, SPACE, decision
-from .steps import Step
+from .steps import Step, run_steps
 from .steps_decisions import run_decisions
 from .stub import ChatCompletionsStub
+from .stub import Failure as ChatFailure
 from .stub_decisions import DecisionsStub
 from .stub_decisions import Failure as QuestionFailure
 from .stub_openrouter import Failure, OpenRouterStub
@@ -270,10 +271,64 @@ def test_no_attempt_once_cancelled():
     assert sent == [] and stopped == [1]
 
 
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["run", "run_async"])
+def test_an_attempt_that_fails_once_cancelled_is_cancelled(asynchronous):
+    """The abort sets the cancel event, then closes the connection under the attempt under way,
+    which fails with a retryable error: the attempt is neither recorded as a failure nor sent
+    again, and ``cancelled`` sees it, with that error as its RetryCancelled's cause."""
+    cancel = threading.Event()
+    failed, stopped = [], []
+    dropped = ConnectionError("dropped")
+
+    def send(attempt):
+        cancel.set()
+        raise dropped
+
+    async def send_async(attempt):
+        send(attempt)
+
+    retry = RequestRetry(
+        "unit",
+        lambda exc: TransportFailure(TRANSIENT),
+        lambda attempt, exc, failure, delay: failed.append(attempt),
+        cancelled=lambda attempt, exc: stopped.append((attempt, exc)),
+    )
+    with retry_cancellation(cancel), pytest.raises(RetryCancelled) as raised:
+        if asynchronous:
+            asyncio.run(retry.run_async(send_async))
+        else:
+            retry.run(send)
+    assert failed == [] and stopped == [(1, raised.value)]
+    assert str(raised.value) == "generation abandoned during attempt 1"
+    assert raised.value.__cause__ is dropped
+
+
+def test_an_error_no_transport_failure_propagates_once_cancelled_too():
+    """``classify`` returns None for it, as the selection flow does for a context limit, whose
+    question records it itself (providers/decisions/selection.py): it propagates unrecorded,
+    and is not taken for a cancellation either."""
+    cancel = threading.Event()
+    recorded = []
+
+    def send(attempt):
+        cancel.set()
+        raise ValueError("beyond the context")
+
+    retry = RequestRetry(
+        "unit",
+        lambda exc: None,
+        lambda *args: recorded.append(args),
+        cancelled=lambda *args: recorded.append(args),
+    )
+    with retry_cancellation(cancel), pytest.raises(ValueError):
+        retry.run(send)
+    assert recorded == []
+
+
 def test_a_nested_cancellation_stops_the_enclosing_attempt():
     """A unit sent inside another's attempt, as a session connect inside a turn: the abort comes
-    while the inner unit's attempt fails. The inner unit records its retry as cancelled, and the
-    outer one the attempt under way, which it neither records as failed nor retries."""
+    while the inner unit's attempt fails. The inner unit records that attempt as cancelled, and
+    the outer one the attempt under way; neither records a failure or retries."""
     cancel = threading.Event()
     stopped, failed = [], []
 
@@ -291,8 +346,8 @@ def test_a_nested_cancellation_stops_the_enclosing_attempt():
 
     with retry_cancellation(cancel), pytest.raises(RetryCancelled):
         unit("outer").run(lambda attempt: unit("inner").run(inner_send))
-    assert failed == [("inner", 1)]
-    assert stopped == [("inner", 2), ("outer", 1)]
+    assert failed == []
+    assert stopped == [("inner", 1), ("outer", 1)]
 
 
 def test_abort_during_backoff_sends_no_retry(openrouter_env, tmp_path):  # noqa: F811
@@ -462,8 +517,8 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     """Stateless API, abort while the request is in flight. The stub holds request 0 until the
     client closes it; the abort's driver.close() does (providers/litellm.py close). The
     failure arrives before any output and is classified TRANSIENT, but the generation is
-    cancelled: the backoff returns at once and nothing is sent again. The reply scripted for a
-    retry stays unused."""
+    cancelled by then: the attempt is recorded once, as cancelled, not as a retry; no backoff
+    starts and nothing is sent again. The reply scripted for a retry stays unused."""
     backoff = _GatedBackoff()
     backoff.release.set()
     monkeypatch.setattr(model_module, "_backoff", backoff)
@@ -503,9 +558,68 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     assert len(stub.requests) == 1
     ((failure, error),) = classified
     assert failure == TransportFailure(TRANSIENT), error
-    assert len(backoff.calls) == 1
+    assert backoff.calls == []
     _check_nothing_kept(agent, turns)
-    assert _attempts(tmp_path) == [(1, "retry", None), (2, "cancelled", None)]
+    assert _attempts(tmp_path) == [(1, "cancelled", None)]
+    assert _cancelled(tmp_path, "generation") == [
+        ("RetryCancelled('generation abandoned during attempt 1')", None)
+    ]
+
+
+def test_a_failure_while_the_episode_runs_is_retried_and_the_aborts_is_not(tmp_path, monkeypatch):
+    """Stateless API. Decision 0's first request gets HTTP 503 while the episode runs, as a
+    gateway's does: that attempt is recorded as a retry, with its failure kind and delay, and
+    the request is sent again. Decision 1's request is in flight when the kernel aborts its
+    generation, and the abort's close fails it: that attempt is recorded once, as cancelled,
+    with neither, and nothing is sent again."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    arrived = threading.Event()
+
+    def hold_decision_1(index):
+        if index == 2:
+            arrived.set()
+            return True
+        return False
+
+    unavailable = ChatFailure(503, {"error": {"message": "upstream down", "code": 503}})
+    with ChatCompletionsStub(
+        [unavailable, *replies([STEP, STEP])], on_request=hold_decision_1
+    ) as stub:
+        episode = build_episode(
+            chat_completions_config(stub.base_url, stream=True),
+            tmp_path,
+            task=ReplayTask(),
+            instruction=TASK_INSTRUCTION,
+            model_key=CHAT_MODEL_KEY,
+        )
+        agent = episode.agent
+        try:
+            run_steps(episode, [STEP], stub)
+            observation = episode.frames.capture(1)
+            box, done = _generate_in_worker(episode, observation, decision=1)
+            assert arrived.wait(WAIT_S)
+            _abort_like_the_kernel(agent)
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+    assert stub.held == [True] and len(stub.requests) == 3
+    assert stub.unscripted == 0 and stub.unused_replies == 1
+    attempts = [
+        (
+            a["scope"]["decision"],
+            a["scope"]["attempt"],
+            a["outcome"],
+            a.get("failure_kind"),
+            a.get("retry_delay_s") is not None,
+        )
+        for a in _trace(tmp_path, "ModelAttemptFinished")
+        if a["kind"] == "generation"
+    ]
+    assert attempts == [
+        (0, 1, "retry", TRANSIENT, True),
+        (0, 2, "ok", None, False),
+        (1, 1, "cancelled", None, False),
+    ]
 
 
 def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path):
@@ -933,11 +1047,11 @@ def test_decision_closed_between_questions(tmp_path, monkeypatch):
 
 def test_decision_aborted_during_its_last_question_attempt(tmp_path, monkeypatch):
     """Decision API. Decision 1's first question picks compose_text; its text-edit question gets
-    HTTP 503 three times, and the stub holds its fourth, last allowed attempt when the kernel
-    aborts the generation. The abort closes the client, which ends that attempt with an error
-    the question has no retry left for: the generation fails after the kernel gave it up,
-    rather than being cancelled. The question answered before is the usage of the generation
-    given up on all the same (decision 37): the failed result the shell gets back carries it,
+    HTTP 503 three times, each recorded as a retry, and the stub holds its fourth, last allowed
+    attempt when the kernel aborts the generation. The abort closes the client, which ends that
+    attempt with an error: though the question has no retry left, the attempt is cancelled, not
+    failed, and so is the generation. The question answered before is the usage of the
+    generation given up on (decision 37): the cancelled result the shell gets back carries it,
     and discarding that result records it in a stale provider-usage row."""
     monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     arrived, release = threading.Event(), threading.Event()
@@ -975,10 +1089,20 @@ def test_decision_aborted_during_its_last_question_attempt(tmp_path, monkeypatch
     accepted, answered = (
         a["usage"] for a in attempts if a["kind"] == "choice_question" and a["outcome"] == "ok"
     )
-    assert (result["invalid_reason"], result["usage"]) == ("provider_unavailable", answered)
+    assert _questions(tmp_path) == [
+        (0, 0, 1, "ok"),
+        (1, 0, 1, "ok"),
+        *[(1, 1, attempt, "retry") for attempt in (1, 2, 3)],
+        (1, 1, 4, "cancelled"),
+    ]
+    assert result["stale"] is True and "invalid_reason" not in result
+    assert (result["usage"], result["provider_usage_missing_reason"]) == (
+        answered,
+        "cancelled_request_usage_not_reported",
+    )
     assert [(a["outcome"], a["usage"]) for a in attempts if a["kind"] == "generation"] == [
         ("ok", accepted),
-        ("failed", answered),
+        ("cancelled", answered),
     ]
     lines = (tmp_path / "provider-usage.jsonl").read_text().splitlines()
     assert [(row["tick"], row["stale"], row["usage"]) for row in map(json.loads, lines)] == [

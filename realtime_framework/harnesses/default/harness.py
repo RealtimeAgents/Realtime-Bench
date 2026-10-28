@@ -2072,12 +2072,12 @@ class DefaultHarness(VisionAgentBase):
             )
 
     def _attempt_cancelled(self, generation, request, attempt, exc) -> None:
-        """Record the attempt the generation's cancellation stopped: one not yet sent, or one a
-        nested request unit's cancellation ended (a session connect, a Decision question). Its
-        error is the RetryCancelled that stopped it, which names the attempt of the unit that
-        raised it. Its usage is that of the questions a Decision answered before, which their own
-        records also hold (decision 37). An attempt whose reply had arrived is recorded by
-        _attempt_finished, with its usage."""
+        """Record the attempt the generation's cancellation stopped: one not yet sent, one a
+        nested request unit's cancellation ended (a session connect, a Decision question), or one
+        the abort's close failed under way. Its error is the RetryCancelled that stopped it, which
+        names the attempt of the unit that raised it. Its usage is that of the questions a
+        Decision answered before, which their own records also hold (decision 37). An attempt
+        whose reply had arrived is recorded by _attempt_finished, with its usage."""
         with self._attempt_scope(generation, request, attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,

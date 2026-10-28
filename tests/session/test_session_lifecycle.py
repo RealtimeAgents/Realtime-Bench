@@ -1217,8 +1217,9 @@ def test_openai_realtime_records_the_connect_backoff():
 
 
 def test_openai_realtime_records_no_connect_backoff_once_its_generation_is_abandoned():
-    """The generation is abandoned during the failed attempt: RequestRetry does not wait the
-    delay, so no wait is recorded, and no second attempt runs."""
+    """The generation is abandoned during the failed attempt: RequestRetry records it as
+    cancelled, not as a retry, waits no delay, so no wait is recorded, and runs no second
+    attempt."""
     driver, _ = _openai(refuse=1)
     trace = _Trace()
     driver.clock = _FrozenClock([])
@@ -1238,9 +1239,7 @@ def test_openai_realtime_records_no_connect_backoff_once_its_generation_is_aband
             await driver.connect(ConnectRequest(seed=SEED))
 
     asyncio.run(run())
-    # The attempt the cancellation stops is recorded as such, and no wait before it.
     assert [(event, payload.get("outcome")) for event, payload, _ in trace.events] == [
-        (TraceEvent.MODEL_ATTEMPT_FINISHED, "retry"),
         (TraceEvent.MODEL_ATTEMPT_FINISHED, "cancelled"),
     ]
 

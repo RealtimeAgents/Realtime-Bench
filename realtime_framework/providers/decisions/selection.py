@@ -288,7 +288,8 @@ class ChoiceDecision:
         delay=None,
     ):
         """One ModelAttemptFinished per question attempt of the per-question retry, and one
-        without a start for the attempt a cancellation stopped before it was sent."""
+        without a start for the attempt a cancellation stopped, before it was sent or under
+        way."""
         payload = {
             "kind": "choice_question",
             "outcome": outcome,
