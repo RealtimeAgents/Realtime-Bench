@@ -666,9 +666,10 @@ class RequestRetry:
     failure before any wait; delay is None when the request is not sent again, and the exception
     then propagates unless ``record`` raises its own. Once the context's retry_cancellation is
     set, the backoff ends and no attempt starts. ``cancelled(attempt, exc)`` then sees the attempt
-    the cancellation stopped: the next one, or the one under way when a nested unit raised
-    RetryCancelled. The RetryCancelled propagates, and enclosing units take it the same way, never
-    as a failure. The backoff waits on ``clock``.
+    the cancellation stopped: the next one, the one under way when a nested unit raised
+    RetryCancelled, or the one that failed once it was set, as the abort's close fails the
+    attempt under way, which ``record`` then never sees. The RetryCancelled propagates, and
+    enclosing units take it the same way, never as a failure. The backoff waits on ``clock``.
     """
 
     key: str  # the request unit's stable jitter key, led by the episode attempt (AgentTrace)
@@ -686,7 +687,7 @@ class RequestRetry:
                 try:
                     return send(attempt)
                 except Exception as exc:
-                    delay = self._failed(attempt, exc)
+                    delay = self._failed(attempt, exc, cancel)
                     if delay is None:
                         raise
                 _backoff(self.clock, cancel, delay)
@@ -704,7 +705,7 @@ class RequestRetry:
                 try:
                     return await send(attempt)
                 except Exception as exc:
-                    delay = self._failed(attempt, exc)
+                    delay = self._failed(attempt, exc, cancel)
                     if delay is None:
                         raise
                 await asyncio.to_thread(_backoff, self.clock, cancel, delay)
@@ -714,10 +715,12 @@ class RequestRetry:
             self.cancelled(attempt, exc)
             raise
 
-    def _failed(self, attempt: int, exc: Exception) -> float | None:
+    def _failed(self, attempt: int, exc: Exception, cancel: threading.Event) -> float | None:
         failure = self.classify(exc)
         if failure is None:
             return None
+        if cancel.is_set():
+            raise RetryCancelled(f"generation abandoned during attempt {attempt}") from exc
         replayable = self.replayable(exc)
         delay = TRANSPORT_RETRY.delay_s(attempt, self.key, failure) if replayable else None
         self.record(attempt, exc, failure, delay)

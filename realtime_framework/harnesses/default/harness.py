@@ -1137,8 +1137,8 @@ class _Staged:
 
     unattached: str  # the feedback no turn carries when it started
     inspections: list  # its observation's tool calls, still open
-    # None when it was cancelled or failed before any result: accepting a failed result writes
-    # nothing.
+    # None when it was cancelled or failed before any result: accepting a failed result writes no
+    # history, only the usage of the questions a Decision answered.
     result: RuntimeTurnResult | None = None
     observation: ProviderObservation | None = None  # the frame its action is based on
     record: dict | None = None  # its action record, numbered when written
@@ -1223,8 +1223,8 @@ class DefaultHarness(VisionAgentBase):
 
     def _record_provider_usage(self, staged: _Staged, tick, *, stale):
         """Audit harness-visible generations, including providers with inline usage; ``stale``
-        when the result was discarded. A Decision cancelled before its result has only the usage
-        of the questions it answered."""
+        when the result was discarded. A Decision cancelled or failed before its result has only
+        the usage of the questions it answered."""
         result = staged.result
         if result is None:
             generation_id, usage, missing_reason = staged.generation_id, staged.partial_usage, None
@@ -1450,9 +1450,15 @@ class DefaultHarness(VisionAgentBase):
         self._drop(state)
 
     def _write(self, generation: _Generation) -> None:
-        """An accepted result joins the history: its turn, its action record and its usage."""
+        """An accepted result joins the history: its turn, its action record and its usage. A
+        failed Decision's records only the usage of the questions it answered, which its token
+        record counts (decision 19)."""
         staged = generation.staged
-        if staged is None or staged.result is None:
+        if staged is None:
+            return
+        if staged.result is None:
+            if staged.partial_usage is not None:
+                self._record_provider_usage(staged, generation.decision, stale=False)
             return
         result = staged.result
         self._record_provider_usage(staged, generation.decision, stale=False)
@@ -1759,8 +1765,8 @@ class DefaultHarness(VisionAgentBase):
             if partial_usage is not None:
                 # Its token record is partial: the usage is known, not complete (decision 19).
                 result["provider_usage_missing_reason"] = "failed_request_usage_not_reported"
-                # Discarding the failed result records that usage as stale, as for a cancelled
-                # one (decision 37); its tool calls are ended above.
+                # Accepting the failed result records that usage, and discarding it records it as
+                # stale, as for a cancelled one (decision 37); its tool calls are ended above.
                 generation.staged = _Staged(
                     unattached,
                     [],
@@ -2066,12 +2072,12 @@ class DefaultHarness(VisionAgentBase):
             )
 
     def _attempt_cancelled(self, generation, request, attempt, exc) -> None:
-        """Record the attempt the generation's cancellation stopped: one not yet sent, or one a
-        nested request unit's cancellation ended (a session connect, a Decision question). Its
-        error is the RetryCancelled that stopped it, which names the attempt of the unit that
-        raised it. Its usage is that of the questions a Decision answered before, which their own
-        records also hold (decision 37). An attempt whose reply had arrived is recorded by
-        _attempt_finished, with its usage."""
+        """Record the attempt the generation's cancellation stopped: one not yet sent, one a
+        nested request unit's cancellation ended (a session connect, a Decision question), or one
+        the abort's close failed under way. Its error is the RetryCancelled that stopped it, which
+        names the attempt of the unit that raised it. Its usage is that of the questions a
+        Decision answered before, which their own records also hold (decision 37). An attempt
+        whose reply had arrived is recorded by _attempt_finished, with its usage."""
         with self._attempt_scope(generation, request, attempt):
             self._trace.capture(
                 TraceEvent.MODEL_ATTEMPT_FINISHED,

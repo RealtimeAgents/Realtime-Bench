@@ -72,11 +72,15 @@ def import_litellm():
     (litellm/litellm_core_utils/get_model_cost_map.py:646, skipped when
     LITELLM_LOCAL_MODEL_COST_MAP is true). LiteLLM reads both settings at its first import and
     checks requests against the map (whether a Moonshot model takes reasoning_effort, for one), so
-    a run then depends only on its own environment and the locked version."""
+    a run then depends only on its own environment and the locked version. Nor does it print its
+    help banner as it maps an error (litellm_core_utils/exception_mapping_utils.py
+    exception_type), the abort's close of a request included: the trace records each failed
+    attempt with its error."""
     os.environ["LITELLM_MODE"] = "PRODUCTION"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
     import litellm as litellm
 
+    litellm.suppress_debug_info = True
     return litellm
 
 

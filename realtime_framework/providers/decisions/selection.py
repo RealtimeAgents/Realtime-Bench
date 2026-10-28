@@ -8,6 +8,7 @@ their winners compared in a further Choice. All calls belong to the same wall-cl
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import (
@@ -57,7 +58,8 @@ class ChoiceDecision:
         self.calls = []
         self.retries = []
         self.context_splits = []
-        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        # The cost is the provider's, in USD; a decision that asks nothing costs a known 0.
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
 
     async def run(self) -> dict:
         candidates = {
@@ -208,8 +210,9 @@ class ChoiceDecision:
                 choice = reply.answer.get("choice")
                 if reply.answer.get("type") != "choice" or choice not in group:
                     raise ValueError("JEV returned an action outside the current candidate group")
-                for key in self.usage:
+                for key in ("input_tokens", "output_tokens"):
                     self.usage[key] += reply.usage[key]
+                self._add_cost(reply.usage.get("cost"))
                 self.calls.append(
                     {
                         "phase": phase,
@@ -231,6 +234,16 @@ class ChoiceDecision:
                 )
             remaining = winners
             round_index += 1
+
+    def _add_cost(self, cost) -> None:
+        """Add an answered question's cost to the decision's, summed as decimals so that it
+        carries no float error. A question that reports none leaves it unknown."""
+        if "cost" not in self.usage:
+            return
+        if type(cost) not in (int, float):
+            del self.usage["cost"]
+            return
+        self.usage["cost"] = float(Decimal(str(self.usage["cost"])) + Decimal(str(cost)))
 
     async def _ask(self, question, *, phase, text_state=None):
         """Ask one question over the decision's history, plus this question's own state."""
@@ -275,7 +288,8 @@ class ChoiceDecision:
         delay=None,
     ):
         """One ModelAttemptFinished per question attempt of the per-question retry, and one
-        without a start for the attempt a cancellation stopped before it was sent."""
+        without a start for the attempt a cancellation stopped, before it was sent or under
+        way."""
         payload = {
             "kind": "choice_question",
             "outcome": outcome,

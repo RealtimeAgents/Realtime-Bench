@@ -1014,13 +1014,16 @@ class GeminiLiveDriver(SessionLifecycle):
             and prompt_value is not None
         ):
             residual = native_total - int(prompt_value)
-            # With non-negative usage components, a zero residual proves that response,
-            # tool-use prompt, and thought counts are all zero even when protobuf omits those
-            # optional zero-valued fields. For a positive residual, derive only when both other
-            # components were explicitly reported so the response count remains exact.
-            if residual == 0 or (
-                residual >= 0 and tool_prompt_value is not None and reasoning_value is not None
-            ):
+            # With non-negative usage components, a zero residual proves a zero response count,
+            # which protobuf omits, whether or not the total counts the thoughts: Gemini 3.1
+            # Flash Live's leaves them out, so a turn that thinks and then speaks instead of
+            # calling has a total equal to its prompt. For a positive residual, derive only when
+            # both other components were explicitly reported so the response count remains exact.
+            if residual == 0:
+                native_response = 0
+                native_response_exact = True
+                response_source = "total_minus_prompt"
+            elif residual > 0 and tool_prompt_value is not None and reasoning_value is not None:
                 native_response = residual - tool_prompt - reasoning
                 native_response_exact = native_response >= 0
                 if native_response_exact:

@@ -91,15 +91,18 @@ range such as `--port 18081-18089`.
 
 Only usage the provider reported counts, and a count it did not report stays unknown, never 0. A
 Decision that takes its only option without asking, as on a frame that offers only a wait, makes
-no call: its usage is a known 0, and it still counts as one response. No model has a rate card: a
-cost in USD is the one the provider reported (OpenRouter's), else unknown. A turn-based trial's
-`run_summary.json` keeps two totals:
+no call: its usage and cost are a known 0, and it still counts as one response. No model has a
+rate card: a cost in USD is the one the provider reported (OpenRouter's, which the Decisions APIs
+of Luna and JEV report with each question), else unknown. A Decision costs what its questions
+did, and one that failed after some of them counts their usage and cost, which leaves the totals
+incomplete. A turn-based trial's `run_summary.json` keeps two totals:
 
 - `token_usage`, `token_accounting` and `cost_usd` (`cost_accounting`) count the responses the
   episode settled: each call whose result came back before it was given up on, and each call
   given up on before that at the per-move cap, the deadline or the provider watchdog, without
   usage, which leaves them incomplete. A call given up on before its result came back because
-  the task ended or the run was invalidated does not count.
+  the task ended or the run was invalidated does not count. The provider may still bill such a
+  call, so the totals can be slightly low even when marked complete.
 - `spend_usd`, `spend_known_usd` and `spend_accounting` count what every model call spent, the
   calls given up on included: a call given up on before its result was settled counts the usage
   its result reported if it came back while the episode's abandoned calls were drained (a
