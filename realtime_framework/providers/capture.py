@@ -18,7 +18,7 @@ import weakref
 
 import httpx
 
-from realtime_framework.entity.records import TraceEvent, enter_trace_scope
+from realtime_framework.entity.records import TraceEvent, current_trace_scope, enter_trace_scope
 
 # Header values kept in the trace, each one a provider path sends.
 KEPT_HEADERS = frozenset(
@@ -104,10 +104,12 @@ def _response_payload(channel, purpose, request_seq, response, **fields) -> dict
 
 
 class _RecordingStream(httpx.AsyncByteStream):
-    """Pass response chunks through unchanged; record them once, when the response is closed.
+    """Pass response chunks through unchanged; record them once, when the response is closed,
+    in the trace scope the response arrived in.
 
     httpx closes the stream after the last chunk, SDKs close it when they stop reading, and the
     drivers close it on interrupt, so error bodies the SDK reads and cut-short streams are covered.
+    An interrupt comes from the abort, in the abort's scope; the record keeps the response's.
     ``complete`` means the transport reported the end of the body. An SDK that stops reading at
     its own end-of-stream event (the OpenAI SDK at ``[DONE]``) closes the stream first, so its
     complete streams are recorded with ``complete`` false.
@@ -118,6 +120,7 @@ class _RecordingStream(httpx.AsyncByteStream):
         self._stream = response.stream
         self._request_seq = request_seq
         self._response = response
+        self._scope = current_trace_scope()
         self._chunks: list[bytes] = []
         self._clock = capture.owner.clock
         self._headers_ns = self._clock.monotonic_ns()
@@ -152,6 +155,10 @@ class _RecordingStream(httpx.AsyncByteStream):
             return
         self._recorded = True
         self._capture.open.discard(self)
+        contextvars.copy_context().run(self._record_in_scope)
+
+    def _record_in_scope(self) -> None:
+        enter_trace_scope(self._scope)
         capture = self._capture
         capture.owner._trace.capture(
             TraceEvent.MODEL_RESPONSE_RECEIVED,

@@ -26,6 +26,7 @@ import realtime_framework.entity.model as model_module
 import realtime_framework.providers.decisions.selection as selection_module
 import realtime_framework.providers.litellm as litellm_driver
 import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.model import (
     RATE_LIMITED,
     TRANSIENT,
@@ -50,7 +51,7 @@ from .stub import ChatCompletionsStub
 from .stub import Failure as ChatFailure
 from .stub_decisions import DecisionsStub
 from .stub_decisions import Failure as QuestionFailure
-from .stub_openrouter import Failure, OpenRouterStub
+from .stub_openrouter import Failure, Held, OpenRouterStub
 from .test_chat_completions import MODEL_KEY as CHAT_MODEL_KEY
 from .test_chat_completions import chat_completions_config
 from .test_openai_realtime import MAX_TICKS, TOKENS_PER_FRAME, realtime_config
@@ -622,6 +623,49 @@ def test_a_failure_while_the_episode_runs_is_retried_and_the_aborts_is_not(tmp_p
         (0, 2, "ok", None, False),
         (1, 1, "cancelled", None, False),
     ]
+
+
+def test_abort_mid_stream_is_no_failure_and_its_response_stays_the_attempts(
+    openrouter_env,  # noqa: F811
+    tmp_path,
+):
+    """Stateless API. The stub streams the reply but holds its last event; the kernel aborts the
+    generation once the runtime has read output. The abort's interrupt closes the stream
+    (providers/litellm.py interrupt): the attempt received output, yet it is recorded as
+    cancelled, not as provider_stream_interrupted, which a stream cut off by the provider is
+    (test_openrouter.py). The response is recorded as the interrupt closed it, cut short, in the
+    attempt's scope rather than the abort's (providers/capture.py _RecordingStream)."""
+    (reply,) = replies([STEP])
+    read = threading.Event()
+    with OpenRouterStub([Held(reply)], route=ROUTE) as stub:
+        openrouter_env.setenv("OPENROUTER_BASE_URL", stub.base_url)
+        episode = _stateless_episode(tmp_path)
+        agent = episode.agent
+        events = agent.driver.events
+
+        async def reading(generation):
+            async for event in events(generation):
+                yield event
+                if isinstance(event, TextDelta):
+                    read.set()
+
+        agent.driver.events = reading
+        try:
+            observation = episode.frames.capture(0)
+            box, done = _generate_in_worker(episode, observation)
+            assert read.wait(WAIT_S), "no output was read"
+            _abort_like_the_kernel(agent)
+            _discarded(agent, box, done)
+        finally:
+            episode.finish()
+    assert len(stub.requests) == 1 and stub.unscripted == 0
+    assert _attempts(tmp_path) == [(1, "cancelled", None)]
+    (sent,) = _trace(tmp_path, "ModelRequestSent")
+    (received,) = _trace(tmp_path, "ModelResponseReceived")
+    assert received["request_seq"] == sent["capture_seq"]
+    assert (received["status_code"], received["complete"]) == (200, False)
+    assert received["scope"] == sent["scope"]
+    assert received["scope"]["phase"] == "decision" and received["scope"]["attempt"] == 1
 
 
 def test_runner_timeout_leaves_no_request_after_the_episode(tmp_path):
