@@ -51,7 +51,8 @@ def _group(
 ) -> dict:
     """report()'s group of one task whose run left this lifecycle, token accounting, termination
     record and run summary ``fields``, in a local report root as runner.main() leaves one
-    (_report_root)."""
+    (_report_root). A run that recorded no decision leaves no lifecycle file, which the sandbox
+    creates with the first record (sandbox/actions.py record_lifecycle)."""
     _report_root(root, "turn_based")
     run_dir = root / "cell" / WEB
     path = run_dir / "run_summary.json"
@@ -68,9 +69,11 @@ def _group(
     )
     summary["outcome"] = episode_outcome(summary)["outcome"]
     path.write_text(json.dumps(summary))
-    (run_dir / "action_lifecycle.jsonl").write_text(
-        "".join(json.dumps(record) + "\n" for record in lifecycle)
-    )
+    (run_dir / "action_lifecycle.jsonl").unlink()
+    if lifecycle:
+        (run_dir / "action_lifecycle.jsonl").write_text(
+            "".join(json.dumps(record) + "\n" for record in lifecycle)
+        )
     (group,) = report(root)["groups"]
     return group
 
@@ -400,6 +403,20 @@ def test_a_run_summary_that_contradicts_itself_is_not_scored(tmp_path, change):
         "invalid",
         "result_validation_failed",
         "Unscored result or identity mismatch",
+    )
+
+
+def test_a_run_that_made_a_decision_but_left_no_lifecycle_is_not_scored(tmp_path):
+    """The scored run summary of a solved task that made one decision (_report_root), whose
+    lifecycle file is gone: only a run that made none has no lifecycle."""
+    root = _report_root(tmp_path, "turn_based")
+    (root / "cell" / WEB / "action_lifecycle.jsonl").unlink()
+    (group,) = report(root)["groups"]
+    (task,) = group["tasks"]
+    assert (task["status"], task["error_reason"], task.get("error")) == (
+        "invalid",
+        "result_validation_failed",
+        "Decision count mismatch",
     )
 
 
