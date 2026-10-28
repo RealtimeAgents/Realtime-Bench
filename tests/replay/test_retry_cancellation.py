@@ -513,12 +513,13 @@ def test_abort_during_request_pacing_sends_no_request(openrouter_env, tmp_path):
     assert _inspection_outcomes(tmp_path) == ["superseded_by_timeout"]
 
 
-def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
+def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch, capsys):
     """Stateless API, abort while the request is in flight. The stub holds request 0 until the
     client closes it; the abort's driver.close() does (providers/litellm.py close). The
     failure arrives before any output and is classified TRANSIENT, but the generation is
     cancelled by then: the attempt is recorded once, as cancelled, not as a retry; no backoff
-    starts and nothing is sent again. The reply scripted for a retry stays unused."""
+    starts and nothing is sent again. The reply scripted for a retry stays unused. LiteLLM
+    prints no help banner as it maps the failure (providers/litellm.py import_litellm)."""
     backoff = _GatedBackoff()
     backoff.release.set()
     monkeypatch.setattr(model_module, "_backoff", backoff)
@@ -564,6 +565,7 @@ def test_abort_mid_request_is_not_retried(tmp_path, monkeypatch):
     assert _cancelled(tmp_path, "generation") == [
         ("RetryCancelled('generation abandoned during attempt 1')", None)
     ]
+    assert "LiteLLM.Info" not in capsys.readouterr().out
 
 
 def test_a_failure_while_the_episode_runs_is_retried_and_the_aborts_is_not(tmp_path, monkeypatch):
