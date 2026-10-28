@@ -17,8 +17,8 @@ Scripts:
   LIVE_HISTORY_OPTIONS): realtime_input observations and native_tools history;
 - a resume that the server rejects, which falls back to replaying the history
   (live.py GeminiLiveDriver._sync_history);
-- 3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script: blocking calls,
-  acknowledged without scheduling, and a goAway that replays the history.
+- 3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script: non-blocking
+  calls, acknowledged silently, and a goAway that replays the history.
 """
 
 from __future__ import annotations
@@ -186,9 +186,14 @@ DRIVER_DEFAULT = Preset("driver-default", "replay-gemini-live", "native_tools", 
 # A model sets each wire option (providers/preflight.py check_provider_options); these are the
 # driver's defaults.
 DRIVER_DEFAULT_OPTIONS = {name: default for name, (default, _) in LIVE_OPTIONS.items()}
-# 3.1 Flash Live calls functions synchronously only and has no function scheduling
-# (configs/models/gemini-live.yaml).
-FLASH_LIVE = Preset("flash-live", "gemini-live", "tool_transcript", {}, turn_complete)
+# 3.1 Flash Live takes 3.8 Live's options (configs/models/gemini-live.yaml).
+FLASH_LIVE = Preset(
+    "flash-live",
+    "gemini-live",
+    "tool_transcript",
+    {"will_continue": False, "scheduling": "SILENT"},
+    turn_complete,
+)
 
 
 def turn_script(
@@ -589,9 +594,9 @@ def test_driver_default_short(live_env, tmp_path):
 
 def test_flash_live_short(live_env, tmp_path):
     """3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script. Every setup
-    declares the functions BLOCKING (live.py
-    GeminiLiveDriver._function_declarations), and each acknowledgement is the queued response alone,
-    without scheduling or will_continue (gemini/session.py SessionCore.tool_response_options;
+    declares the functions NON_BLOCKING (live.py
+    GeminiLiveDriver._function_declarations), and each acknowledgement is the queued response,
+    SILENT and not continued (gemini/session.py SessionCore.tool_response_options;
     live.py GeminiLiveDriver._events). The goAway of decision 1 comes without a resumption handle,
     so the session is replayed at once (gemini/session.py SessionCore._tool_contents; live.py
     GeminiLiveDriver._sync_history), and its tool transcript holds each receipt as it was sent
@@ -613,7 +618,7 @@ def test_flash_live_short(live_env, tmp_path):
         assert ["historyConfig" in setup for setup in setups] == [False, True]
         for setup in setups:
             (tool,) = setup["tools"]
-            assert {item["behavior"] for item in tool["functionDeclarations"]} == {"BLOCKING"}
+            assert {item["behavior"] for item in tool["functionDeclarations"]} == {"NON_BLOCKING"}
         acknowledged = [
             message["functionResponses"]
             for record in steps
@@ -625,7 +630,10 @@ def test_flash_live_short(live_env, tmp_path):
             ["call-2-0"],
         ]
         for responses in acknowledged:
-            assert all(sorted(response) == ["id", "name", "response"] for response in responses)
+            assert all(
+                (response["scheduling"], response["will_continue"]) == ("SILENT", False)
+                for response in responses
+            )
         sync = results[1]["realtime_runtime"]["history_sync"]
         assert (sync["disposition"], sync["detail"]) == ("rebuilt", "go_away")
         assert sync["session_connect_mode"] == "canonical_history_replay"

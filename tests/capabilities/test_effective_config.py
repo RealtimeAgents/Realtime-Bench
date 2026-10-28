@@ -39,6 +39,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
 - chat_include_usage takes its default from ModelConfig alone, which a YAML that sets
   include_usage overrides: my-model's catalog defaults no longer list it, and its model config
   and run hashes did not change. (Edited in place: that key was the one difference.)
+- gemini-live goes back to v1.0's non-blocking functions with silent responses: its
+  provider_options and run hashes changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the
