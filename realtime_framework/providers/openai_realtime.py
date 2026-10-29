@@ -13,6 +13,7 @@ import socket
 import ssl
 import uuid as uuid
 from copy import copy as copy
+from dataclasses import replace
 from functools import partial
 from typing import ClassVar as ClassVar
 
@@ -128,6 +129,16 @@ def classify_realtime_message(direction: str, message: dict):
         return kind, [("event", event_id)] if event_id else [], "unsolicited"
     # Response events, and what the server sends on its own (session.created, rate_limits.updated).
     return kind, [], "response" if kind.startswith("response.") else "unsolicited"
+
+
+def _close_codes(closed: ConnectionClosedOK) -> str:
+    """A normal close as websockets describes it, by each side's code and which closed first,
+    without the server's reason: classify_transport_error reads the text of a failure it has no
+    type for, and the reason is the server's free text."""
+    received, sent = (str(replace(frame, reason="")) for frame in (closed.rcvd, closed.sent))
+    if closed.rcvd_then_sent:
+        return f"received {received}; then sent {sent}"
+    return f"sent {sent}; then received {received}"
 
 
 class _Session:
@@ -728,7 +739,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                         generation.generation_id,
                         sequence,
                         "connection_closed",
-                        "the connection closed before the response completed",
+                        "the connection closed before the response completed: "
+                        + _close_codes(session.closed),
                         True,
                         **numbers,
                     )
