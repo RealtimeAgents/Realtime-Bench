@@ -116,6 +116,8 @@ from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
 from realtime_framework.sandbox.actions import GuestEnvironment
+from realtime_framework.sandbox.task_lifecycle import EnvironmentInvalidError
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 from realtime_framework.evaluation._trial import read_launch
 from realtime_framework.evaluation.reporting import capture_generation_artifact
 from realtime_framework.evaluation.reporting import conclude
@@ -190,10 +192,6 @@ def _atomic_write_json(path, obj):
     os.replace(tmp, path)
 
 
-class EnvironmentInvalidError(RuntimeError):
-    """Startup health checks failed; the result must not be attributed to the model."""
-
-
 def _invalid_snapshot(snapshot):
     if not isinstance(snapshot, dict):
         return "snapshot_not_an_object"
@@ -250,6 +248,7 @@ def main():
     # The trial worker applied every pre-run rule to this run before it wrote the launch file
     # (evaluation/_trial.py main), which the runner runs as written.
     ctask = custom_tasks.get(launch.task)
+    lifecycle = TaskLifecycle(ctask)
     clocks = episode_clocks(spec.clock_mode, env_fps)
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
@@ -336,14 +335,14 @@ def main():
     run_stage = "environment_setup"
     try:
         # -------- provision the registered task --------
-        ctask.configure_seed(spec.seed)
-        task = ctask.description()
-        ctask.configure_clock(
-            spec.clock_mode, env_fps, task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps)
+        task, url = lifecycle.provision(
+            spec.seed,
+            spec.clock_mode,
+            env_fps,
+            task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps),
         )
-        url = ctask.provision()
         if url:
-            R.open_local_url_in_container(url, debug_port=getattr(ctask, "dbg_port", None))
+            R.open_local_url_in_container(url, debug_port=lifecycle.debug_port)
         clocks.operational.sleep(5)
 
         # -------- build the agent --------
@@ -353,7 +352,7 @@ def main():
             set_up_agent(
                 setup,
                 cfg,
-                ctask,
+                lifecycle,
                 task,
                 clock_mode=spec.clock_mode,
                 interaction_mode=spec.interaction_mode,
@@ -364,7 +363,7 @@ def main():
                 open_capture=lambda text_observation: BrowserSceneCapture(
                     guest,
                     ctask,
-                    debug_port=getattr(ctask, "dbg_port", None),
+                    debug_port=lifecycle.debug_port,
                     container=R.CONTAINER_NAME,
                     desktop_size=(env_config.screen_width, env_config.screen_height),
                     text_observation=text_observation,
@@ -409,45 +408,17 @@ def main():
         )
 
         # initialize() may open a realtime session or prefill a local model.  Restart time-sensitive
-        # wall-clock tasks only after that work is complete.  The restart is two-phase: reset_episode()
-        # prepares a held episode (reload, baseline, semantics, browser render) and start_episode()
-        # releases it.  The origin start_episode() reports is the scored wall-clock origin, so no
-        # framework setup consumes the episode.  Record only after provider/environment
-        # initialization; the first-frame PTS and explicit active boundaries remove the small
-        # recorder startup margin.
+        # wall-clock tasks only after that work is complete (TaskLifecycle.start_scored_episode).
+        # Record only after provider/environment initialization; the first-frame PTS and explicit
+        # active boundaries remove the small recorder startup margin.
         _recorder_on = R._start_screen_recording(run_dir)
-        wall_start_time = None
-        episode_start = None
-        if (
-            spec.clock_mode == "wall"
-            and ctask is not None
-            and hasattr(ctask, "reset_episode")
-            and getattr(ctask, "category", None) in {"browser_game", "realtime"}
-        ):
-            category = getattr(ctask, "category", None)
-            try:
-                _rb = ctask.reset_episode()
-                print(
-                    f"[{category}] scored wall episode reset after adapter initialization; "
-                    f"baseline={_rb}",
-                    flush=True,
-                )
-                if category == "realtime":
-                    # Let the open page render the held, restarted state before the clock starts.
-                    clocks.operational.sleep(0.45)
-                episode_start = ctask.start_episode()
-                wall_start_time = float(episode_start["clock_origin"])
-                print(f"[{category}] scored wall episode started; {episode_start}", flush=True)
-            except Exception:
-                detail = traceback.format_exc()
-                environment_invalid = True
-                print(
-                    f"[{category}] scored wall restart FAILED; run is invalid:\n" + detail,
-                    flush=True,
-                )
-                raise EnvironmentInvalidError(
-                    f"{category} episode restart failed after adapter initialization\n" + detail
-                )
+        try:
+            wall_start_time, episode_start = lifecycle.start_scored_episode(
+                spec.clock_mode, clocks.operational
+            )
+        except EnvironmentInvalidError:
+            environment_invalid = True
+            raise
 
         # -------- environment budget --------
         if spec.clock_mode == "token":
@@ -455,13 +426,11 @@ def main():
         else:
             wall_start_time = wall_start_time or clocks.semantic.time()
             deadline = wall_start_time + spec.duration_minutes * 60
-        # Any task may expose episode_over for a server-owned terminal state; realtime tasks use it
-        # for irreversible failures.
         env = GuestEnvironment(
             guest,
             ctask,
             frames_dir=frames_dir,
-            stop_check=(getattr(ctask, "episode_over", None) if ctask else None),
+            stop_check=lifecycle.end_check,
             scene_capture=scene_capture,
             action_audit_path=run_dir / "action_lifecycle.jsonl",
             clock_mode=spec.clock_mode,
@@ -623,7 +592,7 @@ def main():
         else:
             try:
                 # score the FROZEN snapshot (== the artifact), not a fresh post-cleanup live read
-                verification = ctask.evaluate_snapshot(frozen_snapshot)
+                verification = lifecycle.evaluate(frozen_snapshot)
                 unscorable = evaluator_failure(verification)
                 if unscorable is not None:
                     invalid_runs.append(unscorable)
@@ -933,7 +902,7 @@ def main():
             "termination": termination,
             "max_minutes": spec.duration_minutes,
             "seed": spec.seed,
-            "applied_seed": getattr(ctask, "applied_seed", None),
+            "applied_seed": lifecycle.applied_seed,
             "clock_mode": spec.clock_mode,
             "tokens_per_frame": tokens_per_frame,
             "dropped_intermediate_frames": (
@@ -946,7 +915,7 @@ def main():
                 else None
             ),
             "world_time_s": world_time_s,
-            "last_clock_advance": getattr(ctask, "_last_clock_advance", None),
+            "last_clock_advance": lifecycle.last_clock_advance,
             "think_budget_s": think_budget,
             "per_move_cap_s": per_move_cap,
             "think_spent_s": round(result.think_spent, 1) if result is not None else 0.0,
@@ -1073,7 +1042,7 @@ class AgentSetup:
 def set_up_agent(
     setup: AgentSetup,
     cfg: ModelConfig,
-    ctask,
+    lifecycle: TaskLifecycle,
     instruction: str,
     *,
     clock_mode: str,
@@ -1086,7 +1055,8 @@ def set_up_agent(
     env_fps: float,
     clock=None,
 ) -> None:
-    """Turn a model config and a provisioned task into an agent initialized on the first frame.
+    """Turn a model config and a provisioned task, which ``lifecycle`` holds, into an agent
+    initialized on the first frame.
 
     The configuration has passed the pre-run rules (providers/preflight.py check_episode), which
     the trial worker applies before it writes the launch file main() runs (evaluation/_trial.py).
@@ -1113,32 +1083,18 @@ def set_up_agent(
         fps=cfg.fps,
         tokens_per_frame=tokens_per_frame,
         clock_mode=clock_mode,
-        category=getattr(ctask, "category", None),
+        category=lifecycle.category,
         interaction_mode=interaction_mode,
         env_fps=env_fps,
     )
     setup.stage = "environment_setup"
 
-    # Prepare a valid provisional episode/frame for adapter initialization. main() restarts
-    # wall-clock tasks once more after initialize(), so none of this warmup consumes their scored
-    # action window.
-    if hasattr(ctask, "reset_episode"):
-        category = getattr(ctask, "category", None)
-        if category in {"browser_game", "realtime"}:
-            try:
-                _rb = ctask.reset_episode()
-                print(f"[{category}] fresh episode reset; baseline={_rb}", flush=True)
-                if category == "realtime" and clock_mode != "token":
-                    clock.sleep(0.45)
-            except Exception:
-                detail = traceback.format_exc()
-                setup.environment_invalid = True
-                print(f"[{category}] fresh restart FAILED; run is invalid:\n" + detail, flush=True)
-                raise EnvironmentInvalidError(
-                    f"{category} episode restart failed before tick 0\n" + detail
-                )
-    ctask.activate_clock()
-    print(f"[clock] {ctask.clock_snapshot()}", flush=True)
+    # A valid provisional episode/frame for adapter initialization.
+    try:
+        lifecycle.prepare_first_frame(clock_mode, clock)
+    except EnvironmentInvalidError:
+        setup.environment_invalid = True
+        raise
     setup.stage = "tool_setup"
     # Choice models need focused fields and control state to enumerate actions,
     # including when they also receive screenshots (context policy item 12).
@@ -1147,7 +1103,7 @@ def set_up_agent(
     scene_capture = setup.scene_capture = open_capture(text_observation)
     setup.tool_runtime = ToolRuntime(
         run_dir / "tool_calls.jsonl",
-        task_id=ctask.task_id,
+        task_id=lifecycle.task.task_id,
         adapter=cfg.adapter_type,
         model=model,
         text_observation=text_observation,

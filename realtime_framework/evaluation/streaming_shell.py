@@ -418,8 +418,7 @@ class _StreamingShell:
         # The presentation boundary precedes the scorer's snapshot; it moves to when the read
         # begins, once the gate is the snapshot's.
         end.snapshot_begins(self.clocks.operational.time())
-        # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
+        snapshotter = self.env.task_lifecycle.snapshot_reader
         error = None
         if snapshotter is not None:
             turn, executing = self.lanes.freeze_turn()
