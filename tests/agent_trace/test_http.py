@@ -255,6 +255,35 @@ def test_generic_litellm_api_is_recorded_from_the_logger(tmp_path, monkeypatch):
     _assert_no_key(tmp_path, TASK_INSTRUCTION, REPLIES[0].content)
 
 
+def test_a_reply_logged_twice_is_recorded_once_as_text():
+    """LiteLLM logs an OpenRouter reply as its text and then again as the parsed ModelResponse,
+    which the trace cannot store: the text stands, and an object alone is kept as its dump."""
+    from litellm.types.utils import ModelResponse
+
+    from realtime_framework.providers.capture import LoggerCapture
+
+    captured = []
+
+    class Trace:
+        def capture(self, event, payload, *, body=None, classify=None):
+            captured.append((event, body))
+            return len(captured)
+
+    class Owner:
+        _trace = Trace()
+
+    log = LoggerCapture(Owner())
+    parsed = ModelResponse(id="gen-1", model="google/gemini-3.8-flash")
+    log({"log_event_type": "pre_api_call", "additional_args": {"complete_input_dict": {}}})
+    log({"log_event_type": "post_api_call", "original_response": '{"id": "gen-1"}'})
+    log({"log_event_type": "post_api_call", "original_response": parsed})
+    assert [body for _, body in captured[1:]] == ['{"id": "gen-1"}']
+
+    log({"log_event_type": "pre_api_call", "additional_args": {"complete_input_dict": {}}})
+    log({"log_event_type": "post_api_call", "original_response": parsed})
+    assert captured[-1][1]["id"] == "gen-1" and len(captured) == 4
+
+
 def test_connection_error_resend_is_a_second_request_in_the_same_attempt(tmp_path, monkeypatch):
     """LiteLLM's AsyncHTTPHandler resends once after RemoteProtocolError or ConnectError, on a
     new client that carries the same hooks (http_handler.py:851-866).

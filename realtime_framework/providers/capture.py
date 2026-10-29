@@ -258,10 +258,12 @@ class LoggerCapture:
     def __init__(self, owner):
         self.owner = owner
         self.request_seq = None
+        self.answered = False
 
     def __call__(self, details: dict) -> None:
         kind = details.get("log_event_type")
         if kind == "pre_api_call":
+            self.answered = False
             self.request_seq = self.owner._trace.capture(
                 TraceEvent.MODEL_REQUEST_SENT,
                 {
@@ -275,7 +277,16 @@ class LoggerCapture:
                 body=(details.get("additional_args") or {}).get("complete_input_dict"),
             )
         elif kind == "post_api_call":
-            # LiteLLM logs the provider reply as text (it dumps a dict reply to JSON first).
+            # LiteLLM logs the provider reply as text (it dumps a dict reply to JSON first); some
+            # providers' (OpenRouter's) it logs again as its parsed ModelResponse, the same reply,
+            # which is kept only when no text came.
+            body = details.get("original_response")
+            if not isinstance(body, (str, bytes, dict)):
+                if self.answered:
+                    return
+                dump = getattr(body, "model_dump", None)
+                body = dump(mode="json") if dump is not None else str(body)
+            self.answered = True
             self.owner._trace.capture(
                 TraceEvent.MODEL_RESPONSE_RECEIVED,
                 {
@@ -287,7 +298,7 @@ class LoggerCapture:
                     "complete": True,
                     "error": None,
                 },
-                body=details.get("original_response"),
+                body=body,
             )
 
 
