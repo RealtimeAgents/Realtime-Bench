@@ -276,6 +276,36 @@ def test_an_action_the_guest_refuses_is_reported_with_its_reason():
     assert episode.invalid is None
 
 
+@pytest.mark.parametrize("clock_mode", ["wall", "token"])
+def test_each_action_s_records_carry_its_own_execution(clock_mode):
+    """Three actions in a row, the second refused: each one's records carry the result, the
+    coordinate trace and the status of its own execution, and the agent hears its own outcome."""
+    if clock_mode == "wall":
+        episode = run("wall", 3.0, [Reply(0.5)] * 3, World(rejections={1: "bad key"}))
+    else:
+        replies = [Reply(0.0, CLICK, output_tokens=50)] * 3
+        episode = run("token", 3.0, replies, World(rejections={1: "bad key"}), tokens_per_frame=100)
+    executions = [
+        ("applied", {"executed": 0}, {"decision": 0}),
+        ("rejected", {"error": "bad key"}, None),
+        ("applied", {"executed": 2}, {"decision": 2}),
+    ]
+    resolved = episode.trace.payloads("ActionResolved")
+    assert [(p["status"], p["execution_result"], p["coordinate_trace"]) for p in resolved] == (
+        executions
+    )
+    lifecycle = episode.env.lifecycle
+    assert [(r["status"], r["execution_result"], r["coordinate_trace"]) for r in lifecycle] == (
+        executions
+    )
+    assert [(o.status, o.detail) for o in episode.agent.outcomes] == [
+        ("applied", ""),
+        ("rejected", "bad key"),
+        ("applied", ""),
+    ]
+    assert episode.invalid is None
+
+
 @pytest.mark.parametrize("terminal", [ActionType.DONE, ActionType.FAIL])
 def test_a_done_reply_lands_as_a_wait_and_its_record_says_why(terminal):
     """The loop has no terminal actions: the kernel lands a DONE or a FAIL as a wait, and the
