@@ -23,21 +23,24 @@ from realtime_framework.entity.actions import ActionTranslator
 
 logger = logging.getLogger(__name__)
 
-_ACTION_KEYS = frozenset(
-    {
-        "action",
-        "action_name",
-        "action_type",
-        "name",
-        "tool",
-        "tool_name",
-        "command",
-        "operation",
-        "function",
-        "function_call",
-        "tool_call",
-    }
+# The fields that name an action, in the order an action object's name is read from them.
+_SELECTOR_KEYS = (
+    "action",
+    "action_name",
+    "action_type",
+    "name",
+    "tool",
+    "tool_name",
+    "command",
+    "operation",
 )
+# The fields that hold a function call's object, in the order one is read from them.
+_FUNCTION_KEYS = ("function_call", "function", "tool_call")
+_ACTION_KEYS = frozenset({*_SELECTOR_KEYS, *_FUNCTION_KEYS})
+# The fields that hold an action's parameters.
+_PARAMETER_KEYS = ("arguments", "parameters", "params", "args", "input", "tool_input")
+# Transport envelopes whose one item is the action.
+_ENVELOPE_KEYS = ("actions", "tool_calls", "calls", "output", "response", "result", "content")
 _CANONICAL_ACTION_NAMES = frozenset(
     {
         "click",
@@ -57,6 +60,16 @@ _CANONICAL_ACTION_NAMES = frozenset(
         "fail",
     }
 )
+# The names an action object may give its action: the canonical ones, and the others
+# ActionTranslator maps (entity/actions.py).
+_KNOWN_ACTION_NAMES = _CANONICAL_ACTION_NAMES | {
+    "left_click",
+    "press",
+    "hotkey",
+    "keypress",
+    "mouse_move",
+    "give_up",
+}
 _CANONICAL_FIELDS = frozenset(
     {
         "action",
@@ -120,6 +133,11 @@ def _literal_object(body):
     return ast.literal_eval(tree)
 
 
+def _snake(name: str) -> str:
+    """``name`` in snake case: camelCase humps, spaces and hyphens become underscores."""
+    return re.sub(r"[\s-]+", "_", re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)).lower()
+
+
 def _unwrap_action(value: object, depth: int = 0) -> dict | None:
     """Recognized transport envelopes only; never select the first of several actions."""
     if depth > 8:
@@ -137,11 +155,7 @@ def _unwrap_action(value: object, depth: int = 0) -> dict | None:
         return value
     if isinstance(value.get("type"), str) and value["type"] in _CANONICAL_ACTION_NAMES:
         return {"action": value["type"], **{k: v for k, v in value.items() if k != "type"}}
-    containers = [
-        key
-        for key in ("actions", "tool_calls", "calls", "output", "response", "result", "content")
-        if key in value
-    ]
+    containers = [key for key in _ENVELOPE_KEYS if key in value]
     if len(containers) == 1:
         return _unwrap_action(value[containers[0]], depth + 1)
     return None
@@ -184,14 +198,7 @@ def _balanced_object_strings(text: str):
 def _looks_like_action_object(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    keys = {
-        re.sub(
-            r"[\s-]+",
-            "_",
-            re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key).strip()),
-        ).lower()
-        for key in value
-    }
+    keys = {_snake(str(key).strip()) for key in value}
     return bool(keys & (_ACTION_KEYS | _CANONICAL_ACTION_NAMES))
 
 
@@ -230,9 +237,7 @@ def _structured_object_candidate(
     value = _unwrap_action(original)
     if value is None:
         if isinstance(original, list) or (
-            isinstance(original, dict)
-            and set(original)
-            & {"actions", "tool_calls", "calls", "output", "response", "result", "content"}
+            isinstance(original, dict) and set(original).intersection(_ENVELOPE_KEYS)
         ):
             return _Candidate(json.dumps(original, ensure_ascii=False), "invalid_envelope")
         return None
@@ -387,11 +392,7 @@ def _function_call_object(text: str) -> dict | None:
     except (TypeError, ValueError):
         return None
 
-    normalized_name = re.sub(
-        r"[\s-]+",
-        "_",
-        re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", action_name.strip()),
-    ).lower()
+    normalized_name = _snake(action_name.strip())
     if (
         normalized_name == "hotkey"
         and positional
@@ -618,33 +619,6 @@ def _text_candidates(text: str):
             )
 
 
-_KNOWN_ACTION_NAMES = frozenset(
-    {
-        "click",
-        "left_click",
-        "right_click",
-        "double_click",
-        "triple_click",
-        "mouse_down",
-        "mouse_up",
-        "type",
-        "key",
-        "press",
-        "hotkey",
-        "keypress",
-        "hold_key",
-        "scroll",
-        "drag",
-        "move",
-        "mouse_move",
-        "wait",
-        "done",
-        "fail",
-        "give_up",
-    }
-)
-
-
 def _load_action_object(value: str) -> dict | None:
     try:
         parsed = json.loads(value, object_pairs_hook=unique_object)
@@ -656,9 +630,8 @@ def _load_action_object(value: str) -> dict | None:
 def _normalized_action_name(value: object) -> str | None:
     if not isinstance(value, str) or not value.strip():
         return None
-    value = re.split(r"[./]", value.strip())[-1]
-    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
-    name = re.sub(r"[\s-]+", "_", name).lower()
+    # The last segment of a dotted or slashed name, not stripped again.
+    name = _snake(re.split(r"[./]", value.strip())[-1])
     aliases = {
         "tap": "click",
         "click_at": "click",
@@ -688,11 +661,10 @@ def _normalized_action_name(value: object) -> str | None:
 
 
 def _normalized_field_name(value: object) -> str:
-    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value).strip())
-    return re.sub(r"[\s-]+", "_", name).lower()
+    return _snake(str(value).strip())
 
 
-def _normalize_action_key_shorthand(data: dict) -> dict | None:
+def _normalize_action_key_shorthand(data: dict) -> dict:
     """Expand shorthand ``{"click": "P1"}`` action objects.
 
     Some text checkpoints follow the one-action constraint but serialize the verb as the
@@ -704,20 +676,7 @@ def _normalize_action_key_shorthand(data: dict) -> dict | None:
     lowered = {_normalized_field_name(key): value for key, value in data.items()}
     if _normalized_action_name(lowered.get("type")) in _KNOWN_ACTION_NAMES and len(lowered) > 1:
         return data
-    selector_keys = {
-        "action",
-        "action_name",
-        "action_type",
-        "name",
-        "tool",
-        "tool_name",
-        "command",
-        "operation",
-        "function",
-        "function_call",
-        "tool_call",
-    }
-    if set(lowered) & selector_keys:
+    if set(lowered) & _ACTION_KEYS:
         return data
 
     action_keys = [key for key in lowered if _normalized_action_name(key) in _KNOWN_ACTION_NAMES]
@@ -788,8 +747,6 @@ def _normalize_action_key_shorthand(data: dict) -> dict | None:
 def _normalize_action_object(data: dict) -> dict | None:
     """Flatten common JSON/tool envelopes into the canonical action object."""
     data = _normalize_action_key_shorthand(data)
-    if data is None:
-        return None
     lowered = {_normalized_field_name(key): value for key, value in data.items()}
     if len(lowered) != len(data):
         return None
@@ -799,49 +756,18 @@ def _normalize_action_object(data: dict) -> dict | None:
         ) != _normalized_action_name(lowered["type"]):
             return None
         lowered.setdefault("action", lowered.pop("type"))
-    selectors = [
-        lowered[k]
-        for k in (
-            "action",
-            "action_name",
-            "action_type",
-            "name",
-            "tool",
-            "tool_name",
-            "command",
-            "operation",
-        )
-        if isinstance(lowered.get(k), str)
-    ]
+    selectors = [lowered[k] for k in _SELECTOR_KEYS if isinstance(lowered.get(k), str)]
     if len({_normalized_action_name(value) for value in selectors}) > 1:
         return None
     nested = None
-    if (
-        sum(
-            isinstance(lowered.get(key), dict) for key in ("function_call", "function", "tool_call")
-        )
-        > 1
-    ):
+    if sum(isinstance(lowered.get(key), dict) for key in _FUNCTION_KEYS) > 1:
         return None
-    for key in ("function_call", "function", "tool_call"):
+    for key in _FUNCTION_KEYS:
         if isinstance(lowered.get(key), dict):
             nested = lowered[key]
             break
     action_value = next(
-        (
-            lowered[key]
-            for key in (
-                "action",
-                "action_name",
-                "action_type",
-                "name",
-                "tool",
-                "tool_name",
-                "command",
-                "operation",
-            )
-            if key in lowered
-        ),
+        (lowered[key] for key in _SELECTOR_KEYS if key in lowered),
         None,
     )
     if isinstance(action_value, dict):
@@ -852,35 +778,13 @@ def _normalize_action_object(data: dict) -> dict | None:
         nested_lowered = {_normalized_field_name(key): value for key, value in nested.items()}
         nested_selectors = [
             nested_lowered[key]
-            for key in (
-                "action",
-                "action_name",
-                "action_type",
-                "name",
-                "tool",
-                "tool_name",
-                "command",
-                "operation",
-            )
+            for key in _SELECTOR_KEYS
             if isinstance(nested_lowered.get(key), str)
         ]
         if len({_normalized_action_name(value) for value in nested_selectors}) > 1:
             return None
         nested_action_value = next(
-            (
-                nested_lowered[key]
-                for key in (
-                    "action",
-                    "action_name",
-                    "action_type",
-                    "name",
-                    "tool",
-                    "tool_name",
-                    "command",
-                    "operation",
-                )
-                if key in nested_lowered
-            ),
+            (nested_lowered[key] for key in _SELECTOR_KEYS if key in nested_lowered),
             None,
         )
         nested_action_name = _normalized_action_name(nested_action_value)
@@ -902,28 +806,7 @@ def _normalize_action_object(data: dict) -> dict | None:
     if action_name is None:
         return None
 
-    reserved = {
-        "action",
-        "action_name",
-        "action_type",
-        "name",
-        "tool",
-        "tool_name",
-        "command",
-        "operation",
-        "type",
-        "id",
-        "call_id",
-        "function",
-        "function_call",
-        "tool_call",
-        "arguments",
-        "parameters",
-        "params",
-        "args",
-        "input",
-        "tool_input",
-    }
+    reserved = {*_ACTION_KEYS, "type", "id", "call_id", *_PARAMETER_KEYS}
     parameters = {key: value for key, value in lowered.items() if key not in reserved}
     nested_parameters = {key: value for key, value in nested_lowered.items() if key not in reserved}
     if any(
@@ -934,7 +817,7 @@ def _normalize_action_object(data: dict) -> dict | None:
     containers = [
         source[key]
         for source in (nested_lowered, lowered)
-        for key in ("arguments", "parameters", "params", "args", "input", "tool_input")
+        for key in _PARAMETER_KEYS
         if key in source
     ]
     if len(containers) > 1:
@@ -943,14 +826,7 @@ def _normalize_action_object(data: dict) -> dict | None:
         (
             source[key]
             for source in (nested_lowered, lowered)
-            for key in (
-                "arguments",
-                "parameters",
-                "params",
-                "args",
-                "input",
-                "tool_input",
-            )
+            for key in _PARAMETER_KEYS
             if key in source
         ),
         None,
