@@ -2021,7 +2021,12 @@ def reevaluate_main():
     import realtime_tasks.registry as registry
 
     invalid_reason = invalid_evaluation(result)
-    reported_invalid_reason = invalid_reason
+    # Without --replace-summary, whether the new evaluation alone scores, as a diagnostic.
+    reported = {
+        "run_status": "invalid" if invalid_reason else "scored",
+        "solved": None if invalid_reason else result.get("resolved"),
+        "invalid_reason": invalid_reason,
+    }
     record = {
         # Outside any episode: a finished run, re-evaluated from its saved state.
         "reevaluated_unix_s": time.time(),  # noqa: TID251
@@ -2070,8 +2075,12 @@ def reevaluate_main():
         if sp.exists() and not backup.exists():
             shutil.copy2(sp, backup)
         conclusion = conclude_reevaluation(summary, result)
-        if conclusion.invalid_run:
-            reported_invalid_reason = conclusion.invalid_run.get("reason")
+        # The run summary's conclusion, which it says in the line printed too.
+        reported = {
+            "run_status": conclusion.run_status,
+            "solved": conclusion.solved,
+            "invalid_reason": (conclusion.invalid_run or {}).get("reason"),
+        }
         summary.update(
             {
                 "run_status": conclusion.run_status,
@@ -2098,9 +2107,7 @@ def reevaluate_main():
         json.dumps(
             {
                 "run_dir": str(a.run_dir),
-                "run_status": "invalid" if reported_invalid_reason else "scored",
-                "solved": None if reported_invalid_reason else result.get("resolved"),
-                "invalid_reason": reported_invalid_reason,
+                **reported,
                 "output": str(out),
             }
         )

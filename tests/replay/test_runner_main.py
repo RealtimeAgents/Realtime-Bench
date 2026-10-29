@@ -777,10 +777,12 @@ def test_a_snapshot_judged_invalid_keeps_its_reason_though_its_record_then_fails
     ]
 
 
-def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path, monkeypatch):
+def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(
+    tmp_path, monkeypatch, capsys
+):
     """jev-1.13 is excluded from maintained results and runs only with ALLOW_EXPERIMENTAL_MODEL:
     its run is experimental, and so is it re-evaluated, with the progress of the new
-    evaluation."""
+    evaluation, in its summary and in the line the re-evaluation prints."""
     monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
@@ -793,8 +795,11 @@ def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path
     assert (summary["run_status"], summary["benchmark_eligible"]) == ("experimental", False)
     assert seen["exit_code"] is None  # accepted, as ALLOW_EXPERIMENTAL_MODEL is set
     verification = {"resolved": True, "evaluation_version": 1, "progress": 0.5}
+    capsys.readouterr()
     replaced = _reevaluated(tmp_path / "run", verification, monkeypatch)
     assert (replaced["run_status"], replaced["progress"]) == ("experimental", 0.5)
+    printed = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert (printed["run_status"], printed["solved"]) == ("experimental", True)
     assert not scored(tmp_path)
 
 

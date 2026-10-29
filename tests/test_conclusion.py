@@ -35,7 +35,8 @@ def _summary(**fields) -> dict:
 
 def _reevaluated(tmp_path, monkeypatch, capsys, summary: dict, evaluation: dict):
     """reevaluate --replace-summary of a run whose summary is ``summary``, the saved state's
-    evaluation stubbed: the summary it writes and the line it prints."""
+    evaluation stubbed: the summary it writes and the line it prints, which says what the
+    summary says."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "run_summary.json").write_text(json.dumps(summary))
@@ -44,7 +45,11 @@ def _reevaluated(tmp_path, monkeypatch, capsys, summary: dict, evaluation: dict)
     capsys.readouterr()
     assert reporting.reevaluate_main() is None
     printed = json.loads(capsys.readouterr().out.splitlines()[-1])
-    return json.loads((run_dir / "run_summary.json").read_text()), printed
+    written = json.loads((run_dir / "run_summary.json").read_text())
+    assert (printed["run_status"], printed["solved"], printed["invalid_reason"]) == (
+        written["run_status"], written["solved"], (written["invalid_run"] or {}).get("reason"),
+    )  # fmt: skip
+    return written, printed
 
 
 def test_an_empty_invalid_run_does_not_keep_a_re_evaluated_run_invalid(
@@ -69,7 +74,7 @@ def test_an_empty_invalid_run_does_not_keep_a_re_evaluated_run_invalid(
 
 def test_a_failure_without_a_reason_keeps_a_re_evaluated_run_invalid(tmp_path, monkeypatch, capsys):
     """A summary whose environment failure has no reason: the run stays invalid for it, and its
-    attribution is the failure's category; the line printed names no reason."""
+    attribution is the failure's category; the line printed says so and names no reason."""
     replaced, printed = _reevaluated(
         tmp_path, monkeypatch, capsys, _summary(invalid_run={"category": "environment"}), HEALTHY
     )
@@ -82,7 +87,7 @@ def test_a_failure_without_a_reason_keeps_a_re_evaluated_run_invalid(tmp_path, m
     )
     assert (replaced["error_category"], replaced["error_reason"]) == ("environment", "unknown")
     assert (printed["run_status"], printed["solved"], printed["invalid_reason"]) == (
-        "scored", True, None,
+        "invalid", None, None,
     )  # fmt: skip
 
 
