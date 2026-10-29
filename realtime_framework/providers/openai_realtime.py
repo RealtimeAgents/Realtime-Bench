@@ -890,7 +890,10 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             # retry may still retry, propagates as it is: that retry reads its kind and spent
             # budget off it, which a BROKEN result's text would lose (decision 39). A repair
             # after a generation, the only sync with a current generation, breaks the session
-            # instead, and the turn keeps its result (decision 35).
+            # instead, and the turn keeps its result (decision 35). The result keeps no error
+            # for the session's failure to be raised from (HistorySyncResult.error):
+            # classify_transport_error reads that failure's text, which holds this repr, and
+            # would read a kept error's HTTP status first, which can name another kind.
             if request.current_generation is None and (
                 isinstance(exc, TransportFailureError)
                 or self.classify_transport_error(exc).retryable

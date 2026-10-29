@@ -276,6 +276,9 @@ class HistorySyncResult:
     history_state: ProviderHistoryState
     detail: str = ""
     provider_metadata: dict[str, Any] = field(default_factory=dict)
+    # The error that broke a broken sync, where the driver keeps it: a session operation that
+    # needs the sync exact raises its failure from it (providers/session_lifecycle.py).
+    error: BaseException | None = None
 
 
 @dataclass(frozen=True)

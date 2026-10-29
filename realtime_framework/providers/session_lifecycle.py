@@ -154,7 +154,9 @@ class SessionLifecycle(SessionEncoder):
     meanwhile is closed again, because the abort that came during it closed what was open before.
     ``record(sync, result=None, error=None)`` sees what each did before it returns or raises: the
     sync's HistorySyncRequest with its result or the exception it raised, or None for a reopened
-    session.
+    session. ensure_ready, synchronize and renew raise when their sync leaves the session other
+    than exact, from the error that broke it where the driver keeps one (HistorySyncResult.error),
+    which the driver then classifies their failure as.
 
     Every timed wait the encoder takes on the clock is written to the trace before it starts
     (_record_wait), once: what it waits for, how long, and until which time on the operational
@@ -260,7 +262,9 @@ class SessionLifecycle(SessionEncoder):
                     record,
                 )
                 if result.history_state != ProviderHistoryState.EXACT:
-                    raise RuntimeError(f"provider history recovery failed: {result.detail}")
+                    raise RuntimeError(
+                        f"provider history recovery failed: {result.detail}"
+                    ) from result.error
                 return result
             await self.connect(ConnectRequest(seed=seed, history=history))
             record(None)
@@ -275,7 +279,7 @@ class SessionLifecycle(SessionEncoder):
         async with self._session_lock():
             result = await self._sync(request, record)
         if result.history_state != ProviderHistoryState.EXACT:
-            raise RuntimeError(f"history synchronization failed: {result.detail}")
+            raise RuntimeError(f"history synchronization failed: {result.detail}") from result.error
         return result
 
     async def renew(
@@ -292,7 +296,7 @@ class SessionLifecycle(SessionEncoder):
         async with self._session_lock():
             result = await self._sync(HistorySyncRequest(seed, reason, history), record)
         if result.history_state != ProviderHistoryState.EXACT:
-            raise RuntimeError(f"connection renewal failed: {result.detail}")
+            raise RuntimeError(f"connection renewal failed: {result.detail}") from result.error
         return result
 
     async def repair(

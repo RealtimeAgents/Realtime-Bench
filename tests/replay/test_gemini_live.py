@@ -841,6 +841,39 @@ def test_a_first_connect_refused_for_the_quota_fails_as_an_exhausted_quota(live_
     assert stub.violations == []
 
 
+def test_a_fold_whose_rebuild_is_refused_for_the_quota_fails_as_an_exhausted_quota(
+    live_env, tmp_path
+):
+    """Decision 20 folds the oldest screenshots, and the session, which Gemini Live cannot edit
+    in place, is rebuilt from the history before the decision's input (REBUILD_STEPS;
+    harnesses/default/context.py RealtimeRuntime._run_turn). The server closes the rebuild's
+    connection at its setup with 1011 for an exhausted quota, which the sync takes as broken
+    (live.py GeminiLiveDriver._sync_history). The decision fails for that, not retried, as an
+    exhausted quota, not as the bare provider_request_failed of the sync's own failure."""
+    preset = TOOL_TRANSCRIPT
+    quota = "You exceeded your current quota, please check your plan and billing details."
+    scenario = LONG_SCENARIO[: REBUILD_STEPS[0] + 1]
+    turns = [turn_script(k, step, preset) for k, step in enumerate(scenario)]
+    _, (*_, failed), stub = run_episode(
+        "fold-quota",
+        catalog_config(preset.model),
+        preset.model,
+        scenario,
+        turns,
+        preset,
+        live_env,
+        tmp_path,
+        connection_closes={2: (1011, quota)},
+    )
+    assert failed["invalid_reason"] == "provider_quota_exhausted"
+    assert failed["invalid_detail"] == (
+        f"RuntimeError(\"history synchronization failed: APIError('1011 None. {quota}')\")"
+    )
+    # Not retried: no connection follows the rebuild's.
+    assert {event["conn"] for event in stub.events} == {1, 2}
+    assert stub.violations == []
+
+
 def test_a_call_its_function_schema_rejects_executes_wait(live_env, tmp_path):
     """Decision 0 calls click with its coordinates as strings, which the declared schema
     rejects, though the text parser would read them. The call is no action

@@ -502,6 +502,7 @@ CONTAMINATED = HistorySyncResult(
 )
 
 
+@pytest.mark.parametrize("broken", [False, True], ids=["contaminated", "broken-by-an-error"])
 @pytest.mark.parametrize(
     ("operation", "message"),
     [
@@ -510,12 +511,19 @@ CONTAMINATED = HistorySyncResult(
         ("renew", "connection renewal failed: replayed"),
     ],
 )
-def test_a_session_that_must_come_out_exact_raises_otherwise(operation, message):
+def test_a_session_that_must_come_out_exact_raises_otherwise(operation, message, broken):
     """The three operations before a generation's input raise, with the runtime's words, when
     their sync leaves the session other than exact (harnesses/default/context.py before the
-    session moved into the encoder). Each sync is recorded first."""
+    session moved into the encoder), from the error that broke the sync where the driver keeps
+    it (HistorySyncResult.error), which the driver then classifies the failure as. Each sync is
+    recorded first."""
+    left = CONTAMINATED
+    if broken:
+        failure = PermissionError("refused for good")
+        unknown = ProviderHistoryState.UNKNOWN
+        left = HistorySyncResult(SyncDisposition.BROKEN, unknown, "replayed", error=failure)
     with _rig() as rig:
-        rig.encoder.syncs = [CONTAMINATED]
+        rig.encoder.syncs = [left]
         rig.encoder.renewal = "go_away"
         if operation == "recovery":
             rig.encoder.mark_dirty()
@@ -525,10 +533,11 @@ def test_a_session_that_must_come_out_exact_raises_otherwise(operation, message)
             running = rig.encoder.synchronize(request, rig.records)
         else:
             running = rig.encoder.renew(SEED, HISTORY, rig.records)
-        with pytest.raises(RuntimeError, match=f"^{message}$"):
+        with pytest.raises(RuntimeError, match=f"^{message}$") as raised:
             rig.run(running)
+    assert raised.value.__cause__ is left.error
     ((sync, result, error),) = rig.records.calls
-    assert (result, error) == (CONTAMINATED, None)
+    assert (result, error) == (left, None)
     assert sync.reason == {"recovery": "runtime_recovery", "renew": "go_away"}.get(
         operation, "history_block_compaction"
     )
