@@ -306,6 +306,9 @@ from collections import Counter as Counter
 import math as math
 import re as re
 
+from realtime_framework.evaluation.run_records import attempt_rows
+from realtime_framework.evaluation.run_records import lifecycle_records
+
 
 RUN_METRICS_SCHEMA = "realtime_bench.run_metrics.v1"
 
@@ -385,21 +388,6 @@ def _distribution(
     return result
 
 
-def _load_lifecycle(path: Path) -> list[dict]:
-    if not path.is_file():
-        return []
-    records = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{line_number}: lifecycle record is not an object")
-            records.append(record)
-    return records
-
-
 def summarize_run_metrics(
     lifecycle_path,
     *,
@@ -418,7 +406,7 @@ def summarize_run_metrics(
     predicate is known and expose their denominator explicitly. ``fps`` is the model-input frame
     rate, whose frames ``tokens_per_frame`` is charged per.
     """
-    records = _load_lifecycle(Path(lifecycle_path))
+    records = lifecycle_records(lifecycle_path)
     if validate_decision_count and len(records) != total_decisions:
         raise ValueError(
             f"lifecycle decision count {len(records)} != timeline count {total_decisions}"
@@ -563,9 +551,8 @@ def summarize_reasoning_replay(trace_path, *, attempt_id: str) -> dict | None:
     None where no request recorded one: only LiteLLM's APIs send past reasoning."""
     sent = [
         row["payload"]
-        for row in rows(trace_path, {TraceEvent.MODEL_REQUEST_SENT.value})
-        if row["attempt_id"] == attempt_id
-        and row["payload"].get("purpose") == "generation"
+        for row in attempt_rows(trace_path, {TraceEvent.MODEL_REQUEST_SENT.value}, attempt_id)
+        if row["payload"].get("purpose") == "generation"
         and "replayed_reasoning" in row["payload"]
     ]
     if not sent:
@@ -621,9 +608,7 @@ def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -
     went_in = {}  # observation id -> its FrameSent
     refused = set()  # frame blocks the provider refused
     events = {"KernelRecord", TraceEvent.SESSION_DELIVERY.value, TraceEvent.FRAME_SENT.value}
-    for row in rows(trace_path, events):
-        if row["attempt_id"] != attempt_id:
-            continue
+    for row in attempt_rows(trace_path, events, attempt_id):
         payload = row["payload"]
         if row["event"] == "KernelRecord":
             if payload["kind"] in kernel:
@@ -715,9 +700,9 @@ Exit 0 means complete/matched; exit 1 means missing, partial, unscored, or misma
 import argparse as argparse
 import sys as sys
 
-from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation.run_records import model_input_fps
+from realtime_framework.evaluation.run_records import trace_matches_summary
 
 # Every episode has exactly one outcome; only pass scores 1. An unsolved episode that reached the
 # scored horizon (max_minutes, 5 by default) is a timeout, whatever the task reported at its end;
@@ -915,30 +900,6 @@ def _concluded(invalid_run, failures, evaluation, benchmark_eligible, stop_reaso
     )
 
 
-def _episode_trace_ok(summary_path, summary) -> bool:
-    declared = summary.get("episode_trace")
-    if not isinstance(declared, dict) or declared.get("schema") != EPISODE_TRACE_SCHEMA:
-        return False
-    artifact = declared.get("artifact")
-    if not isinstance(artifact, str) or not artifact or Path(artifact).name != artifact:
-        return False
-    try:
-        verified = validate_episode_trace(Path(summary_path).parent / artifact)
-    except Exception:
-        return False
-    required = {
-        TraceEvent.SNAPSHOT_FROZEN.value,
-        TraceEvent.SCORE_PRODUCED.value,
-        TraceEvent.EPISODE_FINISHED.value,
-    }
-    return (
-        verified["event_count"] == declared.get("event_count")
-        and verified["head_event_sha256"] == declared.get("head_event_sha256")
-        and verified["last_event"] == TraceEvent.EPISODE_FINISHED.value
-        and required.issubset(verified["events"])
-    )
-
-
 def summary_ok(
     path,
     *,
@@ -992,7 +953,7 @@ def summary_ok(
             or verification["resolved"] is not summary["solved"]
         ):
             return False
-        if not _episode_trace_ok(path, summary):
+        if not trace_matches_summary(Path(path).parent, summary.get("episode_trace")):
             return False
     expected = {
         "suite_id": expected_suite_id,
@@ -1013,8 +974,7 @@ def summary_ok(
         "runtime_config_hash": expected_runtime_config_hash,
         "interactables_protocol": expected_interactables_protocol,
     }
-    # Runs recorded before the frame rates were split fed the model at the environment rate.
-    summary.setdefault("model_input_fps", summary.get("fps"))
+    summary["model_input_fps"] = model_input_fps(summary)
     return all(value is None or summary.get(field) == value for field, value in expected.items())
 
 
@@ -1087,28 +1047,19 @@ from datetime import datetime as datetime
 from datetime import timezone as timezone
 from statistics import median as median
 
+from realtime_framework.evaluation.run_records import ACTIVE_LOOP
+from realtime_framework.evaluation.run_records import INSPECTIONS
+from realtime_framework.evaluation.run_records import LIFECYCLE
+from realtime_framework.evaluation.run_records import RECORDING_TIMING
+from realtime_framework.evaluation.run_records import SUMMARY
+from realtime_framework.evaluation.run_records import TRACE
+from realtime_framework.evaluation.run_records import TRAJECTORY
+from realtime_framework.evaluation.run_records import decision_of
+from realtime_framework.evaluation.run_records import read_json
+from realtime_framework.evaluation.run_records import read_rows
+from realtime_framework.evaluation.run_records import sole_attempt_rows
+
 VERSION = "active-overlay-v3"
-
-
-def read_json(path):
-    return json.loads(Path(path).read_text()) if Path(path).is_file() else {}
-
-
-def rows(path, events=None):
-    if not Path(path).is_file():
-        return []
-    result = []
-    with Path(path).open() as handle:
-        for line in handle:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                if handle.read().strip():
-                    raise
-                break  # An interrupted writer may leave an incomplete final line.
-            if events is None or value.get("event") in events:
-                result.append(value)
-    return result
 
 
 def atomic_json(path, value):
@@ -1130,7 +1081,7 @@ def finite(value):
 
 
 def recording_origin(run_dir):
-    metadata = read_json(run_dir / "recording-timing.json")
+    metadata = read_json(run_dir / RECORDING_TIMING)
     if not finite(metadata.get("first_frame_unix_s")):
         raise ValueError(
             "Missing/ambiguous screen-recorder timestamps or frame-composited recording"
@@ -1142,27 +1093,25 @@ def recording_origin(run_dir):
     }
 
 
-def _active_trace(run_dir):
-    trace = rows(
-        run_dir / "episode_trace.jsonl",
-        {
-            "EpisodeStarted",
-            "EpisodeFinished",
-            "ScoreProduced",
-            "ObservationCaptured",
-            "InferenceStarted",
-            "InferenceCompleted",
-            "ActionProposed",
-            "ActionResolved",
-            "SnapshotFrozen",
-            "ActiveLoopStarted",
-            "ActiveLoopEnded",
-        },
-    )
-    attempts = {e.get("attempt_id") for e in trace if e["event"] == "EpisodeStarted"}
-    if len(attempts) > 1:
-        raise ValueError("Multiple trace attempts require explicit recording-to-attempt selection")
-    return trace
+# The trace records the active interval and the timeline are drawn from.
+_TIMELINE_EVENTS = frozenset(
+    {
+        "EpisodeStarted",
+        "EpisodeFinished",
+        "ScoreProduced",
+        "ObservationCaptured",
+        "InferenceStarted",
+        "InferenceCompleted",
+        "ActionProposed",
+        "ActionResolved",
+        "SnapshotFrozen",
+        "ActiveLoopStarted",
+        "ActiveLoopEnded",
+    }
+)
+# The records each is derived from, which a cache of either keys on (harbor_viewer.py).
+ACTIVE_INTERVAL_SOURCES = (ACTIVE_LOOP, SUMMARY, TRACE, LIFECYCLE)
+TIMELINE_SOURCES = (*ACTIVE_INTERVAL_SOURCES, TRAJECTORY, INSPECTIONS, RECORDING_TIMING)
 
 
 def active_interval(run_dir, trace=None):
@@ -1171,14 +1120,14 @@ def active_interval(run_dir, trace=None):
     Runs record it in ``active-loop.json``; runs without that file derive it from their traces.
     """
     run_dir = Path(run_dir)
-    explicit = read_json(run_dir / "active-loop.json")
+    explicit = read_json(run_dir / ACTIVE_LOOP)
     if finite(explicit.get("start_unix_s")) and finite(explicit.get("end_unix_s")):
         start, end = explicit["start_unix_s"], explicit["end_unix_s"]
         boundary = "explicit_scored_episode_boundaries"
     else:
-        summary = read_json(run_dir / "run_summary.json")
-        trace = _active_trace(run_dir) if trace is None else trace
-        life = rows(run_dir / "action_lifecycle.jsonl")
+        summary = read_json(run_dir / SUMMARY)
+        trace = sole_attempt_rows(run_dir / TRACE, _TIMELINE_EVENTS) if trace is None else trace
+        life = read_rows(run_dir / LIFECYCLE)
         snapshots = [e["wall_time_ns"] / 1e9 for e in trace if e["event"] == "SnapshotFrozen"]
         observations = [
             e["payload"].get("timestamp") for e in trace if e["event"] == "ObservationCaptured"
@@ -1217,9 +1166,9 @@ def active_interval(run_dir, trace=None):
 
 def active_timeline(run_dir):
     run_dir = Path(run_dir)
-    summary = read_json(run_dir / "run_summary.json")
-    trace = _active_trace(run_dir)
-    life = rows(run_dir / "action_lifecycle.jsonl")
+    summary = read_json(run_dir / SUMMARY)
+    trace = sole_attempt_rows(run_dir / TRACE, _TIMELINE_EVENTS)
+    life = read_rows(run_dir / LIFECYCLE)
     start, end, boundary = active_interval(run_dir, trace)
     alignment = recording_origin(run_dir)
     begin = start - alignment["recording_start_unix_s"]
@@ -1232,11 +1181,11 @@ def active_timeline(run_dir):
             inference.append(
                 {"decision": e["payload"].get("decision"), "start": e["wall_time_ns"] / 1e9}
             )
-    decisions = {r.get("decision", r.get("tick")): r for r in rows(run_dir / "trajectory.jsonl")}
+    decisions = {decision_of(r): r for r in read_rows(run_dir / TRAJECTORY)}
     thinking = {
         key: r.get("thinking") for key, r in decisions.items() if isinstance(r.get("thinking"), str)
     }
-    inspections = rows(run_dir / "tool_calls.jsonl")
+    inspections = read_rows(run_dir / INSPECTIONS)
     inspections_by_call = {r.get("call_id"): r for r in inspections if r.get("call_id")}
     inspections_by_observation = {}
     for inspection in inspections:
@@ -1659,7 +1608,7 @@ def report(root):
             path = (
                 cell_path.parent
                 / expected["task_id"].split("__", 1)[-1].replace("/", "_")
-                / "run_summary.json"
+                / SUMMARY
             )
             identity = {
                 field: expected.get(field, cell.get(field))
@@ -1682,10 +1631,7 @@ def report(root):
                     "public_category",
                 )
             }
-            if identity["model_input_fps"] is None:
-                # Runs recorded before the frame rates were split fed the model at the
-                # environment rate.
-                identity["model_input_fps"] = identity["fps"]
+            identity["model_input_fps"] = model_input_fps(identity)
             identity["clock_mode"] = expected.get("clock_mode", cell.get("clock_mode", "wall"))
             identity["tokens_per_frame"] = expected.get("tokens_per_frame", cell.get("tokens_per_frame"))
             row = {
@@ -1752,7 +1698,7 @@ def report(root):
                     else:
                         # A run that made no decision wrote no lifecycle; read it as the run's
                         # own metrics did (summarize_run_metrics).
-                        records = _load_lifecycle(path.parent / "action_lifecycle.jsonl")
+                        records = lifecycle_records(path.parent / LIFECYCLE)
                     if len(records) != summary["decisions"] or len(
                         {r["decision"] for r in records}
                     ) != len(records):
@@ -1896,7 +1842,7 @@ def report(root):
         }
     # Archived attempts are spend, never additional scored tasks.
     output["retry_attempts"] = []
-    for path in sorted(root.glob("*/*.stale.*/run_summary.json")):
+    for path in sorted(root.glob(f"*/*.stale.*/{SUMMARY}")):
         try:
             summary = json.loads(path.read_text())
             cost = (summary.get("cost_accounting") or {})
@@ -2117,10 +2063,12 @@ def reevaluate_main():
 import threading
 from realtime_framework.clock import Clock
 from realtime_framework.entity.records import (
+    EPISODE_TRACE_SCHEMA,
     GENESIS_HASH,
     _jsonable,
     canonical_json_bytes,
     canonical_sha256,
+    validate_episode_trace,
 )
 
 
