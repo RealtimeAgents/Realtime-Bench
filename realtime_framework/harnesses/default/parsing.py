@@ -19,6 +19,7 @@ from dataclasses import dataclass as dataclass
 from typing import Any as Any
 
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import ActionTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -615,6 +616,469 @@ def _text_candidates(text: str):
                 json.dumps(parsed, ensure_ascii=False, separators=(",", ":")),
                 "function_call" if "(" in cleaned else "text_shorthand",
             )
+
+
+_KNOWN_ACTION_NAMES = frozenset(
+    {
+        "click",
+        "left_click",
+        "right_click",
+        "double_click",
+        "triple_click",
+        "mouse_down",
+        "mouse_up",
+        "type",
+        "key",
+        "press",
+        "hotkey",
+        "keypress",
+        "hold_key",
+        "scroll",
+        "drag",
+        "move",
+        "mouse_move",
+        "wait",
+        "done",
+        "fail",
+        "give_up",
+    }
+)
+
+
+def _load_action_object(value: str) -> dict | None:
+    try:
+        parsed = json.loads(value, object_pairs_hook=unique_object)
+    except (ValueError, RecursionError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalized_action_name(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = re.split(r"[./]", value.strip())[-1]
+    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    name = re.sub(r"[\s-]+", "_", name).lower()
+    aliases = {
+        "tap": "click",
+        "click_at": "click",
+        "leftclick": "left_click",
+        "rightclick": "right_click",
+        "doubleclick": "double_click",
+        "tripleclick": "triple_click",
+        "mousedown": "mouse_down",
+        "mouseup": "mouse_up",
+        "mousemove": "mouse_move",
+        "press_key": "key",
+        "key_press": "key",
+        "send_keys": "key",
+        "type_text": "type",
+        "input_text": "type",
+        "typewrite": "type",
+        "write": "type",
+        "move_to": "move",
+        "holdkey": "hold_key",
+        "press_and_hold": "hold_key",
+        "finish": "done",
+        "finished": "done",
+        "complete": "done",
+        "completed": "done",
+    }
+    return aliases.get(name, name)
+
+
+def _normalized_field_name(value: object) -> str:
+    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value).strip())
+    return re.sub(r"[\s-]+", "_", name).lower()
+
+
+def _normalize_action_key_shorthand(data: dict) -> dict | None:
+    """Expand shorthand ``{"click": "P1"}`` action objects.
+
+    Some text checkpoints follow the one-action constraint but serialize the verb as the
+    object's key instead of putting it in an ``action`` field.  Accept that form only when
+    exactly one known verb key is present, then translate its value conservatively into the
+    canonical field for that verb.  Keeping this at the adapter boundary leaves the core
+    action and executor contracts unchanged.
+    """
+    lowered = {_normalized_field_name(key): value for key, value in data.items()}
+    if _normalized_action_name(lowered.get("type")) in _KNOWN_ACTION_NAMES and len(lowered) > 1:
+        return data
+    selector_keys = {
+        "action",
+        "action_name",
+        "action_type",
+        "name",
+        "tool",
+        "tool_name",
+        "command",
+        "operation",
+        "function",
+        "function_call",
+        "tool_call",
+    }
+    if set(lowered) & selector_keys:
+        return data
+
+    action_keys = [key for key in lowered if _normalized_action_name(key) in _KNOWN_ACTION_NAMES]
+    if len(action_keys) != 1:
+        return data
+
+    action_key = action_keys[0]
+    action_name = _normalized_action_name(action_key)
+    payload = lowered.pop(action_key)
+    parameters: dict = {}
+
+    if isinstance(payload, dict):
+        parameters = {_normalized_field_name(key): value for key, value in payload.items()}
+    elif action_name in {
+        "click",
+        "left_click",
+        "right_click",
+        "double_click",
+        "triple_click",
+        "mouse_down",
+        "mouse_up",
+        "move",
+        "mouse_move",
+    }:
+        if isinstance(payload, str):
+            parameters["target"] = payload
+        elif isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters["coordinate"] = list(payload)
+        elif payload is not None:
+            return data
+    elif action_name == "type":
+        if not isinstance(payload, str):
+            return data
+        parameters["text"] = payload
+    elif action_name in {"key", "press", "hotkey", "keypress", "hold_key"}:
+        if isinstance(payload, str):
+            parameters["key"] = payload
+        elif isinstance(payload, (list, tuple)):
+            parameters["keys"] = list(payload)
+        else:
+            return data
+    elif action_name == "scroll":
+        if isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters.update({"dx": payload[0], "dy": payload[1]})
+        elif payload is not None:
+            return data
+    elif action_name == "drag":
+        if isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters.update({"start": payload[0], "end": payload[1]})
+        elif payload is not None:
+            return data
+    elif action_name == "wait":
+        if isinstance(payload, (int, float)) and not isinstance(payload, bool):
+            parameters["duration"] = payload
+        elif payload not in (None, True):
+            return data
+    elif action_name in {"done", "fail", "give_up"}:
+        if payload not in (None, True):
+            return data
+    elif payload is not None:
+        return data
+
+    if set(parameters) & set(lowered):
+        return data
+    return {"action": action_name, **lowered, **parameters}
+
+
+def _normalize_action_object(data: dict) -> dict | None:
+    """Flatten common JSON/tool envelopes into the canonical action object."""
+    data = _normalize_action_key_shorthand(data)
+    if data is None:
+        return None
+    lowered = {_normalized_field_name(key): value for key, value in data.items()}
+    if len(lowered) != len(data):
+        return None
+    if "type" in lowered and _normalized_action_name(lowered["type"]) in _KNOWN_ACTION_NAMES:
+        if "action" in lowered and _normalized_action_name(
+            lowered["action"]
+        ) != _normalized_action_name(lowered["type"]):
+            return None
+        lowered.setdefault("action", lowered.pop("type"))
+    selectors = [
+        lowered[k]
+        for k in (
+            "action",
+            "action_name",
+            "action_type",
+            "name",
+            "tool",
+            "tool_name",
+            "command",
+            "operation",
+        )
+        if isinstance(lowered.get(k), str)
+    ]
+    if len({_normalized_action_name(value) for value in selectors}) > 1:
+        return None
+    nested = None
+    if (
+        sum(
+            isinstance(lowered.get(key), dict) for key in ("function_call", "function", "tool_call")
+        )
+        > 1
+    ):
+        return None
+    for key in ("function_call", "function", "tool_call"):
+        if isinstance(lowered.get(key), dict):
+            nested = lowered[key]
+            break
+    action_value = next(
+        (
+            lowered[key]
+            for key in (
+                "action",
+                "action_name",
+                "action_type",
+                "name",
+                "tool",
+                "tool_name",
+                "command",
+                "operation",
+            )
+            if key in lowered
+        ),
+        None,
+    )
+    if isinstance(action_value, dict):
+        nested = action_value
+        action_value = None
+    top_action_name = _normalized_action_name(action_value)
+    if nested is not None:
+        nested_lowered = {_normalized_field_name(key): value for key, value in nested.items()}
+        nested_selectors = [
+            nested_lowered[key]
+            for key in (
+                "action",
+                "action_name",
+                "action_type",
+                "name",
+                "tool",
+                "tool_name",
+                "command",
+                "operation",
+            )
+            if isinstance(nested_lowered.get(key), str)
+        ]
+        if len({_normalized_action_name(value) for value in nested_selectors}) > 1:
+            return None
+        nested_action_value = next(
+            (
+                nested_lowered[key]
+                for key in (
+                    "action",
+                    "action_name",
+                    "action_type",
+                    "name",
+                    "tool",
+                    "tool_name",
+                    "command",
+                    "operation",
+                )
+                if key in nested_lowered
+            ),
+            None,
+        )
+        nested_action_name = _normalized_action_name(nested_action_value)
+        if (
+            top_action_name in _KNOWN_ACTION_NAMES
+            and nested_action_name in _KNOWN_ACTION_NAMES
+            and top_action_name != nested_action_name
+        ):
+            return None
+        action_name = (
+            nested_action_name
+            if nested_action_name in _KNOWN_ACTION_NAMES
+            else top_action_name or nested_action_name
+        )
+    else:
+        nested_lowered = {}
+        action_name = top_action_name
+
+    if action_name is None:
+        return None
+
+    reserved = {
+        "action",
+        "action_name",
+        "action_type",
+        "name",
+        "tool",
+        "tool_name",
+        "command",
+        "operation",
+        "type",
+        "id",
+        "call_id",
+        "function",
+        "function_call",
+        "tool_call",
+        "arguments",
+        "parameters",
+        "params",
+        "args",
+        "input",
+        "tool_input",
+    }
+    parameters = {key: value for key, value in lowered.items() if key not in reserved}
+    nested_parameters = {key: value for key, value in nested_lowered.items() if key not in reserved}
+    if any(
+        key in parameters and parameters[key] != value for key, value in nested_parameters.items()
+    ):
+        return None
+    parameters.update(nested_parameters)
+    containers = [
+        source[key]
+        for source in (nested_lowered, lowered)
+        for key in ("arguments", "parameters", "params", "args", "input", "tool_input")
+        if key in source
+    ]
+    if len(containers) > 1:
+        return None
+    parameter_container = next(
+        (
+            source[key]
+            for source in (nested_lowered, lowered)
+            for key in (
+                "arguments",
+                "parameters",
+                "params",
+                "args",
+                "input",
+                "tool_input",
+            )
+            if key in source
+        ),
+        None,
+    )
+    if isinstance(parameter_container, str):
+        try:
+            parameter_container = json.loads(parameter_container, object_pairs_hook=unique_object)
+        except (TypeError, ValueError):
+            try:
+                parameter_container = _literal_object(parameter_container)
+            except (SyntaxError, ValueError, TypeError, RecursionError):
+                return None
+    if parameter_container is not None:
+        if not isinstance(parameter_container, dict):
+            return None
+        supplied = {
+            _normalized_field_name(key): value for key, value in parameter_container.items()
+        }
+        if any(key in parameters and parameters[key] != value for key, value in supplied.items()):
+            return None
+        parameters.update(supplied)
+    if "action" in parameters:
+        inner_name = _normalized_action_name(parameters.pop("action"))
+        if action_name in _KNOWN_ACTION_NAMES and inner_name != action_name:
+            return None
+        action_name = inner_name
+
+    field_aliases = {
+        "coordinates": "coordinate",
+        "coords": "coordinate",
+        "position": "coordinate",
+        "location": "coordinate",
+        "point": "coordinate",
+        "target_id": "target",
+        "reference": "target",
+        "ref": "target",
+        "duration_seconds": "duration",
+        "seconds": "duration",
+        "text_to_type": "text",
+        "delta_x": "dx",
+        "delta_y": "dy",
+    }
+    normalized_parameters = {}
+    for key, value in parameters.items():
+        key = field_aliases.get(key, key)
+        if key in normalized_parameters and normalized_parameters[key] != value:
+            return None
+        normalized_parameters[key] = value
+    parameters = normalized_parameters
+    duration_ms = parameters.pop("duration_ms", None)
+    if "duration" not in parameters and isinstance(duration_ms, (int, float, str)):
+        try:
+            parameters["duration"] = float(duration_ms) / 1000
+        except ValueError:
+            parameters["duration"] = duration_ms
+    if action_name == "type" and "text" not in parameters and "value" in parameters:
+        parameters["text"] = parameters.pop("value")
+    if isinstance(parameters.get("keys"), str) and "key" not in parameters:
+        parameters["key"] = parameters.pop("keys")
+    coordinate = parameters.get("coordinate")
+    if isinstance(coordinate, dict):
+        coordinate = {_normalized_field_name(key): value for key, value in coordinate.items()}
+        if "x" in coordinate and "y" in coordinate:
+            parameters.pop("coordinate")
+            parameters.setdefault("x", coordinate["x"])
+            parameters.setdefault("y", coordinate["y"])
+    if action_name == "drag":
+        for field, x_field, y_field in (
+            ("start", "x1", "y1"),
+            ("end", "x2", "y2"),
+        ):
+            point = parameters.get(field)
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                parameters.pop(field)
+                parameters.setdefault(x_field, point[0])
+                parameters.setdefault(y_field, point[1])
+            elif isinstance(point, dict):
+                point = {_normalized_field_name(key): value for key, value in point.items()}
+                if "x" in point and "y" in point:
+                    parameters.pop(field)
+                    parameters.setdefault(x_field, point["x"])
+                    parameters.setdefault(y_field, point["y"])
+
+    for key in (
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "dx",
+        "dy",
+        "duration",
+        "repeat",
+    ):
+        value = parameters.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            number = float(value)
+        except ValueError:
+            continue
+        parameters[key] = int(number) if number.is_integer() else number
+    for key in ("button", "modifier"):
+        if isinstance(parameters.get(key), str):
+            parameters[key] = parameters[key].strip().lower()
+    return {"action": action_name, **parameters}
+
+
+def _action_object(content: str) -> dict | None:
+    if not content:
+        return None
+    loaded = _load_action_object(content)
+    data = _normalize_action_object(loaded) if loaded is not None else None
+    if data is None or data.get("action") not in _KNOWN_ACTION_NAMES:
+        return None
+    return data
+
+
+def text_action(body: str, *, framed: bool) -> tuple[Action | None, object]:
+    """The action one body of text output reads as and, ``framed`` (a streaming action), the value
+    of its frame field: the frame it is based on. Unframed, a frame field stays one of the action's
+    fields, which no action takes."""
+    data = _action_object(body)
+    if data is None:
+        return None, None
+    reference = data.pop("frame", None) if framed else None
+    return ActionTranslator.from_json(data), reference
 
 
 def _action_key(action: Action) -> str:
