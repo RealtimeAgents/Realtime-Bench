@@ -91,8 +91,8 @@ Token-clock decisions are charged by output-token consumption and wall-clock dec
 the world advances by that delay before the proposed action can land. Desktop lifecycle and task
 scoring use their shared owners.
 
-Usage: python -m realtime_framework.evaluation.runner --model gpt-realtime-2 --task <task-id>
-       [--fps 1] [--max-minutes 5] --run-id NAME --results-dir DIR
+Usage: python -m realtime_framework.evaluation.runner --launch FILE --run-id NAME --results-dir DIR
+The Harbor trial worker (evaluation/_trial.py) writes the launch file and execs the runner on it.
 """
 import argparse as argparse
 import json as json
@@ -113,12 +113,10 @@ from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import TransportFailureError
-from realtime_framework.providers.preflight import UnsupportedTokenBudget
-from realtime_framework.providers.preflight import check_episode
-from realtime_framework.providers.preflight import check_token_budget
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
 from realtime_framework.sandbox.actions import GuestEnvironment
+from realtime_framework.evaluation._trial import read_launch
 from realtime_framework.evaluation.reporting import capture_generation_artifact
 from realtime_framework.evaluation.reporting import invalid_evaluation
 from realtime_framework.evaluation.reporting import resolve_run_identity
@@ -130,7 +128,6 @@ from realtime_framework.evaluation.config import OUTPUT_CLOCK_POLICY
 from realtime_framework.evaluation.config import INTERACTABLES_PROTOCOL
 from realtime_framework.evaluation.config import INTERACTABLES_REPRESENTATION
 from realtime_framework.evaluation.config import INTERACTABLES_SCHEMA
-from realtime_framework.evaluation.config import apply_run_defaults
 from realtime_framework.evaluation.config import config_fingerprint
 from realtime_framework.evaluation.config import run_spec_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
@@ -145,20 +142,10 @@ import realtime_tasks.registry as custom_tasks
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
 
-def _model_identity(requested_model, requested_adapter=None):
+def _model_identity(model):
     """Separate the stable catalog key from the actual backend model and adapter."""
-    if catalog.has(requested_model):
-        entry = catalog.get(requested_model)
-        return {
-            "adapter": entry.adapter_type,
-            "model": requested_model,
-            "backend_model": entry.model_name,
-        }
-    return {
-        "adapter": requested_adapter,
-        "model": requested_model,
-        "backend_model": requested_model,
-    }
+    entry = catalog.get(model)
+    return {"adapter": entry.adapter_type, "model": model, "backend_model": entry.model_name}
 
 
 def _distinct(failures: list[dict]) -> list[dict]:
@@ -231,203 +218,50 @@ def _invalid_snapshot(snapshot):
 
 
 # Capture, simulated-time advancement, and action execution live in realtime_framework.sandbox.actions.
-from realtime_framework.evaluation.config import runner_run_spec
-from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
-from realtime_framework.evaluation.run_spec import INTERACTION_MODES
-from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
-from realtime_framework.evaluation.run_spec import PROTOCOLS
-from realtime_framework.evaluation.run_spec import RunSpec
 
 
 def _parser() -> argparse.ArgumentParser:
-    """The runner's arguments, as main() parses them and the emergency summary reads them. A run
-    option not given is None, which takes the runner's default (evaluation/run_spec.py)."""
+    """The runner's arguments, as main() parses them and the emergency summary reads them: the
+    Harbor trial worker's launch file, which gives everything the episode runs, and where the
+    episode's results go."""
     p = argparse.ArgumentParser()
     p.add_argument(
         "--launch",
         type=Path,
-        help="the Harbor trial worker's launch file (evaluation/_trial.py), whose plan gives the "
-        "run options, the model, its reasoning effort and the task in place of their arguments",
-    )
-    p.add_argument(
-        "--adapter",
-        default=None,
-        help="adapter_type; optional when --model is a catalog key (then it is derived).",
-    )
-    p.add_argument(
-        "--model",
-        help="a catalog key (realtime_framework/providers/registry.py) OR a raw backend id / local model path",
-    )
-    p.add_argument("--fps", type=float, default=None)
-    p.add_argument(
-        "--model-input-fps",
-        type=float,
-        default=None,
-        help="frames per second fed to the model (default: --fps, the environment's rate)",
-    )
-    p.add_argument(
-        "--interaction-mode",
-        choices=INTERACTION_MODES,
-        default=None,
-        help="turn_based: one frame per model generation (the leaderboard); streaming: frames "
-        "pushed into a live session while the model generates.",
-    )
-    p.add_argument(
-        "--clock",
-        choices=tuple(PROTOCOLS),
-        default=None,
-        help="wall uses deployment time; token places actions at n/B frame positions "
-        f"(default: {ENTRY_DEFAULTS['runner']['clock_mode']}).",
-    )
-    p.add_argument(
-        "--tokens-per-frame",
-        default=None,
-        help="positive token-to-time rate B per frame (default: "
-        f"{ENTRY_DEFAULTS['runner']['tokens_per_frame']}); "
-        "'unlimited' acts at the observed tick, then advances one frame.",
-    )
-    p.add_argument(
-        "--reasoning-effort",
-        default=None,
-        help="model-native reasoning effort; catalog models validate their own range.",
-    )
-    p.add_argument("--task", help="registered task id")
-    p.add_argument("--seed", default=None, help="task seed (default: SEED where it is set)")
-    p.add_argument("--max-minutes", type=float, default=None)
-    p.add_argument(
-        "--think-budget-s",
-        type=float,
-        default=None,
-        help="Deliberation clock: cumulative token-derived simulated seconds in token "
-        "mode, wall seconds in wall mode. Legacy diagnostic only; the maintained "
-        "protocol leaves this unset and terminates at T. Turn-based only.",
-    )
-    p.add_argument(
-        "--per-move-cap-s",
-        type=float,
-        default=None,
-        help="Per-move deliberation cap in the active clock's seconds. A move over it "
-        "times out (no action that turn; costs exactly the cap from the "
-        "deliberation clock). Legacy diagnostic only; the maintained protocol "
-        "leaves this unset. Turn-based only.",
-    )
-    p.add_argument(
-        "--protocol", default=None, help="Identity label for the executable evaluation protocol."
+        required=True,
+        help="the Harbor trial worker's launch file (evaluation/_trial.py): the run options, the "
+        "model, its reasoning effort and the task",
     )
     p.add_argument("--run-id", default=None)
     p.add_argument("--results-dir", default="results")
     p.add_argument("--report-root", type=Path, help="Episode launch directory to validate and report")
     p.add_argument("--report-output", type=Path, help="Also write the episode report here")
-    p.add_argument(
-        "--graphics-mode",
-        choices=("cpu", "gpu"),
-        default=os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
-        help="Desktop browser renderer: cpu uses SwiftShader; gpu uses NVIDIA Vulkan.",
-    )
-    p.add_argument(
-        "--recording-encoder",
-        choices=("cpu", "gpu"),
-        default=os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
-        help="Screen recording encoder: cpu uses libx264; gpu uses NVENC.",
-    )
     return p
 
 
-# What a launch file gives in place of the runner's arguments.
-_LAUNCHED = (
-    "adapter", "model", "task", "reasoning_effort", "clock", "tokens_per_frame", "fps",
-    "model_input_fps", "interaction_mode", "max_minutes", "seed", "protocol", "think_budget_s",
-    "per_move_cap_s",
-)  # fmt: skip
-
-
-def _run_spec(p: argparse.ArgumentParser, a) -> RunSpec:
-    """The run options main() runs with, from the arguments ``a`` it parsed with ``p``, or from
-    the plan of the launch file they name, whose model, reasoning effort and task are set in
-    ``a``."""
-    if a.launch is None:
-        if a.model is None or a.task is None:
-            p.error("--model and --task are required without --launch")
-        try:
-            return runner_run_spec(a)
-        except ValueError as exc:
-            p.error(str(exc))
-    given = [name for name in _LAUNCHED if getattr(a, name) is not None]
-    if given:
-        p.error(f"--launch gives {', '.join(given)}; omit them")
-    plan = json.loads(a.launch.read_text())["plan"]
-    (model,) = plan["models"]
-    (a.task,) = plan["tasks"]
-    a.model, a.reasoning_effort = model["key"], model["reasoning_effort"]
-    return RunSpec(**{option: plan["runtime"][option] for option in PLAN_OPTIONS})
-
-
 def main():
-    p = _parser()
-    a = p.parse_args()
-    spec = _run_spec(p, a)
-    apply_run_defaults(a)
+    a = _parser().parse_args()
+    launch = read_launch(a.launch)
+    spec = launch.spec
     # spec.fps is the environment's frame rate (task clock, ticks, loop, scored world time);
     # spec.model_input_fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
     env_fps, model_input_fps = spec.fps, spec.model_input_fps
     tokens_per_frame, protocol = spec.tokens_per_frame, spec.protocol
-    requested_model_identity = _model_identity(a.model, a.adapter)
-    catalog_entry = catalog.get(a.model) if catalog.has(a.model) else None
-    reasoning_effort = a.reasoning_effort
-    if catalog_entry is not None:
-        try:
-            catalog.validate_reasoning_effort(a.model, reasoning_effort)
-        except ValueError as exc:
-            p.error(str(exc))
-    benchmark_cell_eligible = bool(
-        catalog_entry.benchmark_eligible if catalog_entry is not None else True
+    requested_model_identity = _model_identity(launch.model)
+    catalog_entry = catalog.get(launch.model)
+    reasoning_effort = launch.reasoning_effort
+    benchmark_cell_eligible = bool(catalog_entry.benchmark_eligible)
+    comparison_scope = catalog_entry.comparison_scope
+    # The trial worker applied every pre-run rule to this run before it wrote the launch file
+    # (evaluation/_trial.py main), which the runner runs as written. B controls simulated time
+    # rather than response length; only the remaining episode horizon and native model limits
+    # can bound a decision.
+    ctask = custom_tasks.get(launch.task)
+    cfg = catalog.to_model_config(
+        launch.model,
+        fps=model_input_fps,
+        reasoning_effort=reasoning_effort,
     )
-    comparison_scope = catalog_entry.comparison_scope if catalog_entry is not None else "ad_hoc"
-    if not benchmark_cell_eligible and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") != "1":
-        p.error(
-            f"catalog cell {a.model!r} is excluded from maintained benchmark results; "
-            "set ALLOW_EXPERIMENTAL_MODEL=1 only for explicitly non-comparable diagnostics"
-        )
-    try:
-        check_token_budget(
-            requested_model_identity["adapter"],
-            clock_mode=spec.clock_mode,
-            tokens_per_frame=tokens_per_frame,
-        )
-    except UnsupportedTokenBudget as exc:
-        p.error(str(exc))
-    # A catalog key (e.g. gpt-realtime-2, claude-opus-5) sets the adapter + backend id/path +
-    # per-model defaults from realtime_framework/providers/registry.py; a raw id/path still works
-    # if --adapter is given. B controls simulated time rather than response length; only the
-    # remaining episode horizon and native model limits can bound a decision.
-    if catalog_entry is None and not a.adapter:
-        p.error("--adapter is required when --model is not a catalog key")
-    # Every pre-run rule on the model, clock, interaction mode and task reads only them, so a run
-    # they refuse is refused here, before any container starts, as an argument error.
-    try:
-        ctask = custom_tasks.get(a.task)
-        if catalog_entry is not None:
-            cfg = catalog.to_model_config(
-                a.model,
-                fps=model_input_fps,
-                reasoning_effort=reasoning_effort,
-            )
-        else:
-            cfg = ModelConfig(
-                adapter_type=a.adapter,
-                model_name=a.model,
-                fps=model_input_fps,
-                reasoning_effort=reasoning_effort,
-            )
-        check_episode(
-            cfg,
-            clock_mode=spec.clock_mode,
-            task=ctask,
-            env_fps=env_fps,
-            interaction_mode=spec.interaction_mode,
-        )
-    except ValueError as exc:
-        p.error(str(exc))
     clocks = episode_clocks(spec.clock_mode, env_fps)
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
@@ -442,7 +276,7 @@ def main():
     episode_trace.emit(
         TraceEvent.EPISODE_STARTED,
         {
-            "task_id": a.task,
+            "task_id": launch.task,
             "requested_model": requested_model_identity,
             "clock_mode": spec.clock_mode,
             "mode": spec.mode,
@@ -456,8 +290,8 @@ def main():
             "protocol": protocol,
             "benchmark_eligible": benchmark_cell_eligible,
             "comparison_scope": comparison_scope,
-            "graphics_mode": a.graphics_mode,
-            "recording_encoder": a.recording_encoder,
+            "graphics_mode": launch.graphics_mode,
+            "recording_encoder": launch.recording_encoder,
         },
     )
 
@@ -471,8 +305,8 @@ def main():
         prepare_episode_report(
             spec,
             cfg,
-            model=a.model,
-            task=a.task,
+            model=launch.model,
+            task=launch.task,
             reasoning_effort=reasoning_effort,
             results_dir=a.results_dir,
         )
@@ -1057,7 +891,7 @@ def main():
             "backend_model": cfg.model_name,
         }
         run_identity = resolve_run_identity(
-            task_id=a.task,
+            task_id=launch.task,
             ctask=ctask,
             **effective_model_identity,
             mode=spec.mode,
@@ -1072,7 +906,7 @@ def main():
         failures = _distinct(invalid_runs)
         summ = {
             **run_identity,
-            "instance_id": a.task,
+            "instance_id": launch.task,
             "task_description": task,
             "reasoning_effort": reasoning_effort,
             "benchmark_eligible": benchmark_cell_eligible,
@@ -1279,9 +1113,10 @@ def set_up_agent(
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
     The configuration has passed the pre-run rules (providers/preflight.py check_episode), which
-    main() applies before it starts the container. ``instruction`` is the task description and
-    ``model`` the model identity the tool trace records. ``open_capture(text_observation)``
-    returns the scene capture for the observation form the model's context policy names.
+    the trial worker applies before it writes the launch file main() runs (evaluation/_trial.py).
+    ``instruction`` is the task description and ``model`` the model identity the tool trace
+    records. ``open_capture(text_observation)`` returns the scene capture for the observation form
+    the model's context policy names.
     ``clock`` is the episode's operational clock, which the agent reads (real time when omitted).
     ``env_fps`` is the environment frame rate, which may not be below the model-input rate
     ``cfg.fps`` and which the clock note describes where the two differ. What this makes is
@@ -1385,22 +1220,22 @@ def _write_emergency_summary(
     decisions: int = 0,
     actions_executed: int = 0,
 ):
-    """The summary of an invalid run main() wrote none for, from the arguments main() parsed: a
-    failure to set up, or one building the summary after the episode (main). The run is invalid
-    for the first of ``failures``, each a different one."""
-    p = _parser()
-    a = p.parse_args()
+    """The summary of an invalid run main() wrote none for, from the arguments main() parsed and
+    the launch file they name: a failure to set up, or one building the summary after the episode
+    (main). The run is invalid for the first of ``failures``, each a different one."""
+    a = _parser().parse_args()
     if not a.run_id:
         return
-    spec = _run_spec(p, a)
+    launch = read_launch(a.launch)
+    spec = launch.spec
     run_dir = Path(a.results_dir) / a.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     path = run_dir / "run_summary.json"
     if path.exists():
         return
     run_identity = resolve_run_identity(
-        task_id=a.task,
-        **_model_identity(a.model, a.adapter),
+        task_id=launch.task,
+        **_model_identity(launch.model),
         mode=spec.mode,
         cap=spec.duration_minutes,
         protocol=spec.protocol,
@@ -1429,7 +1264,7 @@ def _write_emergency_summary(
         path,
         {
             **run_identity,
-            "instance_id": a.task,
+            "instance_id": launch.task,
             "max_minutes": spec.duration_minutes,
             "seed": spec.seed,
             "clock_mode": spec.clock_mode,

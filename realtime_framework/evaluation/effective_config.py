@@ -4,7 +4,6 @@
 
 Entry points (each with its own defaults):
 
-- ``runner``: ``python -m realtime_framework.evaluation.runner --model M --task T``.
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
   loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
@@ -53,7 +52,7 @@ _EXTRA_VARIABLES = frozenset(
         "PYTHONPATH", "TASK_SUITE", "TASK_PORT_OFFSET", "SANDBOX_DISPLAY_NUMBER",
         "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT", "VNC_PORT", "NOVNC_PORT",
         "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
-        # The --seed default of the runner's and the trial worker's command lines.
+        # The --seed default of the trial worker's command line.
         "SEED",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
@@ -256,7 +255,7 @@ class _Task:
 
 
 def _probe_runner(request: dict) -> dict:
-    """Run runner main() for each (model, task) up to its decision loop."""
+    """Run runner main() on each (model, task)'s launch file up to its decision loop."""
     import realtime_framework.evaluation.runner as runner  # first: the runner's import-time reads
 
     attribution = dict(request["attribution"])
@@ -358,12 +357,11 @@ def _probe_runner(request: dict) -> dict:
     runner.run_stream = run_stream
     scratch = Path(request["scratch"])
     results = {}
-    for index, (model, task, argv, *launch) in enumerate(request["runs"]):
+    for index, (model, task, argv, launch) in enumerate(request["runs"]):
         results_dir = scratch / f"run-{index}"
-        if launch:
-            # The trial's settings, as the trial worker writes them (evaluation/_trial.py main).
-            results_dir.mkdir(parents=True)
-            (results_dir / LAUNCH_FILE).write_text(json.dumps(launch[0]))
+        # The trial's settings, as the trial worker writes them (evaluation/_trial.py main).
+        results_dir.mkdir(parents=True)
+        (results_dir / LAUNCH_FILE).write_text(json.dumps(launch))
         argv = [arg.replace("<results>", results_dir.as_posix()) for arg in argv]
         state.clear()
         state.update(attribution=dict(attribution), claimed=set(), start=_snapshot())
@@ -630,7 +628,6 @@ def default_entries() -> list[str]:
     files = sorted((ROOT / "configs" / "runs").glob("*.yaml"))
     files += sorted((ROOT / "configs" / "jobs").glob("*.yaml"))
     return [
-        "runner",
         "trial",
         "harbor",
         *(f"harbor:{path.relative_to(ROOT).as_posix()}" for path in files),
@@ -700,10 +697,6 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
 
 def _entry(entry: str, *, environ, env_file, models, tasks, scratch) -> dict:
     shell = {name: "shell" for name in environ}
-    if entry == "runner":
-        runs = [(model, task, ["--model", model, "--task", task])
-                for model, task in _cells(models, tasks)]
-        return _runner_entry(environ, shell, runs, env_file=env_file, scratch=scratch)
     if entry == "trial":
         launch = {
             (tuple(sorted(environ.items())), tuple(sorted(shell.items())), sys.executable): [

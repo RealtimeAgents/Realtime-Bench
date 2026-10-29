@@ -18,21 +18,21 @@ MODEL, TASK = "claude-opus-5", "gh_timed_chess"
 KEY = "sk-export-test-not-a-key"
 
 
-def test_runner_and_trial_reach_the_decision_loop():
+def test_the_trial_reaches_the_decision_loop():
+    """The trial worker's dry run and the runner on its launch file, each in a fresh interpreter,
+    as the trial worker execs it."""
     environ = {"HOME": os.environ.get("HOME", "/"), "PATH": "/usr/bin:/bin"}
     environ["OPENROUTER_API_KEY"] = KEY
     exported = export(
         environ=environ,
         env_file="/nonexistent/.env",
-        entries=["runner", "trial"],
+        entries=["trial"],
         models=[MODEL],
         tasks=[TASK],
     )
-    runner = exported["entries"]["runner"]["models"][MODEL]
     trial = exported["entries"]["trial"]["models"][MODEL]
-    assert runner["error"] is None and trial["error"] is None
-    # Each entry point keeps its own default clock (run_spec.py ENTRY_DEFAULTS).
-    assert runner["run"]["clock_mode"] == "token" and trial["run"]["clock_mode"] == "wall"
+    assert trial["error"] is None
+    assert trial["run"]["clock_mode"] == "wall"  # the trial worker's default (run_spec.py)
     # The hash _trial's runner records before the episode (reporting.py prepare_episode_report)
     # and after setup (runner.py main) agree.
     assert trial["expected_runtime_config_hash"] == trial["runtime_config_hash"]

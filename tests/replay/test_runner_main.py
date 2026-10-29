@@ -11,7 +11,6 @@ run_summary.json (runner.py main).
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 import traceback
@@ -34,9 +33,12 @@ from realtime_framework.evaluation import reporting, runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 
+from ..launch import trial_launch
 from ..shell.test_inputs import kernel_log, replay_inputs
 
 S = 1_000_000_000  # nanoseconds
+# The task the trial worker writes into the launch file; the runner runs the fake task in its place.
+WEB = "rt_waitlist_fit"
 FPS = 1
 MAX_MINUTES = 0.0625
 HORIZON_S = MAX_MINUTES * 60
@@ -181,7 +183,7 @@ def run_main(
     clock_mode="wall",
     emergency=False,
     scene_capture=None,
-    model_args=("--model", "fake-model", "--adapter", "anthropic_messages"),
+    model_args=("--catalog-model", "claude-opus-5-anthropic"),
     setup_error=None,
 ) -> dict:
     """Run main() for ``task`` and return its run_summary.json. ``clock`` is the operational
@@ -192,8 +194,9 @@ def run_main(
     arguments it calls run_stream with, and the code main() exits with (None when it returns).
     With ``emergency`` an exception main() lets out goes to the emergency summary, as the
     __main__ block hands it over, and ``seen["escaped"]`` gets its traceback. ``scene_capture``
-    is the one set_up_agent opens, and ``model_args`` name the model. ``setup_error`` is raised
-    by set_up_agent where agent.initialize() raises, in the provider's setup."""
+    is the one set_up_agent opens, and ``model_args`` name the model to the trial worker, which
+    writes the launch file main() runs. ``setup_error`` is raised by set_up_agent where
+    agent.initialize() raises, in the provider's setup."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
@@ -221,24 +224,19 @@ def run_main(
     clock_args = ["--clock", clock_mode]
     if clock_mode == "token":
         clock_args += ["--tokens-per-frame", "unlimited"]
-    argv = [
-        "runner", "--task", "fake_task", *model_args,
-        *clock_args, "--fps", str(FPS), "--max-minutes", str(MAX_MINUTES),
-        "--run-id", "run", "--results-dir", str(tmp_path),
-    ]  # fmt: skip
-    with (
-        mock.patch.object(sys, "argv", argv),
-        # main() writes SANDBOX_GRAPHICS_MODE and SCREEN_RECORDING_ENCODER into os.environ.
-        mock.patch.dict(os.environ),
-        mock.patch.object(runner, "episode_clocks", episode_clocks),
-        mock.patch.object(runner, "R", DESKTOP),
-        mock.patch.object(runner, "GuestClient", lambda **_: guest),
-        mock.patch.object(runner.custom_tasks, "get", lambda task_id: task),
-        # The fake model and task are set_up_agent's stand-in's, not held to the pre-run rules.
-        mock.patch.object(runner, "check_episode", lambda *args, **kwargs: None),
-        mock.patch.object(runner, "set_up_agent", set_up_agent),
-        mock.patch.object(runner, "run_stream", run_stream),
-    ):
+    with pytest.MonkeyPatch.context() as patch:
+        launch = trial_launch(
+            patch, tmp_path, *model_args, "--task", WEB, *clock_args, "--fps", str(FPS),
+            "--duration-minutes", str(MAX_MINUTES),
+        )  # fmt: skip
+        argv = ["--launch", str(launch), "--run-id", "run", "--results-dir", str(tmp_path)]
+        patch.setattr(sys, "argv", ["runner", *argv])
+        patch.setattr(runner, "episode_clocks", episode_clocks)
+        patch.setattr(runner, "R", DESKTOP)
+        patch.setattr(runner, "GuestClient", lambda **_: guest)
+        patch.setattr(runner.custom_tasks, "get", lambda task_id: task)
+        patch.setattr(runner, "set_up_agent", set_up_agent)
+        patch.setattr(runner, "run_stream", run_stream)
         seen["exit_code"] = None
         try:
             runner.main()
@@ -609,7 +607,7 @@ def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path
     guest = FakeGuest()
     task = FakeTask(clock, guest, "task_success", True)
     summary = run_main(
-        tmp_path, task, FakeAgent(clock), clock, guest, model_args=("--model", "jev-1.13")
+        tmp_path, task, FakeAgent(clock), clock, guest, model_args=("--catalog-model", "jev-1.13")
     )
     assert (summary["run_status"], summary["benchmark_eligible"]) == ("experimental", False)
     verification = {"resolved": True, "evaluation_version": 1, "progress": 0.5}
@@ -837,13 +835,15 @@ def test_a_run_that_fails_to_set_up_in_a_used_run_dir_leaves_its_own_summary(tmp
 
 
 def test_the_emergency_summary_reads_the_arguments_as_main_parses_them(tmp_path, monkeypatch):
-    """A failure main() lets out is written as a setup error from the run's arguments (runner.py,
-    the __main__ block): an option written --name=value is the one written --name value."""
+    """A failure main() lets out is written as a setup error from the run's arguments and the
+    launch file they name (runner.py, the __main__ block): an option written --name=value is the
+    one written --name value."""
     monkeypatch.chdir(tmp_path)  # where a summary under ./results would go
-    argv = [
-        "runner", "--task", "fake_task", "--model", "fake-model", "--adapter", "anthropic_messages",
-        "--clock=wall", "--fps=2", "--max-minutes=1", "--run-id=run", "--results-dir=out",
-    ]  # fmt: skip
+    launch = trial_launch(
+        monkeypatch, tmp_path / "trial", "--catalog-model", "claude-opus-5-anthropic", "--task",
+        WEB, "--clock", "wall", "--fps", "2", "--duration-minutes", "1",
+    )  # fmt: skip
+    argv = ["runner", f"--launch={launch}", "--run-id=run", "--results-dir=out"]
     with mock.patch.object(sys, "argv", argv):
         runner._write_emergency_setup_summary("boom")
     summary = json.loads((tmp_path / "out" / "run" / "run_summary.json").read_text())
@@ -853,3 +853,4 @@ def test_the_emergency_summary_reads_the_arguments_as_main_parses_them(tmp_path,
     assert (summary["fps"], summary["max_minutes"], summary["stop_reason"]) == (
         2.0, 1.0, "setup_error",
     )  # fmt: skip
+    assert (summary["task_id"], summary["model"]) == (WEB, "claude-opus-5-anthropic")

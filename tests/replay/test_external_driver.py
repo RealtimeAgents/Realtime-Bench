@@ -164,7 +164,7 @@ def test_external_driver_full_episode(external, tmp_path, capsys):
         assert settings["model_config"]["adapter_type"] == TARGET
         assert settings["credential_variable"] == KEY_ENV
 
-        # The runner's pre-run checks (evaluation/runner.py): effort, finite budget, then the
+        # The trial worker's pre-run checks (evaluation/_trial.py): effort, finite budget, then the
         # episode rules, which build_episode applies before it builds the agent.
         catalog.validate_reasoning_effort(MODEL_KEY, "low")
         check_token_budget(entry.adapter_type, clock_mode="wall", tokens_per_frame=None)

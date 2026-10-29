@@ -61,21 +61,19 @@ The episode's own directory, which the checks read, is
 `temp/harbor-jobs/<job>/<trial>/agent/benchmark/` lacks `episode_blobs.pack`, which holds the
 message bodies.
 
-Or the runner directly (the same episode, without Harbor's report and verifier):
+Or the trial worker Harbor starts for each trial, alone (the same episode, without Harbor's
+verifier); it checks the run, writes its launch file and runs the runner on it:
 
 ```bash
-RUN=oai-pong-$(date -u +%Y%m%dT%H%M%SZ)
 mkdir -p results/smoke
-uv run python -m realtime_framework.evaluation.runner --model gpt-realtime-2 \
-  --task gh_javascript_pong --interaction-mode streaming --clock wall --fps 1 \
-  --model-input-fps 1 --max-minutes 3 --results-dir results/smoke --run-id "$RUN" \
-  2>&1 | tee "results/smoke/$RUN.runner.out"
+uv run python -m realtime_framework.evaluation._trial --catalog-model gpt-realtime-2 \
+  --task gh_javascript_pong --interaction-mode streaming --duration-minutes 3 \
+  2>&1 | tee "results/smoke/oai-pong-$(date -u +%Y%m%dT%H%M%SZ).out"
 ```
 
-Give `--clock wall`: the runner's default is the token clock, which refuses streaming (`Streaming
-requires a wall clock`). The episode's directory is `results/smoke/$RUN/`. Give each run an id of
-its own: a run under an id used before writes into the same directory, beside the earlier run's
-files. The runner prints to its terminal only, so keep its output with `tee`.
+It runs on the wall clock at 1 fps unless told otherwise. The episode's directory is
+`temp/<UTC time>/<preset>/<task>/`, as above, and each run gets a directory of its own. The runner
+prints to its terminal only, so keep its output with `tee`.
 
 **Other values of K or the thresholds.** Save the preset under a new name with a `streaming`
 block ([streaming settings](model_configuration.md#streaming-settings)) and run that name, for

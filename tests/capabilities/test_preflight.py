@@ -3,16 +3,15 @@
 One test per condition, asserting the exact message each check produced before the checks were
 collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0); the context-policy
 checks came later and are pinned as written. The runner's own rules run in check_episode, which
-the runner (evaluation/runner.py main) and the Harbor trial worker apply with their argparse
-checks; those are exercised through their main functions, which fail before any container or
-network is used.
+the Harbor trial worker applies with its argparse checks before it writes the launch file the
+runner runs (evaluation/_trial.py main); those are exercised through its main function, which
+fails before any container or network is used.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
-import sys
 from dataclasses import replace
 
 import pytest
@@ -42,7 +41,7 @@ GAME, WEB = "gomoku", "rt_waitlist_fit"
 
 @pytest.fixture(autouse=True)
 def environment():
-    """The entry points write os.environ (runner.py main; _trial.py:101-102)."""
+    """The trial worker writes os.environ (evaluation/_trial.py main)."""
     saved = dict(os.environ)
     os.environ.pop("ALLOW_EXPERIMENTAL_MODEL", None)
     yield
@@ -51,7 +50,7 @@ def environment():
 
 
 def preset(key, **overrides):
-    """What the runner builds for a catalog key (runner.py main)."""
+    """What the trial worker resolves for a catalog key and the runner runs (_trial.py main)."""
     entry = catalog.get(key)
     return catalog.to_model_config(
         key, **{"fps": 1.0, "reasoning_effort": entry.defaults["reasoning_effort"], **overrides}
@@ -84,23 +83,13 @@ def usage_error(capsys, call, message):
     assert capsys.readouterr().err.strip().splitlines()[-1].endswith("error: " + message)
 
 
-def runner_main(*argv):
-    def call():
-        from realtime_framework.evaluation.runner import main
-
-        sys.argv = ["runner", *argv]
-        main()
-
-    return call
-
-
 def plan(tmp_path, text):
     path = tmp_path / "plan.yaml"
     path.write_text(text)
     return lambda: load_benchmark(path)
 
 
-# Wall clock only (runner, run plans, effective_run_config, Harbor trial worker)
+# Wall clock only (check_episode, run plans, effective_run_config, Harbor trial worker)
 
 
 @pytest.mark.parametrize(
@@ -112,7 +101,7 @@ def plan(tmp_path, text):
         ("gpt-6-luna-decisions", "openai_decisions"),
     ],
 )
-def test_wall_clock_only_runner(key, api):
+def test_wall_clock_only_episode(key, api):
     fails(lambda: episode(preset(key), clock_mode="token"), f"The {api} API requires a wall clock")
 
 
@@ -145,13 +134,13 @@ def test_wall_clock_only_trial(capsys):
     )
 
 
-# A model-input rate above the environment rate (runner, run plans, effective_run_config, Harbor
-# agent options and trial worker)
+# A model-input rate above the environment rate (check_episode, run plans, effective_run_config,
+# Harbor agent options and trial worker)
 
 FASTER_MODEL_INPUT = "The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
 
 
-def test_faster_model_input_runner():
+def test_faster_model_input_episode():
     fails(lambda: episode(preset("my-model", fps=2.0), env_fps=1.0), FASTER_MODEL_INPUT)
     episode(preset("my-model", fps=2.0), env_fps=2.0)
 
@@ -199,29 +188,14 @@ def test_faster_model_input_trial(capsys):
     )
 
 
-# Finite token clock (runner argparse)
+# Finite token clock (trial worker argparse)
 
 FINITE_BUDGET = "adapter 'chat_completions' cannot report complete usage for a finite token clock"
 
 
-def test_finite_budget_runner(capsys):
-    usage_error(
-        capsys,
-        runner_main("--model", "my-model", "--task", WEB, "--clock", "token",
-                    "--tokens-per-frame", "64"),
-        FINITE_BUDGET,
-    )
-
-
-def test_finite_budget_unknown_adapter_is_not_a_usage_error():
-    """A raw model id without --adapter, on the runner's default token clock.
-
-    The lookup error is raised as before, not turned into a usage error (runner.py main).
-    """
-    fails(
-        lambda: check_token_budget(None, clock_mode="token", tokens_per_frame=256),
-        "Unknown adapter type: None",
-    )
+def test_finite_budget():
+    """The trial worker applies it after the wall-clock rule (evaluation/_trial.py main), which
+    every API that cannot report complete usage also has, so its error is pinned here alone."""
     fails(
         lambda: check_token_budget("chat_completions", clock_mode="token", tokens_per_frame=64),
         FINITE_BUDGET,
@@ -244,7 +218,7 @@ def test_plan_endpoint_requires_wall_clock(tmp_path):
     )
 
 
-# The runner's episode rules (check_episode)
+# The runner's episode rules (check_episode), which the trial worker applies
 
 
 def test_frame_rate_cap():
@@ -263,17 +237,9 @@ def test_text_only_choice_model_on_game():
     episode(preset("gpt-6-luna-decisions"), task=GAME)
 
 
-def test_text_only_choice_model_on_game_runner(capsys, monkeypatch):
-    """A rule only check_episode applies is the runner's argument error, before any container."""
-    monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
-    usage_error(
-        capsys, runner_main("--model", "jev-1.13", "--task", GAME, "--clock", "wall"),
-        CHOICE_ON_GAME,
-    )
-
-
 def test_text_only_choice_model_on_game_trial(capsys, monkeypatch):
-    """And the Harbor trial worker's, whose dry run Harbor's resolve makes (harbor.py resolve)."""
+    """A rule only check_episode applies is the Harbor trial worker's argument error, on its dry
+    run too, which Harbor's resolve makes (harbor.py resolve)."""
     from realtime_framework.evaluation._trial import main
 
     monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
@@ -430,9 +396,12 @@ def test_reasoning_efforts_of_a_gemini_model(capsys, tmp_path, key, effort, supp
     holds a run to them before it starts."""
     message = f"{key} reasoning_effort must be one of {supported}, got {effort!r}"
     fails(lambda: catalog.validate_reasoning_effort(key, effort), message)
+    from realtime_framework.evaluation._trial import main
+
     usage_error(
         capsys,
-        runner_main("--model", key, "--task", WEB, "--clock", "wall", "--reasoning-effort", effort),
+        lambda: main(["--catalog-model", key, "--task", WEB, "--reasoning-effort", effort,
+                      "--dry-run"]),
         message,
     )
     fails(
@@ -725,7 +694,7 @@ def test_streaming_needs_the_wall_clock_trial(capsys):
 
 def test_streaming_frame_rate_cap():
     """The run plans and the Harbor trial worker apply the cap to a streaming run too; on a turn-
-    based run only the runner does (check_fps)."""
+    based run only check_episode does (check_fps), which the trial worker applies."""
     cap = "gemini_live supports at most 1 fps; requested 2"
     fails(
         lambda: validate_model_interaction(
@@ -779,31 +748,14 @@ def test_streaming_frame_rate_cap_of_openai_realtime_trial(capsys):
 
 # The turn-based deliberation caps, which a streaming episode has no turns for (N41).
 
-CAPS = [
-    (["--think-budget-s", "5"], "Streaming does not support --think-budget-s"),
-    (["--per-move-cap-s", "2"], "Streaming does not support --per-move-cap-s"),
-    (
-        ["--think-budget-s", "5", "--per-move-cap-s", "2"],
-        "Streaming does not support --think-budget-s or --per-move-cap-s",
-    ),
-]
-CAP_IDS = ["think-budget", "per-move-cap", "both"]
-
-
-@pytest.mark.parametrize("caps, message", CAPS, ids=CAP_IDS)
-def test_streaming_refuses_deliberation_caps_runner(capsys, caps, message):
-    usage_error(
-        capsys,
-        runner_main("--model", "gemini-live", "--task", WEB, "--clock", "wall",
-                    "--interaction-mode", "streaming", *caps),
-        message,
-    )
-
-
 @pytest.mark.parametrize(
     "think_budget_s, per_move_cap_s, message",
-    [(5.0, None, CAPS[0][1]), (None, 2.0, CAPS[1][1]), (5.0, 2.0, CAPS[2][1])],
-    ids=CAP_IDS,
+    [
+        (5.0, None, "Streaming does not support --think-budget-s"),
+        (None, 2.0, "Streaming does not support --per-move-cap-s"),
+        (5.0, 2.0, "Streaming does not support --think-budget-s or --per-move-cap-s"),
+    ],
+    ids=["think-budget", "per-move-cap", "both"],
 )
 def test_streaming_refuses_deliberation_caps_run_config(think_budget_s, per_move_cap_s, message):
     """effective_run_config, which reporting.prepare_episode_report computes the expected hash
@@ -905,16 +857,7 @@ def test_streaming_undeclared_plan(monkeypatch, tmp_path):
     )
 
 
-# Catalog status and reasoning effort (unchanged entry points)
-
-
-def test_experimental_cell_runner(capsys):
-    usage_error(
-        capsys,
-        runner_main("--model", "jev-1.13", "--task", WEB, "--clock", "wall"),
-        "catalog cell 'jev-1.13' is excluded from maintained benchmark results; "
-        "set ALLOW_EXPERIMENTAL_MODEL=1 only for explicitly non-comparable diagnostics",
-    )
+# Catalog status and reasoning effort
 
 
 def test_experimental_cell_trial(capsys):
@@ -927,15 +870,19 @@ def test_experimental_cell_trial(capsys):
     )
 
 
-def test_reasoning_effort_of_a_choice_api(capsys, tmp_path):
+def test_reasoning_effort_of_a_choice_api(capsys, tmp_path, monkeypatch):
+    from realtime_framework.evaluation._trial import main
+
     fails(
         lambda: catalog.validate_reasoning_effort("jev-1.13", "low"),
         "jev-1.13 reasoning_effort must be one of ['fixed'], got 'low'",
     )
+    # The trial worker holds the model to its catalog status first.
+    monkeypatch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
     usage_error(
         capsys,
-        runner_main("--model", "jev-1.13", "--task", WEB, "--clock", "wall",
-                    "--reasoning-effort", "low"),
+        lambda: main(["--catalog-model", "jev-1.13", "--task", WEB, "--reasoning-effort", "low",
+                      "--dry-run"]),
         "jev-1.13 reasoning_effort must be one of ['fixed'], got 'low'",
     )
     fails(

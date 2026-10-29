@@ -72,7 +72,8 @@ def openrouter_env(monkeypatch):
 
 
 def openrouter_config():
-    """The ModelConfig runner.main() builds for ``--model claude-opus-5`` (runner.py main)."""
+    """The ModelConfig the trial worker resolves for ``--catalog-model claude-opus-5`` and writes
+    into the launch file the runner runs (evaluation/_trial.py main)."""
     entry = catalog.get(MODEL_KEY)
     return catalog.to_model_config(
         MODEL_KEY, fps=1.0, reasoning_effort=entry.defaults["reasoning_effort"]
@@ -84,7 +85,7 @@ def openrouter_episode(monkeypatch, tmp_path, script, **clock):
     with OpenRouterStub(script, route=ROUTE) as stub:
         monkeypatch.setenv("OPENROUTER_BASE_URL", stub.base_url)
         config = openrouter_config()
-        if clock.get("tokens_per_frame") is not None:  # runner.py main
+        if clock.get("tokens_per_frame") is not None:  # _trial.py main
             assert catalog.adapter_class(config.adapter_type).capabilities.finite_frame_budget
         episode = build_episode(
             config,

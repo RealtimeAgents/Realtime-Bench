@@ -1,23 +1,27 @@
 """The environment and model-input frame rates may differ; a model's video cap bounds only the
 model-input rate, ModelConfig.fps (providers/preflight.py check_fps).
 
-runner.main() takes the two as --fps and --model-input-fps. The effective-config export's runner
-probe (evaluation/effective_config.py) runs main() in a fresh interpreter up to its decision loop
-and records where each rate went.
+The trial worker takes the two as --fps and --model-input-fps and writes them into the launch
+file runner.main() runs. The effective-config export (evaluation/effective_config.py) runs the
+trial worker's dry run and then main() on its launch file, each in a fresh interpreter, up to the
+decision loop, and records where each rate went.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import sys
 
 import pytest
 
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
-from realtime_framework.evaluation.effective_config import _runner_entry, export
+from realtime_framework.evaluation.effective_config import _launched_entry, export
 from realtime_framework.evaluation.episode_end import EpisodeEnd
 from realtime_framework.providers.preflight import check_episode
+
+from ..launch import trial_launch
 
 GEMINI = "gemini-3.8-live"
 WEB, GAME, CAPPED = "rt_waitlist_fit", "gh_timed_chess", "rt_accessible_trip_dispatch"
@@ -38,33 +42,23 @@ def test_video_cap_reads_the_model_input_rate():
 
 @pytest.fixture(scope="module")
 def runner_cells(tmp_path_factory):
-    """Gemini Live through runner.main(): on the wall clock at 2/1, on the token clock at 60/1
-    with B=100, and at 2/2, which its cap refuses. Each cell is one task of the probe's run, on
-    the runner's own arguments."""
-    wall = ["--clock", "wall", "--protocol", "wall-clock"]
-    token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
+    """Gemini Live through the trial worker and runner.main() on its launch file: on the wall
+    clock at 2/1, on the token clock at 60/1 with B=100, and at 2/2, which its cap refuses. Each
+    cell is one task of the probe's run."""
+    token = ["--clock", "token", "--tokens-per-frame", "100"]
     runs = [
-        (WEB, [*wall, "--fps", "2", "--model-input-fps", "1"]),
+        (WEB, ["--clock", "wall", "--fps", "2", "--model-input-fps", "1"]),
         (GAME, [*token, "--fps", "60", "--model-input-fps", "1"]),
-        (CAPPED, [*wall, "--fps", "2"]),
+        (CAPPED, ["--clock", "wall", "--fps", "2"]),
     ]
-    effort = catalog.get(GEMINI).defaults["reasoning_effort"]
     environ = {"HOME": os.environ.get("HOME", "/"), "PATH": "/usr/bin:/bin"}
-    exported = _runner_entry(
-        environ,
-        {},
-        [
-            (
-                GEMINI,
-                task,
-                ["--model", GEMINI, "--task", task, *argv, "--reasoning-effort", effort]
-                + ["--report-root", "<results>"],
-            )
+    launch = {
+        (tuple(sorted(environ.items())), (), sys.executable): [
+            (GEMINI, task, ["--catalog-model", GEMINI, "--task", task, *argv])
             for task, argv in runs
-        ],
-        env_file=None,
-        scratch=tmp_path_factory.mktemp("runner"),
-    )
+        ]
+    }
+    exported = _launched_entry(launch, env_file=None, scratch=tmp_path_factory.mktemp("runner"))
     return exported["models"][GEMINI]
 
 
@@ -121,7 +115,7 @@ def test_pause_mode_steps_to_the_next_frame_where_the_rates_differ():
 
 
 def test_model_input_rate_above_the_cap_is_refused(runner_cells):
-    """--model-input-fps defaults to --fps; the runner refuses the rate as an argument."""
+    """--model-input-fps defaults to --fps; the trial worker refuses the rate as an argument."""
     cell = runner_cells[CAPPED]
     assert cell["error"] == f"_Rejected: {CAP_MESSAGE}"
 
@@ -140,18 +134,18 @@ def test_trial_probe_records_the_reason_of_a_refusal(tmp_path):
 
 
 WALL_2_1 = ["--clock", "wall", "--fps", "2", "--model-input-fps", "1"]
-TOKEN_60_1 = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
+TOKEN_60_1 = ["--clock", "token", "--tokens-per-frame", "100"]
 TOKEN_60_1 += ["--fps", "60", "--model-input-fps", "1"]
 
 
-def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
-    """Set up runner.main() to run in this interpreter on ``argv`` with ``run_stream`` as its
+def _main_in_process(monkeypatch, tmp_path, argv, run_stream, runner_argv=()) -> list:
+    """Set up runner.main() to run in this interpreter on the launch file the trial worker
+    writes for ``argv`` (and the runner's own ``runner_argv``), with ``run_stream`` as its
     decision loop and the export probe's stand-ins for the container, the guest, the scene
     capture, the agent and the task server (evaluation/effective_config.py _Guest, _Scene, _Agent,
     _Task). There is no screen recording to copy out, so main() composes the video from the
     frames captured once per decision (sandbox/desktop.py _stop_screen_recording); the returned
     list collects the rates it is played at. The run writes under ``tmp_path / "run"``."""
-    import sys
     import types
 
     from realtime_framework.clock import Clocks, FrameClock, SystemClock
@@ -159,6 +153,7 @@ def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import desktop
 
+    launch = trial_launch(monkeypatch, tmp_path / "trial", *argv)
     for name in ("build_image_if_needed", "start_container", "_start_screensaver_keepalive"):
         monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(desktop, "_start_screen_recording", lambda run_dir=None: True)
@@ -192,9 +187,8 @@ def _main_in_process(monkeypatch, tmp_path, argv, run_stream) -> list:
     registered = tasks.get
     monkeypatch.setattr(tasks, "get", lambda task_id: probe._Task(registered(task_id)))
     monkeypatch.setattr(runner, "run_stream", run_stream)
-    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
-        monkeypatch.setenv(name, "cpu")  # main() sets both
-    argv = [*argv, "--results-dir", str(tmp_path), "--run-id", "run"]
+    argv = ["--launch", str(launch), *runner_argv]
+    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     return videos
 
@@ -211,7 +205,7 @@ def test_fallback_recording_plays_at_the_model_input_rate(tmp_path, monkeypatch)
     def run_stream(adapter, env, **loop):
         raise RuntimeError("decision loop failed")
 
-    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
+    argv = ["--catalog-model", GEMINI, "--task", WEB, *WALL_2_1]
     videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
     with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
@@ -229,7 +223,7 @@ def test_fallback_recording_after_a_finished_loop_plays_at_the_model_input_rate(
     its cleanup; that video too plays at the model-input rate."""
     from realtime_framework.evaluation import runner
 
-    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1]
+    argv = ["--catalog-model", GEMINI, "--task", WEB, *WALL_2_1]
     videos = _main_in_process(
         monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
     )
@@ -251,7 +245,7 @@ def test_a_token_run_summary_charges_b_per_model_input_frame(tmp_path, monkeypat
         end = EpisodeEnd(snapshot_captured=True, snapshot=snapshot)
         return end.result(env, [(0, 0, d_ticks, d_ticks, None)])
 
-    argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
+    argv = ["--catalog-model", GEMINI, "--task", WEB, *TOKEN_60_1]
     videos = _main_in_process(monkeypatch, tmp_path, argv, run_stream)
     runner.main()
     summary = _run_summary(tmp_path)
@@ -276,8 +270,8 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
         loops.append(loop)
         return EpisodeEnd().result(env, [])
 
-    token = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
-    argv = ["--model", "claude-opus-5", "--task", WEB, *token, "--fps", "30"]
+    token = ["--clock", "token", "--tokens-per-frame", "100"]
+    argv = ["--catalog-model", "claude-opus-5", "--task", WEB, *token, "--fps", "30"]
     _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "7"], run_stream)
     with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
         runner.main()
@@ -285,51 +279,39 @@ def test_main_hands_the_loop_a_model_input_frame_between_two_ticks(tmp_path, mon
     assert (loop["env_fps"], loop["input_fps"], loop["duration_s"]) == (30.0, 7.0, 300.0)
 
 
-def test_main_refuses_a_model_input_rate_above_the_environment_rate(
-    tmp_path, monkeypatch, capsys
+def test_the_trial_worker_refuses_a_model_input_rate_above_the_environment_rate(
+    environment, tmp_path, monkeypatch, capsys
 ):
-    """The pre-run check's error (providers/preflight.py check_frame_rates), which main() makes
-    before it starts the container (runner.py main), is an argument error: no container is
-    started, no agent is made, the decision loop never starts and no run summary is written."""
-    from realtime_framework.evaluation import runner
-    from realtime_framework.sandbox import desktop
+    """The pre-run check's error (providers/preflight.py check_frame_rates) is the trial worker's
+    argument error on a run, as on its dry run: it allocates no run directory, writes no launch
+    file and no run locator, and execs no runner, so no container is started, no agent is made,
+    the decision loop never starts and no run summary is written."""
+    from realtime_framework.evaluation import _trial
 
-    loops = []
-
-    def run_stream(adapter, env, **loop):
-        loops.append(loop)
-        return EpisodeEnd().result(env, [])
-
-    argv = ["--model", "claude-opus-5", "--task", WEB, "--clock", "wall", "--fps", "1"]
-    _main_in_process(monkeypatch, tmp_path, [*argv, "--model-input-fps", "2"], run_stream)
-    started, created = [], []
-    monkeypatch.setattr(desktop, "start_container", started.append)
-    create_agent = runner.create_agent
-
-    def recording_create_agent(config, **kwargs):
-        created.append(config)
-        return create_agent(config, **kwargs)
-
-    monkeypatch.setattr(runner, "create_agent", recording_create_agent)
+    monkeypatch.setattr(_trial, "ROOT", tmp_path)
+    execs = []
+    monkeypatch.setattr(_trial.os, "execve", lambda *args: execs.append(args))
+    locator = tmp_path / "run-root.json"
+    argv = ["--catalog-model", "claude-opus-5", "--task", WEB, "--clock", "wall", "--fps", "1"]
     with pytest.raises(SystemExit) as exited:
-        runner.main()
+        _trial.main([*argv, "--model-input-fps", "2", "--run-root-output", str(locator)])
     assert exited.value.code == 2
     assert capsys.readouterr().err.strip().endswith(
         "error: The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
     )
-    assert not (tmp_path / "run").exists()
-    assert started == created == loops == []
+    assert list(tmp_path.iterdir()) == []
+    assert execs == []
 
 
 def test_a_setup_failure_summary_records_both_rates(tmp_path, monkeypatch):
     """A setup error main() raises reaches the entry point's emergency summary
-    (runner._write_emergency_setup_summary), which reads the two rates off the command line."""
-    import sys
-
+    (runner._write_emergency_setup_summary), which reads the two rates off the launch file."""
     from realtime_framework.evaluation import runner
 
-    argv = ["--model", GEMINI, "--task", WEB, *TOKEN_60_1]
-    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
+    launch = trial_launch(
+        monkeypatch, tmp_path / "trial", "--catalog-model", GEMINI, "--task", WEB, *TOKEN_60_1
+    )
+    argv = ["--launch", str(launch), "--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     runner._write_emergency_setup_summary("RuntimeError: guest not ready")
     summary = _run_summary(tmp_path)
@@ -397,14 +379,15 @@ def test_a_harbor_trial_carries_both_rates_to_the_runner(environment, tmp_path, 
     (ApptainerEnvironment.resolve), writes it as the verifier's task.json and launches the trial
     worker (run_benchmark), which execs the runner on its launch file (evaluation/_trial.py main).
     The worker runs in this interpreter, as in tests/replay/test_external_driver.py
-    resolved_request; the exec is captured, and its arguments parsed as the runner parses them."""
+    resolved_request; the exec is captured, and the launch file it names read as the runner
+    reads it (evaluation/_trial.py read_launch)."""
     import asyncio
     import contextlib
     import io
 
     from harbor.environments.base import ExecResult
 
-    from realtime_framework.evaluation import _trial, harbor, harbor_cli, runner
+    from realtime_framework.evaluation import _trial, harbor, harbor_cli
 
     plan = tmp_path / "split.yaml"
     plan.write_text(PLAN)
@@ -471,8 +454,7 @@ def test_a_harbor_trial_carries_both_rates_to_the_runner(environment, tmp_path, 
     task = json.loads((trial.staging / "tests" / "task.json").read_text())
     assert (task["fps"], task["model_input_fps"]) == (2.0, 1.0)
     (argv,) = runner_argv
-    parser = runner._parser()
-    spec = runner._run_spec(parser, parser.parse_args(argv[3:]))  # after "python -m ...runner"
+    spec = _trial.read_launch(argv[argv.index("--launch") + 1]).spec
     assert (spec.fps, spec.model_input_fps) == (2.0, 1.0)
 
 
@@ -618,15 +600,16 @@ def test_a_reevaluation_compares_the_model_input_rate(tmp_path, monkeypatch):
 
 def test_the_hash_a_local_report_expects_is_the_one_the_run_records(tmp_path, monkeypatch):
     """runner.main() with --report-root records the identity its report expects before the run
-    (reporting.prepare_episode_report) from its arguments as it runs them: without --protocol
-    and --reasoning-effort the expected hash is the one the run records in run_config.json."""
+    (reporting.prepare_episode_report) from the launch file it runs: the expected hash is the
+    one the run records in run_config.json."""
     from realtime_framework.evaluation import runner
     from realtime_framework.sandbox import apptainer
 
     monkeypatch.setattr(apptainer, "build_image", lambda name: None)
-    argv = ["--model", GEMINI, "--task", WEB, *WALL_2_1, "--report-root", str(tmp_path)]
+    argv = ["--catalog-model", GEMINI, "--task", WEB, *WALL_2_1]
     _main_in_process(
-        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
+        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, []),
+        runner_argv=["--report-root", str(tmp_path)],
     )
     with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
         runner.main()

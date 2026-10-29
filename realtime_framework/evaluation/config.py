@@ -703,39 +703,3 @@ def run_spec_config(spec: RunSpec, model_config) -> dict:
         per_move_cap_s=spec.per_move_cap_s,
         interaction_mode=spec.interaction_mode,
     )
-
-
-def runner_run_spec(args) -> RunSpec:
-    """The run options of the runner's arguments ``args`` (runner.py _parser), with the runner's
-    defaults (run_spec.py ENTRY_DEFAULTS)."""
-    return run_spec(
-        "runner",
-        clock_mode=args.clock,
-        tokens_per_frame=args.tokens_per_frame,
-        fps=args.fps,
-        model_input_fps=args.model_input_fps,
-        interaction_mode=args.interaction_mode,
-        duration_minutes=args.max_minutes,
-        seed=args.seed,
-        protocol=args.protocol,
-        think_budget_s=args.think_budget_s,
-        per_move_cap_s=args.per_move_cap_s,
-    )
-
-
-def apply_run_defaults(args) -> None:
-    """Fill in what the runner's arguments ``args`` leave to its defaults besides its run options
-    (runner_run_spec), as runner.main() runs and records the run: the model's reasoning effort
-    (its catalog default, "low" for a raw backend id) and, in the environment the runtime-config
-    hash reads (_RUNTIME_ENV_KEYS), the desktop's graphics mode and recording encoder. The hash
-    the run's report expects (reporting.prepare_episode_report) is then the one the run
-    records."""
-    import realtime_framework.providers.registry as catalog
-
-    if catalog.has(args.model):
-        if args.reasoning_effort is None:
-            args.reasoning_effort = catalog.get(args.model).defaults["reasoning_effort"]
-    else:
-        args.reasoning_effort = args.reasoning_effort or "low"
-    os.environ["SANDBOX_GRAPHICS_MODE"] = args.graphics_mode
-    os.environ["SCREEN_RECORDING_ENCODER"] = args.recording_encoder

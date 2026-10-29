@@ -1,8 +1,9 @@
 """Set up an agent with the runner's set_up_agent, without containers or a task server.
 
-runner.main() and build_episode both apply the pre-run rules (providers/preflight.py
-check_episode), then call set_up_agent (evaluation/runner.py); in place of a BrowserSceneCapture on
-the container's browser, build_episode hands it the synthetic frames.
+The trial worker, before the runner it execs (evaluation/_trial.py), and build_episode apply the
+pre-run rules (providers/preflight.py check_episode); runner.main() and build_episode then call
+set_up_agent (evaluation/runner.py); in place of a BrowserSceneCapture on the container's browser,
+build_episode hands it the synthetic frames.
 The clock settings are the runner's: ``clock_mode`` is ``--clock``, ``tokens_per_frame`` is the
 frame budget B (None on the wall clock and in pause mode, runner.py main), and ``max_ticks`` is
 the episode length in ticks, the duration_s run_stream receives times its env_fps (runner.py main,

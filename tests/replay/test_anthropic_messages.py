@@ -66,7 +66,7 @@ DUMMY_KEY = "replay-dummy-anthropic-key"
 FIRST_FOLD, FOLDED = 20, 10
 FIRST_ARCHIVE, ARCHIVED = 50, 10
 
-# --tokens-per-frame 256 (the default B, entity/config.py:33) and --max-minutes 9 at 1 fps:
+# B = 256 tokens per frame and a 9-minute episode at 1 fps:
 # run_stream gets duration_s 9 * 60 and env_fps 1 (runner.py main), a horizon of 9 * 60 * 1 = 540
 # ticks (kernel/turns.py TurnConfig.max_ticks). Decision k observes tick k, so it has
 # (540 - k) * 256 clock tokens left (kernel/turns.py _captured). That stays at or above the native

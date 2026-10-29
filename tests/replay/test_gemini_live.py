@@ -36,7 +36,7 @@ import pytest
 import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import SystemClock
-from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
+from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.model import (
     ARCHIVED_ACTION_LEDGER_HEADER,
     QUOTA_EXHAUSTED,
@@ -62,16 +62,15 @@ from .ws_gemini_live import (
 BASELINES = Path(__file__).parent / "baselines"
 API_KEY = "replay-dummy-key"
 
-# The runner's defaults at 1 fps (Gemini Live accepts at most 1: live.py
-# GeminiLiveDriver.capabilities, providers/preflight.py check_fps): B is --tokens-per-frame
-# (entity/config.py DEFAULT_TOKENS_PER_FRAME, evaluation/runner.py main) and the episode has
-# --max-minutes 5 * 60 * fps ticks (runner.py main, kernel/turns.py TurnConfig.max_ticks). The
-# catalog's native limit for these models is 65536, as their endpoints declare (configs/models/),
-# so the runtime cap min(65536, (N - t_k) * B)
+# A token-clock run at 1 fps (Gemini Live accepts at most 1: live.py
+# GeminiLiveDriver.capabilities, providers/preflight.py check_fps) with B = 256 tokens per frame
+# and a 5-minute episode, 5 * 60 * fps ticks (runner.py main, kernel/turns.py
+# TurnConfig.max_ticks). The catalog's native limit for these models is 65536, as their endpoints
+# declare (configs/models/), so the runtime cap min(65536, (N - t_k) * B)
 # (kernel/turns.py _captured, episode_records.py decision_budget) falls below it from t_k = 45 on
 # and is 61696 at the last decision.
 FPS = 1.0
-TOKENS_PER_FRAME = DEFAULT_TOKENS_PER_FRAME
+TOKENS_PER_FRAME = 256
 MAX_TICKS = 300
 FIRST_CAPPED_STEP = 45
 

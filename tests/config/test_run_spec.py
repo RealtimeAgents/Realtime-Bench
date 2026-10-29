@@ -5,14 +5,14 @@ entry points differ on purpose (ENTRY_DEFAULTS)."""
 from __future__ import annotations
 
 import dataclasses
-import os
-from pathlib import Path
 
 import pytest
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.entity.config import DEFAULT_TASK_SEED, DEFAULT_TOKENS_PER_FRAME
+from realtime_framework.entity.config import DEFAULT_TASK_SEED
 from realtime_framework.evaluation.run_spec import RunSpec, run_spec
+
+from ..launch import trial_launch
 
 GEMINI, WEB = "gemini-3.8-live", "rt_waitlist_fit"
 
@@ -28,14 +28,13 @@ def test_a_spec_is_frozen_and_refuses_an_option_it_does_not_declare():
 @pytest.mark.parametrize(
     "entry, clock_mode, tokens_per_frame, protocol",
     [
-        ("runner", "token", DEFAULT_TOKENS_PER_FRAME, "time-aware-token-v1"),
         ("trial", "wall", None, "wall-clock"),
         ("harbor", "wall", None, "wall-clock"),
     ],
 )
 def test_each_entry_point_s_defaults(monkeypatch, entry, clock_mode, tokens_per_frame, protocol):
-    """Run directly, the runner takes the token clock at the default B; the trial worker and
-    Harbor's options and plans the wall clock. Every other default is the same for all."""
+    """The trial worker and Harbor's options and plans take the wall clock, and every other
+    default is the same for both."""
     monkeypatch.delenv("SEED", raising=False)
     spec = run_spec(entry)
     assert (spec.clock_mode, spec.tokens_per_frame, spec.protocol) == (
@@ -49,25 +48,25 @@ def test_each_entry_point_s_defaults(monkeypatch, entry, clock_mode, tokens_per_
 
 
 def test_the_token_clock_without_b():
-    """The runner takes the default B; the trial worker and Harbor run unlimited."""
-    assert run_spec("runner", clock_mode="token").tokens_per_frame == DEFAULT_TOKENS_PER_FRAME
+    """The trial worker and Harbor run unlimited."""
     for entry in ("trial", "harbor"):
         assert run_spec(entry, clock_mode="token").tokens_per_frame is None
 
 
 def test_b_on_the_command_lines_and_on_the_wall_clock():
-    """The command lines give B as text; on the wall clock there is none, whatever was given."""
-    assert run_spec("runner", tokens_per_frame="64").tokens_per_frame == 64
-    assert run_spec("runner", tokens_per_frame="unlimited").tokens_per_frame is None
-    assert run_spec("runner", clock_mode="wall").tokens_per_frame is None
+    """The command line gives B as text; on the wall clock there is none, whatever was given."""
+    token = {"clock_mode": "token"}
+    assert run_spec("trial", **token, tokens_per_frame="64").tokens_per_frame == 64
+    assert run_spec("trial", **token, tokens_per_frame="unlimited").tokens_per_frame is None
+    assert run_spec("trial", tokens_per_frame="64").tokens_per_frame is None
     assert run_spec("harbor", clock_mode="wall", tokens_per_frame=64).tokens_per_frame is None
 
 
-def test_only_the_command_lines_take_the_seed_variable(monkeypatch):
+def test_only_the_command_line_takes_the_seed_variable(monkeypatch):
     monkeypatch.setenv("SEED", "7")
-    assert (run_spec("runner").seed, run_spec("trial").seed) == (7, 7)
+    assert run_spec("trial").seed == 7
     assert run_spec("harbor").seed == DEFAULT_TASK_SEED
-    assert run_spec("runner", seed="9").seed == 9
+    assert run_spec("trial", seed="9").seed == 9
 
 
 def test_an_option_given_as_none_is_one_not_given():
@@ -111,77 +110,53 @@ def test_an_option_given_as_none_is_one_not_given():
     ],
 )  # fmt: skip
 def test_each_option_is_checked_where_it_is_declared(options, message):
+    """On the token clock unless the case names another."""
     with pytest.raises(ValueError) as caught:
-        run_spec("runner", **options)
+        run_spec("trial", **{"clock_mode": "token", **options})
     assert str(caught.value) == message
 
 
 def test_a_legacy_protocol_label_keeps_its_caps():
-    spec = run_spec("runner", clock_mode="wall", protocol="legacy", think_budget_s=5.0)
+    spec = RunSpec(clock_mode="wall", protocol="legacy", think_budget_s=5.0)
     assert (spec.protocol, spec.think_budget_s) == ("legacy", 5.0)
 
 
-@pytest.fixture
-def environment():
-    """_trial.main writes os.environ (evaluation/_trial.py)."""
-    saved = dict(os.environ)
-    yield
-    os.environ.clear()
-    os.environ.update(saved)
-
-
-def _launch(tmp_path, capsys, *argv) -> Path:
-    """The launch file of a trial worker's dry run on ``argv``, where it writes it."""
+def test_the_runner_runs_the_options_the_trial_worker_wrote(tmp_path, monkeypatch):
+    """The trial worker parses its options once and writes them into its launch file; the runner
+    it execs reads them, the model, its reasoning effort and the task from there
+    (evaluation/_trial.py read_launch), not from a command line rebuilt for it."""
     from realtime_framework.evaluation import _trial
 
-    assert _trial.main([*argv, "--dry-run"]) == 0
-    (tmp_path / _trial.LAUNCH_FILE).write_text(capsys.readouterr().out)
-    return tmp_path
-
-
-def test_the_runner_runs_the_options_the_trial_worker_wrote(environment, tmp_path, capsys):
-    """The trial worker parses its options once and writes them into its launch file; the runner
-    it execs reads them, the model, its reasoning effort and the task from there (runner.py
-    --launch), not from a command line rebuilt for it."""
-    from realtime_framework.evaluation import _trial, runner
-
-    os.environ.pop("SEED", None)
-    root = _launch(
-        tmp_path, capsys, "--catalog-model", GEMINI, "--task", WEB, "--fps", "2",
+    for name in ("SEED", "SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
+        monkeypatch.delenv(name, raising=False)
+    path = trial_launch(
+        monkeypatch, tmp_path, "--catalog-model", GEMINI, "--task", WEB, "--fps", "2",
         "--model-input-fps", "1", "--duration-minutes", "3", "--seed", "7",
     )  # fmt: skip
-    parser = runner._parser()
-    arguments = parser.parse_args(_trial.runner_arguments(root))
-    spec = runner._run_spec(parser, arguments)
-    assert spec == run_spec("trial", fps=2.0, model_input_fps=1.0, duration_minutes=3.0, seed=7)
+    launch = _trial.read_launch(path)
+    assert launch.spec == run_spec(
+        "trial", fps=2.0, model_input_fps=1.0, duration_minutes=3.0, seed=7
+    )
     effort = catalog.get(GEMINI).defaults["reasoning_effort"]
-    assert (arguments.model, arguments.task, arguments.reasoning_effort) == (GEMINI, WEB, effort)
+    assert (launch.model, launch.task, launch.reasoning_effort) == (GEMINI, WEB, effort)
+    assert (launch.graphics_mode, launch.recording_encoder) == ("cpu", "cpu")
 
 
-@pytest.mark.parametrize(
-    "argv, given", [(["--fps", "2"], "fps"), (["--model", GEMINI, "--seed", "1"], "model, seed")]
-)
-def test_the_runner_refuses_what_its_launch_file_gives(
-    environment, tmp_path, capsys, argv, given
-):
-    from realtime_framework.evaluation import _trial, runner
-
-    root = _launch(tmp_path, capsys, "--catalog-model", GEMINI, "--task", WEB)
-    parser = runner._parser()
-    arguments = parser.parse_args([*_trial.runner_arguments(root), *argv])
-    with pytest.raises(SystemExit) as caught:
-        runner._run_spec(parser, arguments)
-    assert caught.value.code == 2
-    assert capsys.readouterr().err.strip().endswith(f"error: --launch gives {given}; omit them")
-
-
-def test_the_runner_needs_a_model_and_a_task_without_a_launch_file(capsys):
+def test_the_runner_takes_its_launch_file_and_where_to_write_alone(capsys):
+    """Everything the runner runs is in the trial worker's launch file: it needs one, and takes
+    no option of what to run (runner.py _parser)."""
     from realtime_framework.evaluation import runner
 
     parser = runner._parser()
     with pytest.raises(SystemExit) as caught:
-        runner._run_spec(parser, parser.parse_args(["--model", GEMINI]))
+        parser.parse_args(["--results-dir", "out", "--run-id", "run"])
     assert caught.value.code == 2
     assert capsys.readouterr().err.strip().endswith(
-        "error: --model and --task are required without --launch"
+        "error: the following arguments are required: --launch"
+    )
+    with pytest.raises(SystemExit) as caught:
+        parser.parse_args(["--launch", "launch.json", "--model", GEMINI, "--fps", "2"])
+    assert caught.value.code == 2
+    assert capsys.readouterr().err.strip().endswith(
+        f"error: unrecognized arguments: --model {GEMINI} --fps 2"
     )

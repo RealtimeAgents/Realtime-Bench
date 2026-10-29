@@ -30,7 +30,6 @@ def task_seed(value) -> int:
     return value
 
 
-DEFAULT_TOKENS_PER_FRAME = 256
 DEFAULT_FRAME_MAX_DIM = 768
 DEFAULT_ACTIVE_VISUAL_BUDGET = 20
 DEFAULT_VISUAL_FOLD_BLOCK_SIZE = 10
@@ -185,7 +184,7 @@ class ModelConfig(BaseModel):
     # requests omit the completion limit and the provider default applies.
     native_output_limit: Optional[int] = Field(default=None, gt=0)
     native_output_limit_source: Optional[Literal["endpoint", "litellm"]] = None
-    fps: float = 1.0  # model-input frame rate (runner.py --model-input-fps)
+    fps: float = 1.0  # model-input frame rate (_trial.py --model-input-fps)
     # Retain the effective contract in runtime identity, but never send a value.
     temperature_policy: Literal["provider_default"] = "provider_default"
     temperature: None = None

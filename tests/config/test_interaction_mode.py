@@ -1,9 +1,10 @@
 """The interaction mode, turn_based or streaming, is a run setting like the frame rates.
 
-runner.main() takes it as --interaction-mode, records it in the run identity (the episode start,
-run_config.json and its hash, the expected summary and the run summary) and passes it to the
-pre-run checks (providers/preflight.py check_interaction_mode). Run plans, the Harbor agent's
-options, each trial's task.json and the trial worker carry it to the runner. Both live drivers
+The trial worker takes it as --interaction-mode, holds it to the pre-run checks
+(providers/preflight.py check_interaction_mode) and writes it into the launch file runner.main()
+runs, which records it in the run identity (the episode start, run_config.json and its hash, the
+expected summary and the run summary). Run plans, the Harbor agent's options, each trial's
+task.json and the trial worker carry it to the runner. Both live drivers
 declare streaming (OpenAI Realtime, Gemini Live), and a streaming run of either runs on the
 native-streaming agent; any other API, or the token clock, refuses it before the agent is built.
 """
@@ -13,13 +14,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import types
 
 import pytest
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.evaluation.effective_config import _runner_entry, export
+from realtime_framework.evaluation.effective_config import _launched_entry, export
 from realtime_framework.evaluation.episode_end import EpisodeEnd
+
+from ..launch import trial_launch
 
 GEMINI = "gemini-3.8-live"
 WEB, GAME = "rt_waitlist_fit", "gh_timed_chess"
@@ -27,27 +31,18 @@ WEB, GAME = "rt_waitlist_fit", "gh_timed_chess"
 
 @pytest.fixture(scope="module")
 def runner_cells(tmp_path_factory):
-    """Gemini Live through runner.main() on the wall clock: by default, and asking for streaming.
-    Each cell is one task of the probe's run, as in tests/config/test_frame_rates.py."""
-    wall = ["--clock", "wall", "--protocol", "wall-clock"]
-    runs = [(WEB, wall), (GAME, [*wall, "--interaction-mode", "streaming"])]
-    effort = catalog.get(GEMINI).defaults["reasoning_effort"]
+    """Gemini Live through the trial worker and runner.main() on its launch file, on the wall
+    clock: by default, and asking for streaming. Each cell is one task of the probe's run, as in
+    tests/config/test_frame_rates.py."""
+    runs = [(WEB, []), (GAME, ["--interaction-mode", "streaming"])]
     environ = {"HOME": os.environ.get("HOME", "/"), "PATH": "/usr/bin:/bin"}
-    exported = _runner_entry(
-        environ,
-        {},
-        [
-            (
-                GEMINI,
-                task,
-                ["--model", GEMINI, "--task", task, *argv, "--reasoning-effort", effort]
-                + ["--report-root", "<results>"],
-            )
+    launch = {
+        (tuple(sorted(environ.items())), (), sys.executable): [
+            (GEMINI, task, ["--catalog-model", GEMINI, "--task", task, "--clock", "wall", *argv])
             for task, argv in runs
-        ],
-        env_file=None,
-        scratch=tmp_path_factory.mktemp("runner"),
-    )
+        ]
+    }
+    exported = _launched_entry(launch, env_file=None, scratch=tmp_path_factory.mktemp("runner"))
     return exported["models"][GEMINI]
 
 
@@ -97,24 +92,27 @@ def test_the_export_hashes_the_system_block_the_streaming_agent_sends(runner_cel
 
 
 def run_main(
-    tmp_path, monkeypatch, *argv, agents=None, loops=None, containers=None, clock_mode="wall",
-    loop=None, exit_code=1,
-) -> dict | None:
-    """runner.main() in this interpreter with the export probe's stand-ins for the container, the
-    guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and a
-    decision loop that fails at once, so the run ends invalid, or that is ``loop(env, trace)``
-    and returns its timeline. The interaction mode each agent is
-    built for is appended to ``agents``, the one the loop is run in to ``loops``, and the
-    configuration of each container started to ``containers``; ``clock_mode`` None leaves --clock
-    out. main() exits with ``exit_code``. Returns the run summary, None when none was written."""
-    import sys
-
+    tmp_path, monkeypatch, *argv, agents=None, loops=None, containers=None, loop=None,
+    report_root=None,
+) -> dict:
+    """runner.main() in this interpreter on the launch file the trial worker writes for Gemini
+    Live on the wall clock with ``argv``, with the export probe's stand-ins for the container, the
+    guest, the scene capture, the agent and the task server (evaluation/effective_config.py), and
+    a decision loop that fails at once, so the run ends invalid, or that is ``loop(env, trace)``
+    and returns its timeline. The interaction mode each agent is built for is appended to
+    ``agents``, the one the loop is run in to ``loops``, and the configuration of each container
+    started to ``containers``; ``report_root`` is the runner's --report-root. main() exits with
+    1. Returns the run summary."""
     import realtime_tasks.registry as tasks
     from realtime_framework.clock import Clocks, SystemClock
     from realtime_framework.evaluation import effective_config as probe
     from realtime_framework.evaluation import reporting, runner
     from realtime_framework.sandbox import apptainer, desktop
 
+    launch = trial_launch(
+        monkeypatch, tmp_path / "trial", "--catalog-model", GEMINI, "--task", WEB, "--clock",
+        "wall", *argv,
+    )  # fmt: skip
     containers = [] if containers is None else containers
     for name in ("build_image_if_needed", "_start_screensaver_keepalive"):
         monkeypatch.setattr(desktop, name, lambda *args, **kwargs: None)
@@ -150,17 +148,14 @@ def run_main(
         return loop(env, kwargs["trace"])
 
     monkeypatch.setattr(runner, "run_stream", run_stream)
-    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
-        monkeypatch.setenv(name, "cpu")  # main() sets both
-    clock_argv = ["--clock", clock_mode] if clock_mode else []
-    argv = ["--model", GEMINI, "--task", WEB, *clock_argv, *argv]
-    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
-    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    runner_argv = ["--launch", str(launch), "--results-dir", str(tmp_path), "--run-id", "run"]
+    if report_root is not None:
+        runner_argv += ["--report-root", str(report_root)]
+    monkeypatch.setattr(sys, "argv", ["runner", *runner_argv])
     with pytest.raises(SystemExit) as exited:  # an invalid run is not a scored result
         runner.main()
-    assert exited.value.code == exit_code
-    summary = tmp_path / "run" / "run_summary.json"
-    return json.loads(summary.read_text()) if summary.is_file() else None
+    assert exited.value.code == 1
+    return json.loads((tmp_path / "run" / "run_summary.json").read_text())
 
 
 def test_the_run_summary_records_the_mode(tmp_path, monkeypatch):
@@ -258,21 +253,29 @@ def test_a_streaming_run_times_no_model_call(tmp_path, monkeypatch, interaction_
     assert (timing["status"], timing["call_count"], summary["wall_time_s"]) == (status, 0, None)
 
 
-@pytest.mark.parametrize("report", [False, True], ids=["run", "report"])
-def test_the_runner_refuses_streaming_on_its_default_clock(tmp_path, monkeypatch, capsys, report):
-    """Without --clock the runner runs the token clock (runner.py main), on which streaming is
-    refused. The runner's pre-run check (providers/preflight.py check_episode) refuses it as an
-    argument, before the identity its report expects (reporting.prepare_episode_report), before
-    any container starts and so before any live session is opened; there is no run summary."""
-    agents, containers = [], []
-    report_root = ["--report-root", str(tmp_path / "report")] if report else []
-    summary = run_main(
-        tmp_path, monkeypatch, "--interaction-mode", "streaming", *report_root, agents=agents,
-        containers=containers, clock_mode=None, exit_code=2,
-    )
+def test_the_trial_worker_refuses_streaming_on_the_token_clock_before_any_run(
+    environment, tmp_path, monkeypatch, capsys
+):
+    """Streaming is refused on the token clock. The trial worker's pre-run check
+    (providers/preflight.py check_interaction_mode) refuses it as an argument on a run, as on its
+    dry run: it allocates no run directory and writes no launch file, run locator or report, and
+    execs no runner, so no container starts, no live session is opened and there is no run
+    summary or expected identity (reporting.prepare_episode_report)."""
+    from realtime_framework.evaluation import _trial
+
+    monkeypatch.setattr(_trial, "ROOT", tmp_path / "root")
+    execs = []
+    monkeypatch.setattr(_trial.os, "execve", lambda *args: execs.append(args))
+    argv = ["--catalog-model", GEMINI, "--task", WEB, "--interaction-mode", "streaming"]
+    argv += ["--clock", "token", "--tokens-per-frame", "unlimited"]
+    argv += ["--report-output", str(tmp_path / "report.json")]
+    argv += ["--run-root-output", str(tmp_path / "run-root.json")]
+    with pytest.raises(SystemExit) as exited:
+        _trial.main(argv)
+    assert exited.value.code == 2
     assert capsys.readouterr().err.strip().endswith("error: Streaming requires a wall clock")
-    assert (summary, agents, containers) == (None, [], [])
-    assert not (tmp_path / "summary.json").exists()
+    assert list(tmp_path.iterdir()) == []
+    assert execs == []
 
 
 def test_a_streaming_run_failed_before_its_configuration_has_no_context_control(
@@ -358,8 +361,9 @@ def test_a_streaming_episode_runs_on_the_streaming_shell(monkeypatch):
 
 def test_a_streaming_run_keeps_the_hash_it_expected(tmp_path, monkeypatch):
     """Where a driver declares streaming, the runner's run configuration hashes to the one
-    reporting.prepare_episode_report expected before the run, the model YAML's streaming settings
-    included: either side leaving the mode or the settings out would fail the run's report."""
+    reporting.prepare_episode_report expected before the run, the model YAML's streaming settings,
+    which the trial worker writes into the launch file, included: either side leaving the mode or
+    the settings out would fail the run's report."""
     models = tmp_path / "models"
     models.mkdir()
     (models / f"{GEMINI}.yaml").write_text(
@@ -369,10 +373,9 @@ def test_a_streaming_run_keeps_the_hash_it_expected(tmp_path, monkeypatch):
     monkeypatch.setattr(catalog, "MODELS_DIR", models)
     catalog._catalog_entries.cache_clear()
     try:
-        # The arguments the expected identity reads as given, as Harbor's trial passes them.
         summary = run_main(
-            tmp_path, monkeypatch, "--interaction-mode", "streaming", "--protocol", "wall-clock",
-            "--reasoning-effort", "fixed", "--report-root", str(tmp_path / "report"),
+            tmp_path, monkeypatch, "--interaction-mode", "streaming", "--reasoning-effort", "fixed",
+            report_root=tmp_path / "report",
         )
     finally:
         catalog._catalog_entries.cache_clear()
@@ -386,13 +389,14 @@ def test_a_streaming_run_keeps_the_hash_it_expected(tmp_path, monkeypatch):
 
 def test_a_setup_failure_records_the_mode(tmp_path, monkeypatch):
     """A failure before main() enters its episode leaves the summary runner.py's entry point
-    writes from the arguments (_write_emergency_setup_summary)."""
-    import sys
-
+    writes from the arguments and the launch file they name (_write_emergency_setup_summary)."""
     from realtime_framework.evaluation import runner
 
-    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--interaction-mode", "streaming"]
-    argv += ["--results-dir", str(tmp_path), "--run-id", "run"]
+    launch = trial_launch(
+        monkeypatch, tmp_path / "trial", "--catalog-model", GEMINI, "--task", WEB, "--clock",
+        "wall", "--interaction-mode", "streaming",
+    )  # fmt: skip
+    argv = ["--launch", str(launch), "--results-dir", str(tmp_path), "--run-id", "run"]
     monkeypatch.setattr(sys, "argv", ["runner", *argv])
     runner._write_emergency_setup_summary("setup failed")
     summary = json.loads((tmp_path / "run" / "run_summary.json").read_text())
@@ -490,7 +494,7 @@ def test_each_step_passes_streaming_on(
 ):
     """The same steps in this interpreter, where a driver can declare streaming: the value each
     step receives is the one it hands on, not its default."""
-    from realtime_framework.evaluation import _trial, harbor_cli, runner
+    from realtime_framework.evaluation import _trial, harbor_cli
     from realtime_framework.evaluation.harbor import ApptainerEnvironment, RealtimeBenchOptions
 
     plan = tmp_path / "streaming.yaml"
@@ -519,9 +523,7 @@ def test_each_step_passes_streaming_on(
     settings = json.loads(capsys.readouterr().out)
     assert settings["plan"]["runtime"]["interaction_mode"] == "streaming"
     (tmp_path / _trial.LAUNCH_FILE).write_text(json.dumps(settings))
-    parser = runner._parser()
-    arguments = parser.parse_args(_trial.runner_arguments(tmp_path))
-    assert runner._run_spec(parser, arguments).interaction_mode == "streaming"
+    assert _trial.read_launch(tmp_path / _trial.LAUNCH_FILE).spec.interaction_mode == "streaming"
 
 
 def _trial_launch(capsys, interaction_mode) -> dict:

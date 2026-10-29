@@ -69,8 +69,8 @@ def test_yaml_stream_usage(tmp_path, monkeypatch, setting, expected):
 
 
 def test_built_config_stream_usage():
-    """A chat_completions config built without a YAML, as the runner's --adapter path builds one
-    (evaluation/runner.py main), asks for the usage as a YAML's does; no other API reads it."""
+    """A chat_completions config asks for the usage unless told otherwise, as a YAML's does
+    (entity/config.py ModelConfig.chat_include_usage); no other API reads it."""
     assert ModelConfig(adapter_type="chat_completions", model_name="m").chat_include_usage is True
     assert ModelConfig(adapter_type="openrouter", model_name="m").chat_include_usage is False
 
