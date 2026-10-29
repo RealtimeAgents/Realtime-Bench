@@ -52,15 +52,15 @@ def _openai_driver(clock) -> OpenAIRealtimeDriver:
     return driver
 
 
-def test_a_gemini_push_is_written_once_its_video_and_its_text_went_out():
-    """A push's receipt says when its frame went out (decision N43): once both its writes
-    returned, the video and then the text, here a text write that drains only at 2 s."""
+def test_a_gemini_push_is_written_once_its_video_went_out():
+    """A push's receipt says when its frame went out (decision N43): once its video write
+    returned, here one that drains only at 2 s. Its text goes with the next trigger."""
     rig = Rig()
     clock = rig.driver.clock = Dial(1.0, rig.log)
 
     async def run():
         await rig.connect()
-        rig.socket.stall = lambda message: wire(message) == ("text", "frame 1")
+        rig.socket.stall = lambda message: wire(message) == "video"
         push = asyncio.ensure_future(rig.driver.push_frame(None, rig.view([pushed(1)])))
         await settle()
         stalled = [wire(message) for message in rig.socket.sent]
@@ -71,8 +71,9 @@ def test_a_gemini_push_is_written_once_its_video_and_its_text_went_out():
         return stalled, receipt
 
     stalled, receipt = asyncio.run(run())
-    assert stalled == ["video"]
+    assert stalled == []
     assert receipt.written_at == 2.0
+    assert [wire(message) for message in rig.socket.sent] == ["video"]
 
 
 def test_an_openai_push_is_written_once_its_frame_write_returned():

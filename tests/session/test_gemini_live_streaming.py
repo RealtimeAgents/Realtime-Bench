@@ -596,10 +596,10 @@ def test_a_failed_read_ends_every_reply_on_the_connection():
     assert first.code == 1011 and second is first
 
 
-def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_reply():
-    """A frame goes out as a video frame, then its text, with no activity around it and no wait
-    between: its block is sent once both are written. After a goAway nothing is pushed until the
-    session is renewed."""
+def test_a_pushed_frame_goes_on_the_video_stream_alone_and_starts_no_reply():
+    """A frame goes out as a video frame, with no activity around it and no wait: its block is
+    sent once it is written, and its text goes with the next trigger. After a goAway nothing is
+    pushed until the session is renewed."""
     rig = Rig()
 
     async def run():
@@ -618,12 +618,11 @@ def test_a_pushed_frame_goes_on_the_video_stream_then_its_text_and_starts_no_rep
         return pushed_frame, written, delivery, refused
 
     pushed_frame, written, delivery, refused = asyncio.run(run())
-    # The receipt (decision N43): written once both went out; Gemini Live confirms no frame.
+    # The receipt (decision N43): written once the video went out; Gemini Live confirms no frame.
     assert pushed_frame.confirmed_at is None
     assert written[0] <= pushed_frame.written_at <= written[1]
-    video, text = rig.socket.sent
+    (video,) = rig.socket.sent
     assert list(video["realtime_input"]) == ["video"]
-    assert text == {"realtime_input": {"text": "frame 1"}}
     assert rig.log == []  # no wait
     assert delivery == Delivery.SENT
     assert refused == "Gemini Live requires canonical history synchronization before input"
@@ -642,11 +641,11 @@ def wire(message: dict):
 ACTIVITY = ["activityStart", "audio", "activityEnd"]
 
 
-def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
+def test_a_reply_is_one_activity_with_the_feedback_and_frame_texts_the_session_lacks():
     """request_reply starts the reply's generation, then sends one activity: the feedback the
-    session does not hold yet, and the silent audio an activity must hold. The reply's first
-    message, right after its activity, is that reply's; the next trigger carries only the
-    feedback that came since."""
+    session does not hold yet, the text of each frame pushed since the last trigger, and the
+    silent audio an activity must hold. The reply's first message, right after its activity, is
+    that reply's; the next trigger carries only what came since."""
     rig = Rig()
     blocks = [pushed(1)]
     triggers = []
@@ -683,7 +682,7 @@ def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
     assert generation.metadata["video_ingestion_wait_ms"] == 0
     assert generation.metadata["gemini_live_input_transport"] == "realtime_input"
     assert [[wire(message) for message in trigger] for trigger in triggers] == [
-        ACTIVITY,
+        ["activityStart", ("text", "frame 1"), "audio", "activityEnd"],
         ["activityStart", ("text", "EXECUTION RESULT: ok"), "audio", "activityEnd"],
         ["activityStart", ("text", "EXECUTION RESULT: missed"), "audio", "activityEnd"],
     ]
@@ -692,9 +691,9 @@ def test_a_reply_is_one_activity_with_the_feedback_the_session_lacks():
 
 
 def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
-    """The event log hears a pushed frame as sent after its text went out, and a trigger's
-    feedback after the activity ended, on the connection they went out on; and once each reply
-    is done, no queue is left for it."""
+    """The event log hears a pushed frame as sent after its video went out, and a trigger's
+    feedback and frame text after the activity ended, on the connection they went out on; and
+    once each reply is done, no queue is left for it."""
     rig = Rig()
     blocks = [
         pushed(1),
@@ -717,14 +716,14 @@ def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
     assert asyncio.run(run()) == {}
     connection = "gemini_live.ws-1"
     assert log.events[1:] == [
-        ("sent", ["f1.frame"], connection, 2),
-        ("sent", ["d1.feedback"], connection, 6),
+        ("sent", ["f1.frame"], connection, 1),
+        ("sent", ["d1.feedback", "f1.frame"], connection, 6),
     ]
 
 
 def test_a_push_and_a_trigger_go_out_one_after_the_other():
-    """A frame pushed while a reply is requested goes out whole before or after the activity,
-    never inside it."""
+    """A frame pushed while a reply is requested goes out before or after the activity, never
+    inside it; its text goes with a trigger planned after it."""
     rig = Rig()
 
     async def run():
@@ -737,13 +736,10 @@ def test_a_push_and_a_trigger_go_out_one_after_the_other():
         await rig.driver.close()
 
     asyncio.run(run())
-    sent = [wire(message) for message in rig.socket.sent]
-    push = [
-        wire(message)
-        for message in rig.socket.sent
-        if wire(message) in ("video", ("text", "frame 1"))
-    ]
-    assert sent in (push + ACTIVITY, ACTIVITY + push)
+    assert [wire(message) for message in rig.socket.sent] in (
+        ["video", "activityStart", ("text", "frame 1"), "audio", "activityEnd"],
+        [*ACTIVITY, "video"],
+    )
 
 
 def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
@@ -1133,7 +1129,7 @@ def test_a_reader_that_failed_leaves_the_session_to_be_rebuilt():
 
     assert asyncio.run(run()) == RuntimeState.DIRTY
     assert len(rig.live.sockets) == 2
-    assert [wire(message) for message in rig.socket.sent][-2:] == ["video", ("text", "frame 2")]
+    assert [wire(message) for message in rig.socket.sent][-2:] == ["client_content", "video"]
 
 
 def test_a_reply_is_refused_while_one_is_in_flight():
@@ -1230,15 +1226,19 @@ def test_a_push_whose_write_failed_is_unknown():
 
     async def run():
         await rig.connect()
-        rig.socket.fail = lambda message: wire(message) == ("text", "frame 1")
+        rig.socket.fail = lambda message: wire(message) == "video"
         try:
             await rig.driver.push_frame(None, rig.view([pushed(1)]))
         except RuntimeError:
             pass
+        request = GenerationRequest("turn-0", "inf", canonical=rig.view([]))
+        await rig.driver.request_reply(request)
         await rig.driver.close()
 
     asyncio.run(run())
-    assert log.events[1:] == [("unknown", ["f1.frame"], "gemini_live.ws-1", 1)]
+    # Its text goes with no trigger: the frame is not in the session.
+    assert log.events[1:] == [("unknown", ["f1.frame"], "gemini_live.ws-1", 0)]
+    assert [wire(message) for message in rig.socket.sent] == ACTIVITY
 
 
 def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply_ended():
@@ -1271,7 +1271,7 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
     assert isinstance(refused, RuntimeError)
     assert renewed.provider_metadata["session_resumed"]
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
-    assert [wire(message) for message in rig.socket.sent] == ["video", ("text", "frame 2")]
+    assert [wire(message) for message in rig.socket.sent] == ["video"]
 
 
 def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again_after_renewal():
@@ -1313,10 +1313,13 @@ def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again
 
     refused, left, renewed = asyncio.run(run())
     assert isinstance(refused, RenewalRequired)
-    assert left == (["video", ("text", "frame 1")], {}, RuntimeState.READY, "go_away")
+    assert left == (["video"], {}, RuntimeState.READY, "go_away")
     assert renewed.provider_metadata["session_resumed"]
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
-    assert [wire(message) for message in rig.socket.sent] == ACTIVITY
+    # The resumed session holds what the handle held: the frame's text goes with this trigger.
+    assert [wire(message) for message in rig.socket.sent] == [
+        "activityStart", ("text", "frame 1"), "audio", "activityEnd",
+    ]  # fmt: skip
 
 
 def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():

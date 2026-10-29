@@ -297,16 +297,23 @@ phase2.md's fallback is element ids that stay fixed across frames.
 phase2.md, 落地前要验证 4; decision 22 (plan b); stream-gemini. Run `gemini-3.8-live` for 3
 minutes.
 
-- Frames go in as `realtime_input` video followed by the frame's text, outside any activity, and
-  keep going during replies: the client's `realtime_input` messages that carry `video` come about
-  once a second throughout,
+- Frames go in as `realtime_input` video, outside any activity, and keep going during replies:
+  the client's `realtime_input` messages that carry `video` come about once a second throughout,
   `uv run python session_bodies.py <dir> realtime_input | jq -r 'select(.[4].realtime_input.video) | .[0]'`
-  printing their times. Count only those: each frame sends its text as another `realtime_input`,
-  and each trigger three or four more (the activity's start and end, the silence, any feedback).
+  printing their times. Count only those: each trigger sends three or more others (the
+  activity's start and end, the silence, the feedback and the frame texts).
 - Each reply starts with one activity: `activityStart`, the feedback since the last trigger as
-  text if any, 100 ms of silent audio, `activityEnd`; each is followed by a `toolCall` or a
-  `turnComplete` well within the reply watchdog.
-- The first trigger has no feedback yet, only the silence: it must start a reply too.
+  text if any, the text of each frame pushed since the last trigger, each naming the number on
+  its screenshot (`... labelled FRAME 12.`), 100 ms of silent audio, `activityEnd`; each is
+  followed by a `toolCall` or a `turnComplete` well within the reply watchdog.
+- The first trigger has no feedback yet, only the first frames' texts and the silence: it must
+  start a reply too.
+- No reply is interrupted:
+  `uv run python session_bodies.py <dir> serverContent | jq -r 'select(.[4].serverContent.interrupted) | .[0]'`
+  prints nothing. On Gemini 3.1 Flash Live a text sent outside an activity once the model has
+  begun its reply interrupts the reply, which then ends in `interrupted` and `turnComplete` with
+  no call and ends the run invalid (`native tool accounting requires a complete reply`); a video
+  frame does not. That is why a frame's text goes with the next trigger.
 - No fixed wait after the video in streaming:
   `jq -c 'select(.event=="SessionWait" and .payload.wait=="video_ingestion")' episode_trace.jsonl`
   prints nothing.

@@ -228,12 +228,14 @@ def _live_input(at: float, **realtime_input) -> dict:
     return _record("c2s", {"realtime_input": realtime_input}, at)
 
 
-def _live_push(n: int, at: float) -> list[dict]:
-    """Capture ``n`` (from 0) going in at ``at``: its image, then its text."""
-    return [
-        _live_input(at, video={"data": _frame(n), "mime_type": "image/png"}),
-        _live_input(at, text=_frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT, n)),
-    ]
+def _live_push(n: int, at: float) -> dict:
+    """Capture ``n`` (from 0) going in at ``at``: its image, whose text goes with the next
+    trigger."""
+    return _live_input(at, video={"data": _frame(n), "mime_type": "image/png"})
+
+
+def _live_frame_text(n: int) -> str:
+    return _frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT, n)
 
 
 def _live_trigger(at: float, *text: str) -> list[dict]:
@@ -276,14 +278,14 @@ def live_cassette() -> list[dict]:
         _record("open", {"path": LIVE_PATH}, 0.0),
         _record("c2s", {"setup": setup}, 0.0),
         _record("s2c", {"setupComplete": {}}),
-        *_live_push(0, 0.0),
-        *_live_trigger(0.0),
+        _live_push(0, 0.0),
+        *_live_trigger(0.0, _live_frame_text(0)),
         _record("s2c", {"toolCall": {"functionCalls": [call]}}, 0.4),
         _record("c2s", {"tool_response": {"functionResponses": [response]}}, 0.4),
         _record("s2c", {"serverContent": {"turnComplete": True}, "usageMetadata": usage}, 0.6),
         *_live_trigger(0.6, FEEDBACK),
-        *_live_push(1, 1.0),
-        *_live_push(2, 2.0),
+        _live_push(1, 1.0),
+        _live_push(2, 2.0),
         _record("close", {"by": "client", "code": 1000}, 3.0),
     ]
 
@@ -395,9 +397,10 @@ def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
     ]
     assert declarations == list(gui_function_declarations(clock_mode="wall", frame_reference=True))
     assert all("frame" in d["parameters_json_schema"]["required"] for d in declarations)
-    # Gemini Live confirms nothing but the setup.
+    # Gemini Live confirms nothing but the setup. A frame's text goes with the trigger after its
+    # video, and the episode ends before one comes after frames 2 and 3.
     assert _delivered(episode, "sent") == [
-        "f1.frame", None, "d0.call_1.feedback", "f2.frame", "f3.frame",
+        "f1.frame", "f1.frame", None, "d0.call_1.feedback", "f2.frame", "f3.frame",
     ]  # fmt: skip
     assert _delivered(episode, "confirmed") == ["system"]
     assert summary["context_control"] == "approximate"

@@ -756,9 +756,9 @@ class GeminiLiveDriver(SessionLifecycle):
         self, observation: ProviderObservation, history: CanonicalRequest
     ) -> PushReceipt:
         """Streaming: push the history view's newest frame, one the session does not hold yet,
-        on the realtime_input video stream and then its text, outside any activity, so that it
-        starts no reply. Its receipt says when both were written; Gemini Live confirms no frame
-        (decision N43).
+        on the realtime_input video stream, outside any activity, so that it starts no reply; its
+        text goes with the next trigger (gemini/session.py Push). Its receipt says when the video
+        was written; Gemini Live confirms no frame (decision N43).
 
         A push and a trigger hold the session as a connection operation does
         (SessionLifecycle): their messages do not interleave, none goes to a connection being
@@ -782,16 +782,17 @@ class GeminiLiveDriver(SessionLifecycle):
                 self._core.send_failed(push.keys)
                 raise
             written = self.clock.monotonic()
-        self._core.sent(push.keys)
+        self._core.pushed(push)
         return PushReceipt(written)
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
         """Streaming: start the next reply with one activity, holding the execution feedback of
-        ``request.canonical`` that the session lacks (SessionCore.trigger), once the events() of
-        the reply before it are done: a connection carries one reply at a time. Its generation
-        starts before the activity goes out, so that the reader takes the reply's first message
-        for it. The session's NO_INTERRUPTION keeps the activity from cutting off what the
-        server may still be generating. It holds the session as push_frame does.
+        ``request.canonical`` that the session lacks and the texts of the frames pushed since the
+        last trigger (SessionCore.trigger), once the events() of the reply before it are done: a
+        connection carries one reply at a time. Its generation starts before the activity goes
+        out, so that the reader takes the reply's first message for it. The session's
+        NO_INTERRUPTION keeps the activity from cutting off what the server may still be
+        generating. It holds the session as push_frame does.
 
         After a goAway it raises RenewalRequired, as push_frame does, before it writes or starts
         anything, also for a goAway read while it waited for the session: renew() resumes the
@@ -906,7 +907,7 @@ class GeminiLiveDriver(SessionLifecycle):
             metadata={
                 **self._connect_metadata,
                 "input_audio_carrier_ms": 100 if transport == "realtime_input" else 0,
-                # A streaming push sends a frame's text right after its video.
+                # A streamed frame's text goes with the next trigger, with no wait for its video.
                 "video_ingestion_wait_ms": (
                     1000 if transport == "realtime_input" and not self.streaming else 0
                 ),
