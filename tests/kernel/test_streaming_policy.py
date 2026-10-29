@@ -446,6 +446,60 @@ def test_an_action_whose_reply_is_given_up_while_the_read_before_it_runs_does_no
     assert sim.executed == []
 
 
+@pytest.mark.parametrize("error", [None, "cdp timeout"])
+def test_a_call_cancelled_before_the_read_before_its_action_answers_withdraws_it_while_held(
+    error,
+):
+    """Reads take 0.25 s, so the reply starts at 0.25. A click and an action naming no frame
+    arrive at 1.5; the read asked for the click runs until 1.75, and the refusal of the other is
+    given as feedback until 2.5. The click's call is cancelled at 1.625, before that read answers
+    that the task goes on, or fails, which tells nothing: the answer is filed where the shell took
+    it in, behind the cancellation, and the click is withdrawn (bug scan 10-29 F3: the answer,
+    filed where the read was asked, came first, and the click executed at 2.5)."""
+    calls = (Call(1.25, CLICK, "a"), Call(1.25, CLICK, "r", grounding=MISSING_FRAME))
+    reply = Reply(10.0, calls=calls, cancellations=((1.375, ("a",)),))
+    errors = {} if error is None else {3: error}
+    sim = _run(World(replies=[reply], check_s=0.25, commit_s=1.0, check_errors=errors))
+    assert sim.checks[:3] == [0.0, 1.0, 1.5]
+    assert sim.executed == []
+    assert sim.statuses() == [CANCELLED_CALL, INVALID_GROUNDING_FRAME]
+
+
+def test_a_reply_given_up_before_the_read_before_its_action_answers_withdraws_it_while_held():
+    """Reads take 0.5 s, so the reply starts at 0.5, and its watchdog gives it up at 2. A click and
+    an action naming no frame arrive at 1.75; the read asked for the click runs until 2.25, and the
+    refusal of the other is given as feedback until 2.75. The watchdog, due before that read
+    answers, is handled first, and the click does not execute (bug scan 10-29 F3: it executed at
+    2.75)."""
+    calls = (Call(1.25, CLICK, "a"), Call(1.25, CLICK, "r", grounding=MISSING_FRAME))
+    world = World(replies=[Reply(10.0, calls=calls)], check_s=0.5, commit_s=1.0)
+    sim = _run(world, reply_watchdog_s=1.5)
+    assert sim.data("GenerationAbandoned")[0] == {"generation": 1, "reason": "reply_watchdog"}
+    assert sim.statuses() == [CANCELLED_GENERATION, INVALID_GROUNDING_FRAME]
+    assert sim.executed == []
+
+
+def test_a_third_failed_read_before_an_action_handled_past_the_deadline_invalidates_the_run():
+    """Reads take 0.25 s, so the reply starts at 0.25. The reads at 3 and 4 fail; a click and an
+    action naming no frame arrive at 4.6, and the read asked for the click fails too, the third in
+    a row, answering at 4.85 while the refusal's feedback holds the shell until 5.6. That answer is
+    handled behind the deadline's timer, which gives the reply up, and still invalidates the run
+    from 4.6, where it was asked (N44); the click does not execute."""
+    errors = {4: "cdp timeout", 5: "cdp timeout", 6: "cdp timeout"}
+    calls = (Call(4.35, CLICK, "a"), Call(4.35, TYPE, "b", grounding=MISSING_FRAME))
+    sim = _run(
+        World(replies=[Reply(10.0, calls=calls)], check_s=0.25, commit_s=1.0, check_errors=errors)
+    )
+    assert sim.checks == [0.0, 1.0, 2.0, 3.0, 4.0, 4.6]
+    assert sim.executed == []
+    assert sim.statuses() == ["invalid_run", INVALID_GROUNDING_FRAME]
+    assert sim.data("GenerationAbandoned") == [{"generation": 1, "reason": "deadline"}]
+    assert _ended(sim) == ("invalid_run", "invalid", 4.6, 5.6)
+    assert sim.termination.invalid == Invalidated(
+        "environment", "terminal_state_check_failed", "cdp timeout"
+    )
+
+
 def test_an_action_whose_read_before_it_answers_past_the_deadline_does_not_execute():
     """Reads take 0.5 s, so the reply starts at 0.5. The click arrives at 4.75, and the read asked
     for it answers at 5.25: the deadline waits for it, and then ends the episode."""
@@ -458,9 +512,9 @@ def test_an_action_whose_read_before_it_answers_past_the_deadline_does_not_execu
 
 def test_an_action_whose_read_before_it_is_handled_past_the_deadline_does_not_execute():
     """Reads take 0.25 s, so the reply starts at 0.25. The click arrives at 4.6, and the read
-    asked for it answers at 4.85, filed at 4.6; the refusal arriving at 4.7 is given as feedback
-    until 5.7, so that answer is handled then, before the deadline's timer: the click does not
-    execute past the deadline."""
+    asked for it answers at 4.85; the refusal arriving at 4.7 is given as feedback until 5.7, so
+    that answer is handled then, filed as it was taken in, behind the deadline's timer, which
+    waits for it: the click does not execute past the deadline."""
     calls = (Call(4.35, CLICK, "a"), Call(4.45, TYPE, "b", grounding=MISSING_FRAME))
     sim = _run(World(replies=[Reply(10.0, calls=calls)], check_s=0.25, commit_s=1.0))
     assert sim.executed == []

@@ -87,6 +87,7 @@ class Kernel:
         self._generations = itertools.count(1)
         self._requests = itertools.count(1)
         self._asked: dict[int, float] = {}  # request -> semantic reading it was made at
+        self._by_arrival: set[int] = set()  # requests made ``by_arrival``, until answered
 
     # ---- the shell's side -------------------------------------------------------------------
 
@@ -104,11 +105,14 @@ class Kernel:
         for event in self.inbox.take():
             # An end check's answer is filed at the reading it was asked at, the time its end is
             # dated by: a check asked before the deadline is handled before it (phase2.md,
-            # 时间和结束判定). An action that reports when it finished, as one on a lane of its
-            # own does, is filed there, however late the shell took its answer in.
+            # 时间和结束判定). An answer that finds no end to a check asked ``by_arrival`` is
+            # filed as it is taken in instead (``request``). An action that reports when it
+            # finished, as one on a lane of its own does, is filed there, however late the shell
+            # took its answer in.
             at = self.semantic
             if isinstance(event, EndChecked):
-                at = self._asked.get(event.request, at)
+                if event.ended or event.request not in self._by_arrival:
+                    at = self._asked.get(event.request, at)
             elif isinstance(event, ActionExecuted) and event.finished_at is not None:
                 at = min(at, event.finished_at)
             self.agenda.add(Clock.SEMANTIC, at, event.priority, event)
@@ -128,6 +132,7 @@ class Kernel:
                 self._dispatch(item)
             if isinstance(item, EndChecked):
                 self._asked.pop(item.request, None)
+                self._by_arrival.discard(item.request)
         if (
             self.termination is None
             and self.ending is not None
@@ -145,10 +150,16 @@ class Kernel:
     def record(self, kind: str, /, **data) -> None:
         self._log(kind, data)
 
-    def request(self) -> int:
-        """A fresh id to match an answer to its command."""
+    def request(self, by_arrival: bool = False) -> int:
+        """A fresh id to match an answer to its command. An end check asked ``by_arrival`` has an
+        answer that finds no end filed at the reading the kernel takes it in, as another posted
+        event is, so that it comes after what was posted before it and after a timer due by then;
+        one that finds the end is filed where it was asked all the same (``step``). The read
+        right before a streaming action is asked so (streaming.py ``_ask``)."""
         request = next(self._requests)
         self._asked[request] = self.semantic
+        if by_arrival:
+            self._by_arrival.add(request)
         return request
 
     def asked_at(self, request: int) -> float:

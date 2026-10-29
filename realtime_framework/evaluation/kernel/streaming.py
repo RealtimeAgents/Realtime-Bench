@@ -36,12 +36,15 @@ The state is read at most once an environment frame, at the frame's grid point, 
 once more right before an action that arrived since the last read, and once more right after every
 action executed. The read before an action finds whether the task ended before it executes, as the
 turn-based clock reads right before landing (turns.py ``_pre_checked``); an end it finds, and the
-failure of a third read in a row, are dated when it was asked (N44). The read after an action
-settles it, as the one that ended the task or not, before anything else runs, so nothing executes
-once the task has ended but after a failed read, which tells nothing, as on the turn-based clock
-(turns.py ``_end_checked``). A capture out when the action finishes holds that read up, but it
-stands for one right as the action finished: an end it finds is dated there, and the deadline
-waits for it (N31), as the turn-based clock reads right then. A failed read counts as the frame's.
+failure of a third read in a row, are dated when it was asked (N44). Its answer that finds no end,
+failed or not, is handled in the order it came, so that a call cancelled, a reply given up or the
+deadline passed before the kernel took it in keeps the action from executing, however long the shell
+held that answer up (core.py ``Kernel.request``). The read after an action settles it, as the one
+that ended the task or not, before anything else runs, so nothing executes once the task has ended
+but after a failed read, which tells nothing, as on the turn-based clock (turns.py
+``_end_checked``). A capture out when the action finishes holds that read up, but it stands for one
+right as the action finished: an end it finds is dated there, and the deadline waits for it (N31),
+as the turn-based clock reads right then. A failed read counts as the frame's.
 Three failed reads in a row invalidate the run. Every outcome, the refusals included, is committed
 to the agent as its feedback.
 
@@ -900,7 +903,7 @@ class StreamingPolicy:
         be handled after it, behind a command the shell ran across it; the deadline then ends the
         episode before the answer leads to anything, but for an action's. Two reads decide first,
         and the end waits for them: one asked before the deadline that is still out, which dates
-        a task's end it finds by when it was asked, as the turn-based kernel files such an answer
+        a task's end it finds by when it was asked (N44), where the kernel files that answer
         (core.py ``step``); and the read after an action that finished before the deadline, due
         behind a capture out or behind the action's answer, which dates it where the action
         finished (N31). The read's budget bounds the wait, and the capture's. The reply in flight
@@ -936,7 +939,8 @@ class StreamingPolicy:
         time its end is dated by, but for the read after an action, which stands for one as the
         action finished. It is this frame's read, and whichever came due meanwhile. An action
         waiting, which arrived before, takes the lane for it: it is the read before that action
-        (decision 12)."""
+        (decision 12), whose answer, unless it finds the end, is handled in the order it came
+        (core.py ``Kernel.request``)."""
         if "read" in self._line:
             self._line.remove("read")
         if self._lane is _Lane.IDLE and self.waiting is not None:
@@ -945,7 +949,7 @@ class StreamingPolicy:
                 self._line.remove("action")
         kernel = self.kernel
         self._read_frame = self._frame()
-        request = kernel.request()
+        request = kernel.request(by_arrival=self._lane is _Lane.PRE_CHECK)
         self._asked[request] = kernel.semantic
         self._last_asked = (request, kernel.semantic)
         kernel.emit(CheckEnd(request))
