@@ -982,14 +982,20 @@ class GuestEnvironment:
         """Press wall-held keys again after a guest action released them.
 
         A `key` tap goes to the guest as a press and release, which ends the X hold of any key
-        in its chord; the token path re-presses such keys so the lease survives, and the wall
-        path must do the same. Returns the wires pressed again, if any.
+        in its chord, as does a pointer action's modifier, which the guest presses and releases
+        around it (guest_server/server.py _with_modifier); the token path re-presses such keys
+        so the lease survives, and the wall path must do the same. Returns the wires pressed
+        again, if any.
         """
-        try:
-            parts, _ = self._key_chord(action)
-        except ValueError:
-            return []
-        identities = [identity for identity, _ in parts]
+        modifier = action.parameters.get("modifier")
+        if modifier:
+            identities = [self._key_identity(part.strip()) for part in modifier.split("+")]
+        else:
+            try:
+                parts, _ = self._key_chord(action)
+            except ValueError:
+                return []
+            identities = [identity for identity, _ in parts]
         # Only actions add leases and the release timer only ends them: a chord with no key held
         # now has none to press again.
         with self._wall_lock:
@@ -1142,7 +1148,9 @@ class GuestEnvironment:
                         if wall_key and self._refusal(exc) is None:
                             self._count_as_held_on_the_wall(action)
                         raise
-                    if wall_key:
+                    if wall_key or (
+                        self.clock_mode != "token" and action.parameters.get("modifier")
+                    ):
                         restored = self._restore_wall_holds(action)
                         if restored:
                             if not isinstance(result, dict):
