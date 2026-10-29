@@ -418,7 +418,8 @@ def main(argv=None):
     results_base = results_base.resolve()
     results_base.mkdir(parents=True, exist_ok=True)
     for attempt in range(5):
-        result_root = results_base / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        # To the millisecond: the lanes of a batch on one checkout start trials within a second.
+        result_root = results_base / datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
         try:
             result_root.mkdir()
             break
