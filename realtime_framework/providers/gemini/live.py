@@ -1425,6 +1425,9 @@ class GeminiLiveDriver(SessionLifecycle):
             # result would discard the WebSocket close code and make a later retry impossible to
             # classify. A repair after a generation, the only sync with a current generation,
             # breaks the session instead, and the turn keeps its result (decision 35).
+            # The result keeps the failure as its error, which the session operations before a
+            # generation raise theirs from: theirs classifies as this one, not retryable there,
+            # so the turn is not retried and is invalid for its kind, an exhausted quota say.
             if (
                 request.current_generation is None
                 and self.classify_transport_error(exc).retryable
@@ -1434,4 +1437,5 @@ class GeminiLiveDriver(SessionLifecycle):
                 SyncDisposition.BROKEN,
                 ProviderHistoryState.UNKNOWN,
                 detail=repr(exc)[:500],
+                error=exc,
             )

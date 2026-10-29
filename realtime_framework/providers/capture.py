@@ -308,6 +308,23 @@ def _received_in(scope: dict | None, connection, message) -> None:
     _session_capture(connection, "server", message)
 
 
+def _close_frame(frame) -> dict | None:
+    return None if frame is None else {"code": frame.code, "reason": frame.reason}
+
+
+def _closed_in(scope: dict | None, connection) -> None:
+    enter_trace_scope(scope)
+    protocol = connection.protocol
+    _session_capture(
+        connection,
+        "lifecycle",
+        message_type="closed",
+        received=_close_frame(protocol.close_rcvd),
+        sent=_close_frame(protocol.close_sent),
+        received_then_sent=protocol.close_rcvd_then_sent,
+    )
+
+
 def _connection_class(base, owner, channel: str, classify):
     numbers = itertools.count(1)
 
@@ -321,6 +338,8 @@ def _connection_class(base, owner, channel: str, classify):
             super().__init__(*args, **kwargs)
             self.trace_connection_number = next(numbers)
             self.trace_connection_id = f"{channel}-{self.trace_connection_number}"
+            # The scope of the call that opens the connection, which its close is recorded in.
+            self.trace_open_scope = current_trace_scope()
 
     return Recording
 
@@ -333,6 +352,12 @@ def async_ws_connection(owner, channel: str, classify):
     unknown. A server message is captured when the existing code receives it, in the trace scope
     of the call that receives it, or in the one ``trace_read_scope()`` gives as the message comes
     in, where the driver sets it: a reader whose read began before what it reads for did.
+    A connection whose opening handshake went through adds a lifecycle record as it closes, by
+    whichever side: the close frame it received and the one it sent, each a code and its reason
+    or None, and whether it received the server's before it sent its own (None unless both
+    went), in the trace scope of the call that opened it. The reason stays in this record: a
+    driver's error for the close names the codes alone, as the transport classification reads
+    an error's text.
     """
     from websockets.asyncio.client import ClientConnection
 
@@ -370,5 +395,12 @@ def async_ws_connection(owner, channel: str, classify):
                 # alone, not to what the reader records after it.
                 contextvars.copy_context().run(_received_in, self.trace_read_scope(), self, message)
             return message
+
+        def connection_lost(self, exc):
+            super().connection_lost(exc)
+            # One whose opening handshake failed has its handshake_failed record instead. The
+            # loss is reported in whatever context the transport's callback runs in.
+            if self.protocol.handshake_exc is None:
+                contextvars.copy_context().run(_closed_in, self.trace_open_scope, self)
 
     return Connection
