@@ -585,6 +585,22 @@ def test_the_deadline_waits_for_the_read_after_an_action_answered_while_the_shel
     assert sim.resolved()[0]["terminal_after_action"] is True
 
 
+def test_a_read_after_an_action_asked_before_the_deadline_settles_it_though_handled_after():
+    """Reads take 0.25 s, so the reply starts at 0.25. The click executes from 1.75 to 4.5; the
+    read after it, asked then, answers at 4.75 that the task goes on, while the refusal's
+    feedback, from 4.6, holds the shell until 5.6. That answer is filed where the read was asked,
+    before the deadline: it settles the click as an action the episode went on after, and the
+    deadline ends the episode next (bug scan 10-29 F3: a fix that filed every answer finding no
+    end where the shell took it in put it behind the deadline and made the click the last)."""
+    calls = (Call(1.25, CLICK, "a", execute_s=2.75), Call(4.35, TYPE, "b", grounding=MISSING_FRAME))
+    sim = _run(World(replies=[Reply(10.0, calls=calls)], check_s=0.25, commit_s=1.0))
+    assert sim.executed == [(1.75, CLICK)]
+    assert sim.checks == [0.0, 1.0, 1.5, 4.5]
+    assert sim.statuses() == ["applied", INVALID_GROUNDING_FRAME]
+    assert sim.resolved()[0]["terminal_after_action"] is False
+    assert _ended(sim) == ("time_limit", "deadline", 5.0, 5.6)
+
+
 def test_the_deadline_beats_a_watchdog_due_before_it():
     """The click's feedback holds the shell from 4.25 to 5.25, across the watchdog due at 4.5 and
     the deadline. The watchdog is handled first, but the deadline gives the reply up."""
