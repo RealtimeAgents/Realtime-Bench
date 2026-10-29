@@ -10,7 +10,9 @@ import string as string
 import threading as threading
 import traceback as traceback
 from contextlib import contextmanager as contextmanager
+from dataclasses import dataclass as dataclass
 from pathlib import Path as Path
+from typing import Any as Any
 
 from realtime_framework.clock import episode_clocks
 from realtime_framework.entity.actions import Action
@@ -66,6 +68,29 @@ POINTER_ACTIONS = frozenset(
 
 class ActionRejected(ValueError):
     """The runtime refused a well-formed action; the model is told why and the run stays valid."""
+
+
+@dataclass(frozen=True)
+class Execution:
+    """What one execute() did, all of it from that call, for the kernel's shells, which answer
+    their Execute with it (evaluation/shell.py, env_lanes.py)."""
+
+    # "applied", or "failed" with its rejection or its error; the legacy loop's environment also
+    # answers "wait" for the WAIT it runs (tests/differential/legacy_environment.py).
+    status: str
+    result: Any = None  # the execution record; {"error"} for a failed action
+    coordinate_trace: Any = None  # the guest's, for an applied action the guest ran
+    # Token clock: the key identities a hold_key now holds; () otherwise.
+    held_keys: tuple[str, ...] = ()
+    # The state reads of the end checks made inside the action, in order, each (ended, reason,
+    # error): what check_end() answered with no error, or (False, None, the error) for one that
+    # failed; also of an action that then failed. Only a token-clock key tap makes them.
+    end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
+    # The refusal's own words when the runtime or the guest refused the action, which leaves the
+    # run valid; else the failure, for which the environment latched the run invalid. Either may
+    # be "": which of the two is not None says which it is.
+    rejection: str | None = None
+    error: str | None = None
 
 
 # Match keyboard repeat behavior under both clocks: repeat only the newest held
@@ -159,14 +184,14 @@ class GuestEnvironment:
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
-        # The identities of the keys the last execute() leased with a token-clock hold_key, for
-        # the kernel's shell, which ends the leases itself; () on the wall clock, whose release
-        # timer ends them.
-        self.last_held_keys = ()
-        # The end checks the last key tap made, for the kernel's shell, which counts failed state
-        # reads: each (ended, reason, error) as check_end() answered or failed, (False, None, None)
-        # also when the task has no end check.
-        self.last_end_checks = ()
+        # What the execute() in hand reports as Execution.held_keys: the identities of the keys
+        # a token-clock hold_key leased, for the kernel's shell, which ends the leases itself; ()
+        # on the wall clock, whose release timer ends them.
+        self._action_held_keys = ()
+        # ... and as Execution.end_checks: the end checks its key tap made, for the kernel's
+        # shell, which counts failed state reads: each (ended, reason, error) as check_end()
+        # answered or failed, (False, None, None) also when the task has no end check.
+        self._action_end_checks = ()
         # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)},
         # and "stuck" once the release timer gave up on the key, left for the cleanup to release.
         # _wall_lock guards them and the release timer and is never held over a guest request,
@@ -194,12 +219,9 @@ class GuestEnvironment:
         self._episode_over = False
         self._terminal_reason = None
         self.failed = 0
-        self._last_exec_error = None
         self.capture_latencies = []
         self.capture_times = []
         self.frame_ages = []
-        self._last_execution_result = None
-        self._last_coordinate_trace = None
         self.action_audit_path = Path(action_audit_path) if action_audit_path else None
         self._audit_lock = threading.Lock()
 
@@ -281,14 +303,14 @@ class GuestEnvironment:
 
     def _ended_after_step(self):
         """The end check after each token step of wait_until_tick: the kernel counts failed reads,
-        so every check goes to last_end_checks as (ended, reason, error), and after a failed one,
-        (False, None, its traceback), the advance goes on."""
+        so every check goes to the action's end checks as (ended, reason, error), and after a
+        failed one, (False, None, its traceback), the advance goes on."""
         try:
             ended, reason = self.check_end()
         except Exception:  # noqa: BLE001 - the kernel counts the failed read
-            self.last_end_checks += ((False, None, traceback.format_exc()),)
+            self._action_end_checks += ((False, None, traceback.format_exc()),)
             return False
-        self.last_end_checks += ((ended, reason, None),)
+        self._action_end_checks += ((ended, reason, None),)
         return ended
 
     def step_clock(self, step):
@@ -709,7 +731,7 @@ class GuestEnvironment:
             for identity, _ in new_parts:
                 if identity not in MODIFIER_KEYS:
                     self._start_autorepeat(identity)
-            self.last_held_keys = tuple(identity for identity, _ in parts)
+            self._action_held_keys = tuple(identity for identity, _ in parts)
         return {
             "logical_key": chord,
             "effective_chord": "+".join(
@@ -1044,24 +1066,27 @@ class GuestEnvironment:
     def _execution_failed(self, exc):
         self.failed += 1
         refusal = self._refusal(exc)
-        # The model is told the refusal's own words; the execution result keeps the whole failure.
-        self._last_exec_error = str(exc if refusal is None else refusal)
-        self._last_rejected_by_guest = refusal is not None
-        if not self._last_rejected_by_guest and not getattr(self, "_invalid_run", None):
+        if refusal is None and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",
                 "reason": "action_execution_failed",
                 "detail": str(exc),
             }
-        self._last_execution_result = {"error": str(exc)}
-        self._last_coordinate_trace = None
-        return "failed"
+        # The model is told the refusal's own words; the execution result keeps the whole failure.
+        return Execution(
+            "failed",
+            {"error": str(exc)},
+            held_keys=self._action_held_keys,
+            end_checks=self._action_end_checks,
+            rejection=None if refusal is None else str(refusal),
+            error=str(exc) if refusal is None else None,
+        )
 
     def execute(self, action, *, release_at=None):
-        """Apply one action and return its lifecycle status to the scheduler. The kernel's shell
-        gives a wall-clock hold_key the time to release its keys, ``release_at``."""
-        self.last_held_keys = ()
-        self.last_end_checks = ()
+        """Apply one action and return what it did (Execution). The kernel's shell gives a
+        wall-clock hold_key the time to release its keys, ``release_at``."""
+        self._action_held_keys = ()
+        self._action_end_checks = ()
         action_type = action.action_type
         try:
             if (
@@ -1070,9 +1095,14 @@ class GuestEnvironment:
                 and action_type in (ActionType.KEY, ActionType.HOLD_KEY)
             ):
                 self._reject(action)
-                self._last_execution_result = self._execute_clock_key(action)
+                result = self._execute_clock_key(action)
                 self.actions += 1
-                return "applied"
+                return Execution(
+                    "applied",
+                    result,
+                    held_keys=self._action_held_keys,
+                    end_checks=self._action_end_checks,
+                )
             budget = action_timeout(action, ENVIRONMENT_BUDGET.action_s)
             with operation_budget(
                 f"{action_type.value} action", budget, clock=self.clocks.operational
@@ -1128,19 +1158,22 @@ class GuestEnvironment:
                 if not isinstance(result, dict):
                     result = {"guest_result": result}
                 result["page_focus_restored"] = True
-            self._last_execution_result = result
-            self._last_coordinate_trace = (result or {}).get("coordinate_trace")
+            coordinate_trace = (result or {}).get("coordinate_trace")
             if action_type == ActionType.MOUSE_DOWN:
                 self._held_mouse_buttons.add(action.parameters.get("button", "left"))
             elif action_type == ActionType.MOUSE_UP:
                 self._held_mouse_buttons.discard(action.parameters.get("button", "left"))
-            if isinstance(self._last_execution_result, dict):
-                self._last_execution_result["active_holds"] = active_holds
-                self._last_execution_result["active_mouse_buttons"] = sorted(
-                    self._held_mouse_buttons
-                )
+            if isinstance(result, dict):
+                result["active_holds"] = active_holds
+                result["active_mouse_buttons"] = sorted(self._held_mouse_buttons)
             self.actions += 1
-            return "applied"
+            return Execution(
+                "applied",
+                result,
+                coordinate_trace,
+                held_keys=self._action_held_keys,
+                end_checks=self._action_end_checks,
+            )
         except Exception as exc:
             return self._execution_failed(exc)
 

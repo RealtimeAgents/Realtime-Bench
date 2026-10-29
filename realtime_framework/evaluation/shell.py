@@ -109,42 +109,24 @@ from realtime_framework.evaluation.kernel.events import (
     Termination,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
-from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
+from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, Execution
 from realtime_framework.sandbox.budget import operation_budget
 
 
 class ShellEnvironment(Protocol):
     """The environment adapter as the shell runs the kernel's commands on it, all on the shell's
-    thread. An operation that fails raises, except ``execute()``: it returns ``"failed"`` and leaves
-    the error in ``_last_exec_error``, whether the guest refused the action in
-    ``_last_rejected_by_guest`` and the execution record in ``_last_execution_result``, which the
-    shell reads as the runner does (legacy_loop.py ``_land_action``, ``_apply``). The environment
-    may also latch the run invalid itself (``_invalid_run``) with a more precise reason, such as
-    ``clock_advance_failed`` from a tap; for an operation that returns, the shell posts that as
-    Invalidated before the command's answer, after it when the answer is an action's that
-    carries that same failure (``_execute``). One that raises is answered with its error, and the
-    run is invalid for the kernel's reason for that failure (kernel/turns.py ``_step_failed``,
-    ``_rendered``)."""
+    thread. An operation that fails raises, except ``execute()``: it returns what the action did
+    (sandbox/actions.py Execution), a failed one with its rejection or its error, and the shell
+    answers the Execute with it. The environment may also latch the run invalid itself
+    (``_invalid_run``) with a more precise reason, such as ``clock_advance_failed`` from a tap;
+    for an operation that returns, the shell posts that as Invalidated before the command's
+    answer, after it when the answer is an action's that carries that same failure
+    (``_execute``). One that raises is answered with its error, and the run is invalid for the
+    kernel's reason for that failure (kernel/turns.py ``_step_failed``, ``_rendered``)."""
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
     task: Any  # the task runtime; the shell reads its evaluation_snapshot() at the freeze
-    # Token clock: the key identities, as the environment names them, that the last execute()
-    # holds with a hold_key; () otherwise. The shell passes them as ActionExecuted.held_keys.
-    last_held_keys: tuple[str, ...]
-    # The state reads of the end checks the last execute() made inside the action, in order, each
-    # (ended, reason, error): what check_end() answered with no error, or (False, None, the error)
-    # for one that failed; () when it made none. Only a token-clock key tap makes them, after each
-    # step of its advance; one that sees the end stops that advance, a failed one does not. The
-    # shell passes them as ActionExecuted.end_checks.
-    last_end_checks: tuple[tuple[bool, str | None, str | None], ...]
-    # What the last execute() left for the shell: its execution record and coordinate trace,
-    # which the shell clears before each, and when it returned "failed" its error and whether
-    # the guest refused the action.
-    _last_execution_result: Any
-    _last_coordinate_trace: Any
-    _last_exec_error: str | None
-    _last_rejected_by_guest: bool
     frame_ages: list[float]  # each reported decision's frame age, which the shell appends
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run. Once the snapshot is frozen, an
@@ -154,12 +136,13 @@ class ShellEnvironment(Protocol):
 
     def capture(self) -> Observation: ...
 
-    def execute(self, action: Action, *, release_at: float | None = None) -> str:
-        """Run one action and return its status as today. Never a wait: the kernel lets a wait's
-        time pass itself. On the wall clock a hold_key's keys are released at ``release_at``,
-        semantic seconds since the origin, unless a key is already held until later; a press
-        keeps its keys down at least min(duration, 1/60 s) after its keydown returned, past
-        ``release_at`` when the press came that late."""
+    def execute(self, action: Action, *, release_at: float | None = None) -> Execution:
+        """Run one action and return what it did. Never a wait: the kernel lets a wait's time pass
+        itself. A token-clock key tap checks the end after each step of its advance: one that
+        sees the end stops that advance, a failed one does not. On the wall clock a hold_key's
+        keys are released at ``release_at``, semantic seconds since the origin, unless a key is
+        already held until later; a press keeps its keys down at least min(duration, 1/60 s)
+        after its keydown returned, past ``release_at`` when the press came that late."""
 
     def check_end(self) -> tuple[bool, str | None]:
         """Ask the task whether the episode is over: ``(ended, reason)``. Only the task is asked:
@@ -922,27 +905,18 @@ class _Shell:
 
     def _execute(self, command: Execute) -> None:
         env, decision = self.env, self._decision
-        env._last_execution_result = None
-        env._last_coordinate_trace = None
         latched = getattr(env, "_invalid_run", None)
-        status = env.execute(command.action, release_at=command.release_at)
-        rejection = error = None
-        if status == "failed":
-            # A guest refusal is the model's action failing, not the environment's.
-            if env._last_rejected_by_guest:
-                rejection = env._last_exec_error or ""
-            else:
-                error = env._last_exec_error
-        decision.coordinate_trace = env._last_coordinate_trace
+        execution = env.execute(command.action, release_at=command.release_at)
+        decision.coordinate_trace = execution.coordinate_trace
         answer = ActionExecuted(
             command.decision,
             # As the environment returned it; a guest reply's "timestamp" is real time inside the
             # sandbox (sandbox/guest.py execute_action).
-            result=env._last_execution_result,
-            held_keys=env.last_held_keys,
-            rejection=rejection,
-            error=error,
-            end_checks=env.last_end_checks,
+            result=execution.result,
+            held_keys=execution.held_keys,
+            rejection=execution.rejection,
+            error=execution.error,
+            end_checks=execution.end_checks,
         )
         invalid = getattr(env, "_invalid_run", None)
         if invalid is None or invalid is latched:

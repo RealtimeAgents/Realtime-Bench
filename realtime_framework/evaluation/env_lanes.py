@@ -17,12 +17,10 @@ snapshot does (realtime_tasks/game/runtime.py _CatalogGame.episode_over, evaluat
 _sample), and the environment adapter latches its end and its invalid run unlocked
 (GuestEnvironment.check_end, _execution_failed). A capture only reads the task
 (sandbox/observation/capture.py BrowserSceneCapture: ``interactable_providers`` and
-``captured_frame_is_current``); an action's calls into it are its page barriers
-(``begin_gui_action`` and ``complete_gui_action``, in GuestEnvironment.execute), and only an action
-writes what the action lane reads after it (GuestEnvironment.execute, _execution_failed). So a
-capture and an action share the gate and run at once, and new frames come in while a long action
-runs (phase2.md, native streaming). An end check, the snapshot and the release of the inputs hold
-it alone.
+``captured_frame_is_current``), and an action's calls into it are its page barriers
+(``begin_gui_action`` and ``complete_gui_action``, in GuestEnvironment.execute). So a capture and an
+action share the gate and run at once, and new frames come in while a long action runs (phase2.md,
+native streaming). An end check, the snapshot and the release of the inputs hold it alone.
 
 Sharing the gate is not sharing the browser's connection. A CDP call's timeout spends the wait for
 its session's lock (sandbox/browser/cdp.py PersistentCDPClient), which the action's page barriers
@@ -49,16 +47,15 @@ latches one on its own thread and reports it through ``on_invalid``
 (GuestEnvironment._wall_release_due), which the shell points at ``latched``.
 
 Answers. A capture's is what the shell makes of the Observation: the shell keeps the frame for the
-agent and knows its identity for the frozen-stream check. An action's is ActionExecuted, read from
-the environment right after the action, before the next action can change what it read
-(``_last_exec_error``, ``_last_rejected_by_guest``, ``_last_execution_result``, ``last_held_keys``,
-``last_end_checks``) with when it held the gate and when it returned; its coordinate trace and
-those times go to the shell as Executed before the answer. An end check's is EndChecked. An
-environment operation that raised is answered with the error, as the turn-based shell answers one.
-What the shell's own code does with an answer (``captured``, ``executed``) raising is the shell's
-failure, not the environment's: it goes to the shell's ``raised`` first, which makes it a
-run_exception as the turn-based shell does (shell.py ``_raised``). A capture is then answered as
-failed; an action with its answer all the same, since it ran.
+agent and knows its identity for the frozen-stream check. An action's is ActionExecuted, made of
+what execute() returned (sandbox/actions.py Execution) and when the action held the gate and when
+it returned; its coordinate trace and those times go to the shell as Executed before the answer.
+An end check's is EndChecked. An environment operation that raised is answered with the error, as
+the turn-based shell answers one. What the shell's own code does with an answer (``captured``,
+``executed``) raising is the shell's failure, not the environment's: it goes to the shell's
+``raised`` first, which makes it a run_exception as the turn-based shell does (shell.py
+``_raised``). A capture is then answered as failed; an action with its answer all the same, since
+it ran.
 
 End checks run on a lane of their own (stream-plan 4.9). The streaming policy sends one only
 while no capture or action is out, and neither while one is out (kernel/streaming.py ``_proceed``),
@@ -350,31 +347,21 @@ class EnvLanes:
             lane.close()
 
     def _act(self, command: Execute) -> tuple[ActionExecuted, Executed]:
-        """Run the action and read what it left on the environment, which only an action
-        writes."""
+        """Run the action, and answer with what it did and when."""
         env, clock = self.env, self._clock
-        env._last_execution_result = None
-        env._last_coordinate_trace = None
         started_at = clock.time()
-        status = env.execute(command.action, release_at=command.release_at)
+        execution = env.execute(command.action, release_at=command.release_at)
         finished_at = clock.time()
-        rejection = error = None
-        if status == "failed":
-            # A guest refusal is the model's action failing, not the environment's.
-            if env._last_rejected_by_guest:
-                rejection = env._last_exec_error or ""
-            else:
-                error = env._last_exec_error
         answer = ActionExecuted(
             command.decision,
-            result=env._last_execution_result,
-            held_keys=env.last_held_keys,
-            rejection=rejection,
-            error=error,
-            end_checks=env.last_end_checks,
+            result=execution.result,
+            held_keys=execution.held_keys,
+            rejection=execution.rejection,
+            error=execution.error,
+            end_checks=execution.end_checks,
             # Semantic seconds: on the wall clock the operational clock is the semantic one.
             started_at=started_at - env.t0,
             finished_at=finished_at - env.t0,
         )
-        record = Executed(command.decision, env._last_coordinate_trace, started_at, finished_at)
+        record = Executed(command.decision, execution.coordinate_trace, started_at, finished_at)
         return answer, record
