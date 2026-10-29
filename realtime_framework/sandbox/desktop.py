@@ -263,8 +263,8 @@ def _stop_screen_recording(run_dir: Path, frames_dir: Path, fps: float):
             apptainer.copy_out(CONTAINER_NAME, "/tmp/recording.mp4", out)
             # X11's first input PTS is the recording origin; process-launch time is not.
             try:
-                from realtime_framework.evaluation.reporting import read_json
                 from realtime_framework.evaluation.reporting import atomic_json
+                from realtime_framework.evaluation.run_records import read_json
 
                 apptainer.copy_out(
                     CONTAINER_NAME, "/tmp/ffmpeg.log", run_dir / "recording-ffmpeg.log"

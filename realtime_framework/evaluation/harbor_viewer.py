@@ -15,7 +15,19 @@ from harbor.models.trial.result import TimingInfo
 from harbor.viewer.scanner import JobScanner
 
 from realtime_framework.evaluation.harbor_results import job_label, job_results
-from realtime_framework.evaluation.reporting import active_interval, browser_metadata, read_json
+from realtime_framework.evaluation.reporting import ACTIVE_INTERVAL_SOURCES
+from realtime_framework.evaluation.reporting import TIMELINE_SOURCES
+from realtime_framework.evaluation.reporting import active_interval, browser_metadata
+from realtime_framework.evaluation.run_records import ACTIVE_LOOP
+from realtime_framework.evaluation.run_records import INSPECTIONS
+from realtime_framework.evaluation.run_records import LIFECYCLE
+from realtime_framework.evaluation.run_records import RECORDING_TIMING
+from realtime_framework.evaluation.run_records import SUMMARY
+from realtime_framework.evaluation.run_records import TRACE
+from realtime_framework.evaluation.run_records import TRAJECTORY
+from realtime_framework.evaluation.run_records import decision_of
+from realtime_framework.evaluation.run_records import read_json
+from realtime_framework.evaluation.run_records import read_rows
 
 __version__ = "0.4.0"
 VIEWER_SCRIPT = Path(__file__).parent / "viewer/rtbench-viewer.js"
@@ -24,27 +36,6 @@ TOKEN_FIELDS = (
     "provider_output_tokens",
     "provider_cached_input_tokens",
 )
-
-
-def _json(path):
-    return json.loads(path.read_text()) if path.is_file() else {}
-
-
-def _rows(path):
-    if not path.is_file():
-        return []
-    lines = path.read_text().splitlines()
-    result = []
-    for index, line in enumerate(lines):
-        if not line.strip():
-            continue
-        try:
-            result.append(json.loads(line))
-        except json.JSONDecodeError:
-            # A killed writer can leave the final record incomplete. Keep its raw file.
-            if index != len(lines) - 1:
-                raise
-    return result
 
 
 def _timestamp(seconds):
@@ -75,23 +66,23 @@ def export_episode(run_dir, logs_dir, request):
             return
         shutil.copy2(source, destination)
 
-    summary = _json(run_dir / "run_summary.json")
+    summary = read_json(run_dir / SUMMARY)
     if summary and summary.get("task_id") != request["task"]["task_id"]:
         raise ValueError("Artifact task identity differs from the Harbor trial")
     logs_dir.mkdir(parents=True, exist_ok=True)
     raw = logs_dir / "benchmark"
     raw.mkdir(exist_ok=True)
     names = (
-        "run_summary.json",
+        SUMMARY,
         "run_config.json",
         "evaluation.json",
-        "trajectory.jsonl",
-        "action_lifecycle.jsonl",
-        "episode_trace.jsonl",
-        "tool_calls.jsonl",
+        TRAJECTORY,
+        LIFECYCLE,
+        TRACE,
+        INSPECTIONS,
         "provider-usage.jsonl",
-        "active-loop.json",
-        "recording-timing.json",
+        ACTIVE_LOOP,
+        RECORDING_TIMING,
         "recording-timeline.json",
     )
     for name in names:
@@ -123,13 +114,15 @@ def export_episode(run_dir, logs_dir, request):
         json.dumps(recording_metadata, indent=2) + "\n"
     )
 
-    rows = [
+    # Read from the copies, which an earlier export into these logs keeps as they were. In a run
+    # directory used again, every attempt's trace records count, a later one's over an earlier.
+    decisions = [
         row
-        for row in _rows(raw / "trajectory.jsonl")
+        for row in read_rows(raw / TRAJECTORY)
         if row.get("type") == "decision" or row.get("parsed_action") is not None
     ]
-    lifecycle = {row["decision"]: row for row in _rows(raw / "action_lifecycle.jsonl")}
-    events = _rows(raw / "episode_trace.jsonl")
+    lifecycle = {row["decision"]: row for row in read_rows(raw / LIFECYCLE)}
+    events = read_rows(raw / TRACE)
     captures = {
         event["payload"]["observation_id"]: event["payload"]
         for event in events
@@ -143,10 +136,10 @@ def export_episode(run_dir, logs_dir, request):
         for event in events
         if event.get("event") == "GenerationPrepared" and event["payload"].get("body")
     }
-    inspections = {row.get("observation_id"): row for row in _rows(raw / "tool_calls.jsonl")}
+    inspections = {row.get("observation_id"): row for row in read_rows(raw / INSPECTIONS)}
     referenced = set()
-    for row in rows:
-        life = lifecycle.get(row.get("decision", row.get("tick")), {})
+    for row in decisions:
+        life = lifecycle.get(decision_of(row), {})
         oid = row.get("observation_id") or life.get("observation_id")
         referenced.add(
             (captures.get(oid) or {}).get("screenshot_sha256")
@@ -173,8 +166,8 @@ def export_episode(run_dir, logs_dir, request):
         }
     ]
     tokens_rows = []
-    for row in rows:
-        decision = row.get("decision", row.get("tick"))
+    for row in decisions:
+        decision = decision_of(row)
         life = lifecycle.get(decision, {})
         observation_id = row.get("observation_id") or life.get("observation_id")
         capture = captures.get(observation_id, {})
@@ -308,7 +301,7 @@ def export_episode(run_dir, logs_dir, request):
         "model_timing": summary.get("model_timing"),
         "total_run_time_s": summary.get("total_run_time_s"),
         "loop_time_s": summary.get("loop_time_s"),
-        "active_loop": _json(run_dir / "active-loop.json"),
+        "active_loop": read_json(run_dir / ACTIVE_LOOP),
         "recording": {
             key: recording_metadata.get(key) for key in ("schema", "state", "output_duration_s")
         },
@@ -352,27 +345,18 @@ def export_episode(run_dir, logs_dir, request):
 
 
 def populate_context(context, logs_dir):
-    values = _json(Path(logs_dir) / "agent-context.json")
+    values = read_json(Path(logs_dir) / "agent-context.json")
     for key, value in values.items():
         if key == "metadata":
             value = {**(context.metadata or {}), **value}
         setattr(context, key, value)
-    error = _json(Path(logs_dir) / "artifact-export-error.json")
+    error = read_json(Path(logs_dir) / "artifact-export-error.json")
     if error:
         context.metadata = {**(context.metadata or {}), "artifact_export_error": error}
 
 
 
 # Viewer
-
-
-# Files a run window is derived from; their change invalidates the cached window.
-RUN_WINDOW_EVIDENCE = (
-    "active-loop.json",
-    "run_summary.json",
-    "episode_trace.jsonl",
-    "action_lifecycle.jsonl",
-)
 
 
 @lru_cache(maxsize=8192)
@@ -404,7 +388,7 @@ class AgentRunScanner(JobScanner):
             return result
         signature = tuple(
             (path.stat().st_mtime_ns, path.stat().st_size) if path.is_file() else None
-            for path in (evidence / name for name in RUN_WINDOW_EVIDENCE)
+            for path in (evidence / name for name in ACTIVE_INTERVAL_SOURCES)
         )
         run = _agent_run(evidence, signature)
         if run is None:
@@ -484,18 +468,7 @@ def create_app(folder: Path, *, static_dir: Path | None = None):
         if not agent.is_relative_to(folder) or not agent.is_dir():
             raise HTTPException(404, "Trial not found")
         paths = [agent / "recording-metadata.json", agent / "recording.mp4"]
-        paths += [
-            agent / "benchmark" / name
-            for name in (
-                "run_summary.json",
-                "episode_trace.jsonl",
-                "action_lifecycle.jsonl",
-                "trajectory.jsonl",
-                "tool_calls.jsonl",
-                "recording-timing.json",
-                "active-loop.json",
-            )
-        ]
+        paths += [agent / "benchmark" / name for name in TIMELINE_SOURCES]
         signature = []
         for path in paths:
             if not path.resolve().is_relative_to(folder):
