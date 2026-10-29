@@ -58,7 +58,6 @@ def test_policy_fields():
         "ledger_role",
         "texts",
         "reasoning_replay",
-        "verbatim_replay",
         "archive_over_window",
         "decision_history",
         "tool_call_history",
@@ -156,7 +155,6 @@ def test_replay_and_pressure_sets():
     # is rebuilt from the model output.
     assert not any(path.reasoning_replay for path in paths.values())
     assert not any(capabilities(api).reasoning_replay == "required" for api in APIS)
-    assert not any(path.verbatim_replay for path in paths.values())
     # Version 5: one pressure-archive rule, which the runtime applies where the API estimates its
     # requests (harnesses/default/context.py _run_turn). That is where version 4 had it on, plus
     # JEV, which estimates its digest instead of dropping history for one rejected option.

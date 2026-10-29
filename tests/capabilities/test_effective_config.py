@@ -48,6 +48,8 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   turn_archive_block for visuals and turns, execution_feedback for feedback,
   archive_over_window for pressure_archive and tool_call_history for tool_call_replay, with the
   same values, so every run hash changed.
+- The verbatim-replay item, which no encoder read, is gone: every context_policy record lost
+  verbatim_replay (false everywhere), so every run hash changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

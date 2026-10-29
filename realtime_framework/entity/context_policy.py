@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 # Context policy
-"""What each model API is shown at every step, and where: twelve named items and a version.
+"""What each model API is shown at every step, and where: eleven named items and a version.
 
 Version 1 copied what each code path did before the policy existed; every later version makes
 one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which changed generic
-LiteLLM's reasoning and verbatim replay (items 6 and 7) together. A change that alters what some
-model is shown bumps the version (in phase 2 once, at its release: see CONTEXT_POLICY_VERSION);
-moving a preset from an API row to the model that needs it alters nothing shown and keeps it.
-The values count in the effective run config and therefore in its hash. Every item but verbatim
-replay (item 7), which is off everywhere and only recorded, is read from here: retention,
-feedback placement, the ledger role, reasoning replay, pressure archiving, the Decision history
-form, the tool-call replay format, the prompts (item 11) and the observation form (item 12); the
-encoders take their fixed texts (item 5) from here, and ContextPolicy.for_path takes Gemini's
-tool-call replay format from the model's provider_options.
+LiteLLM's reasoning and verbatim replay (items 6 and 7) together. Item 7, which no encoder could
+apply, has since been dropped. A change that alters what some model is shown bumps the version
+(in phase 2 once, at its release: see CONTEXT_POLICY_VERSION); moving a preset from an API row
+to the model that needs it alters nothing shown and keeps it. The values count in the effective
+run config and therefore in its hash. Every item is read from here: retention, feedback
+placement, the ledger role, reasoning replay, pressure archiving, the Decision history form, the
+tool-call replay format, the prompts (item 11) and the observation form (item 12); the encoders
+take their fixed texts (item 5) from here, and ContextPolicy.for_path takes Gemini's tool-call
+replay format from the model's provider_options.
 
 An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
 then its own. A preset comes from one of two places. A row's applies to every model of its API:
@@ -166,10 +166,7 @@ class PathPolicy:
     # there (providers/decisions/history.py JEV_ROLES)
     ledger_role: Literal["instruction", "input"]
     texts: FixedTexts  # 5 placeholder and fixed texts
-    reasoning_replay: bool  # 6 send past reasoning back
-    # 7 send the provider's own assistant message back; off: the reply is rebuilt from the model
-    # output, and no encoder can do otherwise, so nothing reads the value
-    verbatim_replay: bool
+    reasoning_replay: bool  # 6 send past reasoning back; a reply is rebuilt from the model output
     # 8 before each request, archive the oldest turns while it exceeds the declared context
     # window, then, with no turn left, leave out the earliest archived actions, which stay out
     # for the rest of the episode as archived turns do. On allows it; it acts only where the
@@ -255,7 +252,6 @@ STANDARD = {
     "execution_feedback": "separate_message",
     "ledger_role": "input",
     "reasoning_replay": False,
-    "verbatim_replay": False,
     "archive_over_window": True,
     "decision_history": None,
     "tool_call_history": None,

@@ -169,7 +169,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -244,7 +243,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c7e3d38f127368a0dd41d87b651f20effcb1335bcfc4ab851be3b5c647779440"
+    "hash": "3f4b1f4da6c94336b0f058cb53d57f0b7bb9e22a2870d100ca5517dedd396b8a"
    },
    "token/None": {
     "config": {
@@ -293,7 +292,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -368,7 +366,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9d46000526f9a9e5992454d8352caad4b3fd7651aad9a74c57e22d275ffe9d61"
+    "hash": "37104658cef8cf107810df01f051d7fd1bf1e5c32c263442ac985e3e14aab8ea"
    },
    "wall/None": {
     "config": {
@@ -417,7 +415,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -492,7 +489,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8f4d4734eb3d830861b61c811def3d86f6d5493ddd052068f1e72081cfb5c648"
+    "hash": "884603c79d8ebeea5509bf4cb85b710a0f1eeb9868861b22bc101ea27ae1284c"
    }
   },
   "vendor": "anthropic"
@@ -619,7 +616,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -694,7 +690,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8a44acfcac535f2a6900384bd740209d9228eba2fcfb697a9fb18d252d91484d"
+    "hash": "f540e0591a63dcb921babf575f9f9cf1c1288100a519f4d39356f0ed133e7486"
    },
    "token/None": {
     "config": {
@@ -743,7 +739,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -818,7 +813,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3f5614e5c14713efe8bf2b0e8bab6dd8303e14d9d40f10a9da9cdcbaceb86b1a"
+    "hash": "a52ec3a7017f6b177dbfa46afed0e833000b56b2f0ab64e1fdc677adbc50bc4e"
    },
    "wall/None": {
     "config": {
@@ -867,7 +862,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -942,7 +936,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "463bb326bd441d0e80b06e76b1a0a1bdc5adb3b85257eaded2be483ae171fc40"
+    "hash": "52ffcc42f5ba52e31eb2bbefc35326668e90c4817620df96b54df2c841d9f7d5"
    }
   },
   "vendor": "anthropic"
@@ -1063,7 +1057,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1136,7 +1129,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a26aaf19cfc8e39393234ac8c088397c1106a7a034d36d67816b79b5979d464e"
+    "hash": "33eaa19d6e2456a98bd67960e59212dca91968ceaa313c7acfe6c6be9d291336"
    },
    "token/None": {
     "config": {
@@ -1185,7 +1178,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1258,7 +1250,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d918a7be8aec2d6be4de3b042d48cd8aef419afa3da074094730b15d68cec2c9"
+    "hash": "ea3dc917ab041b07168f6b225dcf712ccbcb508c42bfb0fe1cca0e3a9ae603fd"
    },
    "wall/None": {
     "config": {
@@ -1307,7 +1299,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1380,7 +1371,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "15556909057ec9b91bb5c2190944f18fae080780a8a46fcbae123f8b19d7dd8d"
+    "hash": "107bef43a19311e7548f44f3c17a859769b85be3b5a135c3bc868a0375faf372"
    }
   },
   "vendor": "anthropic"
@@ -1502,7 +1493,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1575,7 +1565,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "dfe926460701eed2fa4803a0a8cf1d43972f942ab24444eab71e759baacc062c"
+    "hash": "b23dc5c754ad969cf3b121cf90721529eb248d4f2f8c4a7005d60f692adbc93f"
    },
    "token/None": {
     "config": {
@@ -1624,7 +1614,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1697,7 +1686,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "af0bdc990d1ae8648ec8c7833e2e2ee684ced531ffa9cf63ab96d5a31dc4feff"
+    "hash": "ecf82a26e13ef91b93c7a728b5e3a101dce128ffa70bb16e7b695d07eb4719ab"
    },
    "wall/None": {
     "config": {
@@ -1746,7 +1735,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -1819,7 +1807,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "48d751e621788f21ca2238be10d3818ee860dd2d287383fc7b20f05369a01636"
+    "hash": "d6d5eb2bb410acaf83d5bac8f73b3559c0d22ae6d10d5c633df4ebfe2ef453b9"
    }
   },
   "vendor": "deepseek"
@@ -1946,7 +1934,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2021,7 +2008,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "dc63ec8ab50dbdbb8245aa8f7de0596e08fa4ec8f3d2d8d200c4690ba87fc9fd"
+    "hash": "d623bcb54794226628ed9d2a63ab99390a545685d6ac3eb906351b5321b365fb"
    },
    "token/None": {
     "config": {
@@ -2070,7 +2057,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2145,7 +2131,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7f67364aec7a8551def527b4e5ec3e80930b100ec59795ff0eae16f8f8142e97"
+    "hash": "46d7e879e1a3fd5ea80c0115089b8247e6e6bcdebf492f392825e6bcfc3e19c1"
    },
    "wall/None": {
     "config": {
@@ -2194,7 +2180,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2269,7 +2254,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b0b58ff45f0852e9676d104c0bf13f18da5f21604b48aa377675623567903f17"
+    "hash": "e7cb7fecee8b2d9b21cab0f79caeb2fe0dc1d673d8a34b31df6b4d7b8cc17cb6"
    }
   },
   "vendor": "google"
@@ -2396,7 +2381,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2466,7 +2450,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "de21b4241e0b738b10df0e0d7359563ec6ac0199dfcd1e02bbba327375cc8aa4"
+    "hash": "c2afd79d1200afbf82e00cd482d9d7706822cb7bc6e3dbf93710d23da8eb5bd2"
    },
    "token/None": {
     "config": {
@@ -2515,7 +2499,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2585,7 +2568,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2cdd808a96487ab71746fbfd7b3a433a0adc03c4a44ea1b47c52d43de9683f2f"
+    "hash": "fea02468bb9174db07d3703f40910739108715541379b16a27e426469f7c4f71"
    },
    "wall/None": {
     "config": {
@@ -2634,7 +2617,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2704,7 +2686,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a7b754a022d97744138b737ac33bf923ae380b106e2cea25035f566102de2802"
+    "hash": "7e198ca41e6ef382c973dd8628d62dfbb52339848843d8d8c58cf7044f9f8711"
    }
   },
   "vendor": "google"
@@ -2832,7 +2814,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -2902,7 +2883,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4e31c702038d6b0e73d87a8536666a6340450eae8b01f1664534848f74a0ac7f"
+    "hash": "4ecd07d27354b46934387d3ee7158d5ac60b4d43ab7e766e43b006710e077c28"
    },
    "token/None": {
     "config": {
@@ -2951,7 +2932,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3021,7 +3001,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c888cbd4ee3531a13f6a508fe07022a53bb54940dc485f0e4bf2d4d62a37ff08"
+    "hash": "6d5c796aeb684c13fb20cf1d313d6f118527b64764f5464215649f3caa286a8f"
    },
    "wall/None": {
     "config": {
@@ -3070,7 +3050,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3140,7 +3119,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "cf4755947d2901528cee918a7fba3c716f16e373943386ffb13b9a07fb59ce21"
+    "hash": "7a21d89997b24325dd310d1d0dc21179df18893727bce037a343cd2926a6f119"
    }
   },
   "vendor": "google"
@@ -3274,7 +3253,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3344,7 +3322,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1782191525337bbf22cc1425e02774c11f71eeddfee87cb6ac98870d3d4478be"
+    "hash": "6796e80f6daa3cd67790f504d461e8d0b4c113d4210b98aebdd7843bbc7873e7"
    },
    "token/None": {
     "config": {
@@ -3393,7 +3371,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3463,7 +3440,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "717aa3a1a83db63e90dc17f405b3e19d64d83c4eb699e12b5a956533d55b200f"
+    "hash": "ed5f7f8c962db5c7c18c806265928fc8de80cf6f1cfda3604a12066f59d2f48d"
    },
    "wall/None": {
     "config": {
@@ -3512,7 +3489,6 @@
       "tool_call_history": "tool_transcript",
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3582,7 +3558,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7d93fb053f498082df2ea9c002e29e8f61d08366c34d494d52bf8cbce5096c95"
+    "hash": "357609f3c06513115fbc675ca450b310105f2d1247f956937b4e68e1312516e9"
    }
   },
   "vendor": "google"
@@ -3704,7 +3680,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3777,7 +3752,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2ba213719ac0e782df524245df25b1b673b5a076e650b018162bc05d5b8bd22f"
+    "hash": "3509c9764e8977fcb2ad82b31ad814ed31dff95e1848aa4ebc0ab24daf5bc673"
    },
    "token/None": {
     "config": {
@@ -3826,7 +3801,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -3899,7 +3873,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4191bc49cb4f54269f6a4cd50bcde794ede5f00412c9724eeca8bf94d8883e37"
+    "hash": "b2e19b0e0f221835611f4d883def6a0027827d812bc32259a810712baea03e79"
    },
    "wall/None": {
     "config": {
@@ -3948,7 +3922,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4021,7 +3994,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c9cf723357e2f4ae651bd871c278aae2419225a8d36246d680c2ad65df675691"
+    "hash": "c1d7cad31f55365344234d4fc82550562a20e3a331e3504912cc524c808cb1ea"
    }
   },
   "vendor": "openai"
@@ -4143,7 +4116,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4216,7 +4188,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6451f7b7e80c3ced21d2fad72e79781585dd52021ee8b27edd8fa30360a37a12"
+    "hash": "422c0203af29b4bccca576d44f3a8fcd4ad7798cbcccafdbb13689bb5b2bca1d"
    },
    "token/None": {
     "config": {
@@ -4265,7 +4237,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4338,7 +4309,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5e3e5cef993e9e2d8d1b05acbea074bc4dd674685935170ccda04f16c9c2378c"
+    "hash": "e5442c2622e0d54d0e2422ee2539a445f51854f6255695453b4fb0328cfc8668"
    },
    "wall/None": {
     "config": {
@@ -4387,7 +4358,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4460,7 +4430,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a476af265434742827001b112e1c9335487def9b27db8528e882d4b3b02532e4"
+    "hash": "e5e36004e421537ef5634c4019f4bbf853f6819fe19b2662dde326e157121e6b"
    }
   },
   "vendor": "openai"
@@ -4583,7 +4553,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4647,7 +4616,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "22318360b03ea98728b26ccda0f9cec315d54c4c98272ceb76fd32ecff6d4253"
+    "hash": "471f657f112e10bbf85ff6a5072d9f1149a4674bf87629798b122d773265f459"
    }
   },
   "vendor": "openai"
@@ -4768,7 +4737,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4832,7 +4800,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3b9f4c57ad22324b19b1a101472ba52024fecdd340b536f5079fa258a95a48a7"
+    "hash": "2ef22cc8bcb9f32186852c872b881f68c1aff4b5237a19ed7d6a4e9005d43cf7"
    },
    "token/None": {
     "config": {
@@ -4881,7 +4849,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -4945,7 +4912,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7fc8416a59563ede2aecb2392be555f45b781abd0a6924cf5ad0a8eb34c97ecc"
+    "hash": "e0c275ca12887b63520162604ea29e8181092c3f8eb2bd5921a8c2cdee70b68a"
    },
    "wall/None": {
     "config": {
@@ -4994,7 +4961,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5058,7 +5024,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "30c07c28ce6c3f58e896e73f9f19f2d9ea9f001f6eea2590cf78fdf8090af8cf"
+    "hash": "1de4db653b6324476f861e0c9a93ddd20128fd659e1e38d34f2f494fcee62106"
    }
   },
   "vendor": "openai"
@@ -5180,7 +5146,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5244,7 +5209,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b8739fdac572b870ca341b4054da9efb4a72113851307ed5cf02e0e2a4cc331b"
+    "hash": "0f702f0f155220cc4c414e4464f3abee372fa9a7b21707563d7881cbf09fa6c2"
    }
   },
   "vendor": "typesafe"
@@ -5366,7 +5331,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5439,7 +5403,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "577a4b5d62e7947e9f05ddb024c699e81b7f63f6fe7f3fc946eec730e977a61f"
+    "hash": "3e1a42ee1fbaae572a62e92c337e7b413a62aef210e63040f0dbbc9a84f65b5a"
    },
    "token/None": {
     "config": {
@@ -5488,7 +5452,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5561,7 +5524,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5d2c81eb2df5576ea0a495710108db55ed9766f91fdc9d22b4dc3a30d1d96906"
+    "hash": "2d267b619869fd06adca097b2b90e8304364abc12a3d8bf4d09b5ccb15046ce5"
    },
    "wall/None": {
     "config": {
@@ -5610,7 +5573,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5683,7 +5645,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b800ed56c44abfafe52d943cc0cdf13754f25a9026545bbeacc7d4cc97b5d368"
+    "hash": "a13e327c943073df3581114c20c5f4fc69d3c5084fb8af5430200a1301156986"
    }
   },
   "vendor": "moonshot"
@@ -5815,7 +5777,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -5888,7 +5849,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d86663e1ae7d463d8ad0d0d44376af6f59af9b15286fa51d3a15be5e23eac951"
+    "hash": "4a5ba6cd3746b7dd27289adab551d84660fee8f2d5ca928d98ea4d8d61ac21e3"
    }
   },
   "vendor": "litellm"
@@ -6022,7 +5983,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -6095,7 +6055,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0dbf63e2c8aef542161a0973ce1d0f3e08d2ed997ffd72db9b7913704fa2d551"
+    "hash": "b04891b8adafff403790fb301d3e0e12fdfab0287fa3324e3df9948f6ee8621c"
    }
   },
   "vendor": "compatible"
@@ -6227,7 +6187,6 @@
       "tool_call_history": null,
       "turn_archive_block": 10,
       "turns_kept": 50,
-      "verbatim_replay": false,
       "version": 6
      },
      "detailed_history_drop_block_size": 10,
@@ -6300,7 +6259,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7a32ce47a2fef75130ba13ce01afeca4a11c2096b97f9de846b9ef076c60fb2c"
+    "hash": "2ee48d47d3df7b2467c524fa53c42ad01b819b33cdb36f2e4ff30d243fad88cd"
    }
   },
   "vendor": "compatible"
