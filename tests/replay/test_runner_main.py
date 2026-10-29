@@ -269,6 +269,10 @@ def test_main_reports_the_termination_the_loop_latched(tmp_path, reason, solved,
 
     assert clock.now - task.origin >= HORIZON_S  # teardown ran past the deadline
     assert summary["invalid_run"] is None
+    assert (summary["run_status"], summary["solved"], summary["stop_reason"]) == (
+        "scored", solved, reason,
+    )  # fmt: skip
+    assert (summary["failure_attribution"], summary["environment_valid"]) == (None, None)
     assert seen["exit_code"] is None and scored(tmp_path)
     assert summary["termination"] == {
         "stop_reason": reason,
@@ -504,6 +508,73 @@ def test_a_re_evaluation_judges_an_unscorable_evaluation_as_the_run_did(tmp_path
     assert replaced["invalid_run"]["reason"] == "evaluation_backend_unhealthy"
 
 
+def test_a_re_evaluation_that_scores_a_run_invalid_for_its_evaluator(tmp_path, monkeypatch):
+    """The run is invalid only for its evaluator's unhealthy backend; a re-evaluation that scores
+    the saved state solved makes it scored and passed, stopped as its loop stopped. Its run
+    metrics stay those of the run as written."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = UnhealthyTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest)
+    assert (summary["run_status"], summary["solved"], summary["task_success_rate"]) == (
+        "invalid", None, None,
+    )  # fmt: skip
+    replaced = _reevaluated(
+        tmp_path / "run", {"resolved": True, "evaluation_version": 1}, monkeypatch
+    )
+    assert (replaced["run_status"], replaced["invalid_run"], replaced["solved"]) == (
+        "scored", None, True,
+    )  # fmt: skip
+    assert (replaced["stop_reason"], replaced["outcome"], replaced["failure_attribution"]) == (
+        "task_success", "pass", None,
+    )  # fmt: skip
+    assert (replaced["task_success_rate"], replaced["normalized_time_to_success"]) == (None, None)
+    assert scored(tmp_path)
+
+
+def _reevaluate(run_dir, verification, monkeypatch, capsys) -> tuple[dict, object]:
+    """reevaluate without --replace-summary, the saved state's evaluation stubbed: the line it
+    prints and what it returns, which ``python -m ...reporting reevaluate`` exits with."""
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (verification, {}))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(run_dir)])
+    capsys.readouterr()
+    returned = reporting.reevaluate_main()
+    return json.loads(capsys.readouterr().out.splitlines()[-1]), returned
+
+
+@pytest.mark.parametrize(
+    ("verification", "printed"),
+    [
+        ({"resolved": True, "evaluation_version": 1}, ("scored", True, None)),
+        (
+            {"resolved": True, "evaluation_version": 1, "ok": False},
+            ("invalid", None, "evaluation_backend_unhealthy"),
+        ),
+    ],
+)
+def test_a_re_evaluation_without_replacing_the_summary_reports_the_evaluation_alone(
+    tmp_path, monkeypatch, capsys, verification, printed
+):
+    """Without --replace-summary a re-evaluation judges the new evaluation alone: it prints whether
+    that evaluation scores, as a diagnostic, writes it to evaluation.reeval.json and leaves the run
+    summary as it was, whatever failure made the run invalid."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, scene_capture=FailingCloseCapture(clock)
+    )
+    run_dir = tmp_path / "run"
+    written = (run_dir / "run_summary.json").read_text()
+    out, returned = _reevaluate(run_dir, verification, monkeypatch, capsys)
+    assert returned is None
+    assert (out["run_status"], out["solved"], out["invalid_reason"]) == printed
+    assert (run_dir / "run_summary.json").read_text() == written
+    assert not (run_dir / "run_summary.pre_reeval.json").exists()
+    record = json.loads((run_dir / "evaluation.reeval.json").read_text())
+    assert record["evaluation"] == verification
+
+
 class FailingCloseCapture:
     """The scene capture set_up_agent opens, whose close() fails as a CDP socket's can."""
 
@@ -579,6 +650,39 @@ def test_the_failure_the_environment_latched_comes_before_those_main_finds_after
         ("environment", "action_execution_failed"),
         ("environment", "cdp_close_failed"),
     ]
+    assert (summary["failure_attribution"], summary["environment_valid"]) == ("environment", False)
+
+
+def test_a_re_evaluation_of_the_same_evaluation_names_the_evaluator(tmp_path, monkeypatch):
+    """The environment latched the run invalid as the click failed, and the evaluator then said
+    its backend was unhealthy: the run is invalid for the environment's failure, found first. A
+    re-evaluation with the very same evaluation makes it invalid for the evaluator's failure, which
+    the new evaluation decides, and keeps the run's list of failures."""
+    clock = FakeClock(1_000_000.0)
+    guest = FailingActionGuest()
+    summary = run_main(
+        tmp_path, UnhealthyTask(clock, guest, "task_success", True), FakeAgent(clock), clock, guest
+    )
+    found = [
+        ("environment", "action_execution_failed"),
+        ("evaluator", "evaluation_backend_unhealthy"),
+    ]
+    assert (summary["invalid_run"]["reason"], summary["environment_valid"]) == (
+        "action_execution_failed", False,
+    )  # fmt: skip
+    assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == found
+    replaced = _reevaluated(tmp_path / "run", summary["verification"], monkeypatch)
+    assert (replaced["run_status"], replaced["invalid_run"]["reason"]) == (
+        "invalid", "evaluation_backend_unhealthy",
+    )  # fmt: skip
+    assert (replaced["failure_attribution"], replaced["error_category"]) == (
+        "evaluator",
+        "evaluator",
+    )
+    assert (replaced["stop_reason"], replaced["solved"], replaced["environment_valid"]) == (
+        "invalid_run", None, False,
+    )  # fmt: skip
+    assert [(r["category"], r["reason"]) for r in replaced["invalid_runs"]] == found
 
 
 class UnhealthySnapshotTask(FakeTask):
@@ -645,10 +749,13 @@ def test_a_re_evaluated_run_of_an_experimental_model_stays_experimental(tmp_path
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = FakeTask(clock, guest, "task_success", True)
+    seen = {}
     summary = run_main(
-        tmp_path, task, FakeAgent(clock), clock, guest, model_args=("--catalog-model", "jev-1.13")
-    )
+        tmp_path, task, FakeAgent(clock), clock, guest, seen=seen,
+        model_args=("--catalog-model", "jev-1.13"),
+    )  # fmt: skip
     assert (summary["run_status"], summary["benchmark_eligible"]) == ("experimental", False)
+    assert seen["exit_code"] is None  # accepted, as ALLOW_EXPERIMENTAL_MODEL is set
     verification = {"resolved": True, "evaluation_version": 1, "progress": 0.5}
     replaced = _reevaluated(tmp_path / "run", verification, monkeypatch)
     assert (replaced["run_status"], replaced["progress"]) == ("experimental", 0.5)
@@ -834,6 +941,74 @@ def test_a_summary_main_fails_to_build_is_written_as_the_run_s_failure(tmp_path,
     assert (summary["stop_reason"], summary["decisions"], summary["outcome"]) == (
         "invalid_run", 1, "error",
     )  # fmt: skip
+    assert seen["exit_code"] == 1 and not scored(tmp_path)
+
+
+def test_a_summary_that_fails_after_an_earlier_failure_is_invalid_for_the_earlier(
+    tmp_path, monkeypatch
+):
+    """The scene capture fails to close, and then building the summary raises: the summary main()
+    writes in its place is invalid for the first failure and lists both, with the outcome and
+    attribution of the first."""
+    from realtime_framework.evaluation import clock as clock_module
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("model timing broke")
+
+    monkeypatch.setattr(clock_module, "summarize_model_timing", broken)
+    clock, guest = FakeClock(1_000_000.0), FakeGuest()
+    seen = {}
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(
+        tmp_path, task, FakeAgent(clock), clock, guest, seen=seen,
+        scene_capture=FailingCloseCapture(clock),
+    )  # fmt: skip
+    assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == [
+        ("environment", "cdp_close_failed"),
+        ("harness", "run_summary_failed"),
+    ]
+    assert summary["invalid_run"] == summary["invalid_runs"][0]
+    assert (summary["run_status"], summary["solved"], summary["stop_reason"]) == (
+        "invalid", None, "invalid_run",
+    )  # fmt: skip
+    assert (summary["outcome"], summary["error_category"], summary["error_reason"]) == (
+        "error", "environment", "cdp_close_failed",
+    )  # fmt: skip
+    assert summary["failure_attribution"] == "environment"
+    assert (summary["loop_stop_reason"], summary["decisions"]) == (None, 1)
+    assert "environment_valid" not in summary and "progress" not in summary
+    assert seen["exit_code"] == 1 and not scored(tmp_path)
+
+
+def test_a_run_whose_run_metrics_fail_is_invalid_for_them(tmp_path, monkeypatch):
+    """The decision lifecycle cannot be aggregated: the run, solved before, is invalid for it,
+    its run metrics are those of no lifecycle and say why, and main() exits 1. The run metrics are
+    first asked with the run's score, then with none."""
+    real = runner.summarize_run_metrics
+    asked = []
+
+    def failing_once(*args, **kwargs):
+        asked.append(kwargs["solved"])
+        if len(asked) == 1:
+            raise ValueError("lifecycle broke")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(runner, "summarize_run_metrics", failing_once)
+    clock, guest = FakeClock(1_000_000.0), FakeGuest()
+    seen = {}
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, FakeAgent(clock), clock, guest, seen=seen)
+    assert asked == [True, None]
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("harness", "run_metrics_aggregation_failed")
+    assert "ValueError: lifecycle broke" in summary["run_metrics_error"]
+    assert "invalid_runs" not in summary
+    assert (summary["run_status"], summary["solved"], summary["stop_reason"]) == (
+        "invalid", None, "invalid_run",
+    )  # fmt: skip
+    assert (summary["outcome"], summary["failure_attribution"]) == ("error", "harness")
+    assert (summary["loop_stop_reason"], summary["task_success_rate"]) == ("task_success", None)
+    assert summary["verification"]["resolved"] is True
     assert seen["exit_code"] == 1 and not scored(tmp_path)
 
 
