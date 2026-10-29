@@ -13,7 +13,6 @@ seed, and the declarations against the GUI functions that take the frame an acti
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import ClassVar
 
@@ -38,7 +37,7 @@ from tests.replay import baseline
 from tests.replay.fake_env import FakeEnvironment
 from tests.replay.frames import screenshot
 from tests.replay.ws_gemini_live import QUEUED_RESPONSE, WireNormalizer
-from tests.streaming.e2e import LIVE_PATH, SILENCE, run_e2e
+from tests.streaming.e2e import LIVE_PATH, run_e2e
 from tests.streaming.fake_live import RecordingToolRuntime
 from tests.streaming.ws_cassette import RealtimeNormalizer
 
@@ -229,26 +228,22 @@ def _live_input(at: float, **realtime_input) -> dict:
 
 
 def _live_push(n: int, at: float) -> dict:
-    """Capture ``n`` (from 0) going in at ``at``: its image, whose text goes with the next
-    trigger."""
+    """Capture ``n`` (from 0) going in at ``at``: its image alone."""
     return _live_input(at, video={"data": _frame(n), "mime_type": "image/png"})
 
 
-def _live_frame_text(n: int) -> str:
-    return _frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT, n)
-
-
-def _live_trigger(at: float, *text: str) -> list[dict]:
-    """A reply's start: one activity, the text it carries and the silence that opens it."""
-    silence = {
-        "data": "sha256:" + hashlib.sha256(SILENCE).hexdigest(), "mime_type": "audio/pcm;rate=16000",
-    }  # fmt: skip
-    return [
-        _live_input(at, activityStart={}),
-        *(_live_input(at, text=part) for part in text),
-        _live_input(at, audio=silence),
-        _live_input(at, activityEnd={}),
-    ]
+def _live_trigger(at: float, n: int, *feedback: str) -> dict:
+    """A reply's start: one client content turn, the feedback it carries, then capture ``n``,
+    the newest frame pushed, its text with its image."""
+    frame = {
+        "role": "user",
+        "parts": [
+            {"text": _frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT, n)},
+            {"inlineData": {"data": _frame(n), "mime_type": "image/png"}},
+        ],
+    }
+    texts = [{"role": "user", "parts": [{"text": text}]} for text in feedback]
+    return _record("c2s", {"client_content": {"turns": [*texts, frame], "turnComplete": True}}, at)
 
 
 def live_cassette() -> list[dict]:
@@ -279,11 +274,12 @@ def live_cassette() -> list[dict]:
         _record("c2s", {"setup": setup}, 0.0),
         _record("s2c", {"setupComplete": {}}),
         _live_push(0, 0.0),
-        *_live_trigger(0.0, _live_frame_text(0)),
+        _live_trigger(0.0, 0),
         _record("s2c", {"toolCall": {"functionCalls": [call]}}, 0.4),
         _record("c2s", {"tool_response": {"functionResponses": [response]}}, 0.4),
         _record("s2c", {"serverContent": {"turnComplete": True}, "usageMetadata": usage}, 0.6),
-        *_live_trigger(0.6, FEEDBACK),
+        # Frame 2 goes in at 1 s: the second trigger carries the first frame again.
+        _live_trigger(0.6, 0, FEEDBACK),
         _live_push(1, 1.0),
         _live_push(2, 2.0),
         _record("close", {"by": "client", "code": 1000}, 3.0),
@@ -397,10 +393,10 @@ def test_the_agent_on_gemini_live_over_a_replayed_session(tmp_path):
     ]
     assert declarations == list(gui_function_declarations(clock_mode="wall", frame_reference=True))
     assert all("frame" in d["parameters_json_schema"]["required"] for d in declarations)
-    # Gemini Live confirms nothing but the setup. A frame's text goes with the trigger after its
-    # video, and the episode ends before one comes after frames 2 and 3.
+    # Gemini Live confirms nothing but the setup. Each trigger carries the newest frame pushed,
+    # its text with its image, and the episode ends before one comes after frames 2 and 3.
     assert _delivered(episode, "sent") == [
-        "f1.frame", "f1.frame", None, "d0.call_1.feedback", "f2.frame", "f3.frame",
+        "f1.frame", "f1.frame", None, "d0.call_1.feedback", "f1.frame", "f2.frame", "f3.frame",
     ]  # fmt: skip
     assert _delivered(episode, "confirmed") == ["system"]
     assert summary["context_control"] == "approximate"

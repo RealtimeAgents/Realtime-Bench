@@ -47,7 +47,6 @@ from realtime_framework.providers.gemini.session import Connect
 from realtime_framework.providers.gemini.session import Content
 from realtime_framework.providers.gemini.session import Orphan
 from realtime_framework.providers.gemini.session import Part
-from realtime_framework.providers.gemini.session import RealtimeInput
 from realtime_framework.providers.gemini.session import Received
 from realtime_framework.providers.gemini.session import SessionCore
 from realtime_framework.providers.session_lifecycle import RenewalRequired
@@ -461,7 +460,9 @@ class GeminiLiveDriver(SessionLifecycle):
         handling = self.types.ActivityHandling
         return self.types.RealtimeInputConfig(
             automatic_activity_detection=self.types.AutomaticActivityDetection(disabled=True),
-            # A streaming trigger is an activity, and must not cut off the reply still running.
+            # Streaming sends no activity: its frames go in as video outside any, and a reply
+            # starts on client content (request_reply), which NO_INTERRUPTION does not cover. The
+            # setup is the one client content triggers were probed under (10-29).
             activity_handling=(
                 handling.NO_INTERRUPTION
                 if self.streaming
@@ -512,9 +513,9 @@ class GeminiLiveDriver(SessionLifecycle):
         return declarations
 
     def _live_config(self, seed: SessionSeed, connect: Connect):
-        """The setup of one planned connection. Streaming takes realtime input whatever the
-        model's transport, and has the server compress the context: without it an audio-video
-        session lasts two minutes."""
+        """The setup of one planned connection. Streaming pushes its frames as realtime input
+        video whatever the model's transport, and has the server compress the context: without it
+        an audio-video session lasts two minutes."""
         streaming = self.streaming
         return self.types.LiveConnectConfig(
             response_modalities=["AUDIO"],
@@ -734,19 +735,6 @@ class GeminiLiveDriver(SessionLifecycle):
             raise self._receiver.failure
         return session
 
-    async def _send_realtime(self, session, item: RealtimeInput) -> None:
-        if item.kind == "video":
-            blob = self.types.Blob(data=item.image.data, mime_type=item.image.mime_type)
-            await session.send_realtime_input(video=blob)
-        elif item.kind == "text":
-            await session.send_realtime_input(text=item.text)
-        elif item.kind == "audio_carrier":
-            await session.send_realtime_input(audio=self._audio_carrier())
-        elif item.kind == "activity_start":
-            await session.send_realtime_input(activity_start=self.types.ActivityStart())
-        else:
-            await session.send_realtime_input(activity_end=self.types.ActivityEnd())
-
     def _audio_carrier(self):
         # Native audio activity must contain audio. This fixed 100-ms silent carrier has no task
         # information; its input usage is audited, never output-charged.
@@ -756,13 +744,14 @@ class GeminiLiveDriver(SessionLifecycle):
         self, observation: ProviderObservation, history: CanonicalRequest
     ) -> PushReceipt:
         """Streaming: push the history view's newest frame, one the session does not hold yet,
-        on the realtime_input video stream, outside any activity, so that it starts no reply; its
-        text goes with the next trigger (gemini/session.py Push). Its receipt says when the video
-        was written; Gemini Live confirms no frame (decision N43).
+        on the realtime_input video stream, outside any activity, so that it starts no reply; the
+        next trigger carries its text with its screenshot (gemini/session.py Push). Its receipt
+        says when the video was written; Gemini Live confirms no frame (decision N43).
 
         A push and a trigger hold the session as a connection operation does
         (SessionLifecycle): their messages do not interleave, none goes to a connection being
-        replaced, and one given up while it waits has planned nothing.
+        replaced, and one given up while it waits has planned nothing. A trigger asked while a
+        push writes waits for it, and carries its frame.
 
         After a goAway, a push and a trigger raise RenewalRequired until the session is renewed;
         a frame so refused is not in the session until a push of a view it is the newest of.
@@ -772,54 +761,52 @@ class GeminiLiveDriver(SessionLifecycle):
         renew() before then closes the connection under the reply, whose events() raise."""
         async with self._session_lock():
             session = self._session_for_input()
-            if self._activity_open:
-                raise RuntimeError("Gemini Live input activity is already open")
             push = self._core.push(history)
+            video = self.types.Blob(data=push.image.data, mime_type=push.image.mime_type)
             try:
-                for item in push.inputs:
-                    await self._send_realtime(session, item)
+                await session.send_realtime_input(video=video)
             except BaseException:
                 self._core.send_failed(push.keys)
                 raise
             written = self.clock.monotonic()
-        self._core.pushed(push)
+            self._core.pushed(push)
         return PushReceipt(written)
 
     async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
-        """Streaming: start the next reply with one activity, holding the execution feedback of
-        ``request.canonical`` that the session lacks and the texts of the frames pushed since the
-        last trigger (SessionCore.trigger), once the events() of the reply before it are done: a
-        connection carries one reply at a time. Its generation starts before the activity goes
-        out, so that the reader takes the reply's first message for it. The session's
-        NO_INTERRUPTION keeps the activity from cutting off what the server may still be
-        generating. It holds the session as push_frame does.
+        """Streaming: start the next reply with one client content turn, holding the execution
+        feedback of ``request.canonical`` that the session lacks and the newest frame written, its
+        text with its screenshot (SessionCore.trigger), once the events() of the reply before it
+        are done: a connection carries one reply at a time. Its generation starts before the
+        trigger goes out, so that the reader takes the reply's first message for it. Client
+        content interrupts what the model is generating, which NO_INTERRUPTION does not cover:
+        nothing should be generating once the reply before ended and its calls were
+        acknowledged, which only a real session shows (docs/streaming_smoke_test.md, check 4). It
+        holds the session as push_frame does.
 
         After a goAway it raises RenewalRequired, as push_frame does, before it writes or starts
         anything, also for a goAway read while it waited for the session: renew() resumes the
         session, and the reply is asked for again."""
         async with self._session_lock():
             session = self._session_for_input()
-            if self._activity_open:
-                raise RuntimeError("Gemini Live input activity is already open")
             if self._core.replying:
                 raise RuntimeError("Gemini Live has a reply in flight on the connection")
             generation = await self.start_generation(request)
             trigger = None
             try:
                 trigger = self._core.trigger(request.canonical)
-                self._activity_open = True
-                for item in trigger.inputs:
-                    await self._send_realtime(session, item)
+                await session.send_client_content(
+                    turns=[self._content(content) for content in trigger.contents],
+                    turn_complete=True,
+                )
             except BaseException:
-                # No reply comes, and an incomplete activity cannot be resumed as canonical
-                # context: the session is rebuilt before the next reply, and its seed replays
-                # the feedback.
+                # No reply comes, and what the session got of the trigger is not known: the
+                # agent leaves the session to be rebuilt before the next push or reply
+                # (harnesses/streaming/agent.py _reply), and its seed replays the feedback.
                 if trigger is not None:
                     self._core.send_failed(trigger.keys)
                 self._core.reply_abandoned()
                 self._reading_context.run(enter_trace_scope, None)
                 raise
-            self._activity_open = False
         self._core.sent(trigger.keys)
         return generation
 
@@ -894,7 +881,7 @@ class GeminiLiveDriver(SessionLifecycle):
         if self.streaming:
             # What the reader reads from here is this reply's, as for a turn-based reply's read.
             self._reading_context.run(enter_trace_scope, current_trace_scope())
-        transport = "realtime_input" if self.streaming else self.options["input_transport"]
+        transport = "client_content" if self.streaming else self.options["input_transport"]
         return GenerationHandle(
             request.generation_id,
             # The connection's receiver, the reply's generation, and the policy's queued
@@ -907,10 +894,7 @@ class GeminiLiveDriver(SessionLifecycle):
             metadata={
                 **self._connect_metadata,
                 "input_audio_carrier_ms": 100 if transport == "realtime_input" else 0,
-                # A streamed frame's text goes with the next trigger, with no wait for its video.
-                "video_ingestion_wait_ms": (
-                    1000 if transport == "realtime_input" and not self.streaming else 0
-                ),
+                "video_ingestion_wait_ms": 1000 if transport == "realtime_input" else 0,
                 "gemini_live_input_transport": transport,
                 "gemini_live_tool_response_scheduling": self.options["tool_response_scheduling"],
                 "gemini_live_history_format": self.options["history_format"],

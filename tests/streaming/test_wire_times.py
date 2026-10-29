@@ -54,7 +54,7 @@ def _openai_driver(clock) -> OpenAIRealtimeDriver:
 
 def test_a_gemini_push_is_written_once_its_video_went_out():
     """A push's receipt says when its frame went out (decision N43): once its video write
-    returned, here one that drains only at 2 s. Its text goes with the next trigger."""
+    returned, here one that drains only at 2 s. No push carries its text."""
     rig = Rig()
     clock = rig.driver.clock = Dial(1.0, rig.log)
 

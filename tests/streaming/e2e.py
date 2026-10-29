@@ -32,7 +32,6 @@ from tests.streaming.clocked_ws import (
 from tests.streaming.ws_cassette import RealtimeNormalizer
 
 LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
-SILENCE = bytes(3200)  # 100 ms of 16 kHz PCM, a Gemini Live activity's audio (gemini/live.py)
 
 
 @dataclass

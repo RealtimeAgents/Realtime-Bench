@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
+from websockets.exceptions import ConnectionClosedError
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
@@ -21,6 +22,7 @@ from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.entity.request import Intent, ToolExchange
 from realtime_framework.evaluation.kernel.events import Outcome
 from realtime_framework.evaluation.kernel.streaming import (
+    ActionArrived,
     CallsCancelled,
     FrameFoundInvalid,
     SessionPrepared,
@@ -39,7 +41,7 @@ from realtime_framework.harnesses.streaming.feedback import execution_feedback
 from realtime_framework.providers.gemini.live import GeminiLiveDriver, GoAwayDeadlineExceeded
 from realtime_framework.providers.openai_realtime import OpenAIRealtimeDriver
 from tests.fake_clock import FakeClock
-from tests.session.test_gemini_live_streaming import FedLive, wire
+from tests.session.test_gemini_live_streaming import FedLive, image, turns, wire
 
 from .fake_live import (
     BUDGET,
@@ -1465,15 +1467,147 @@ def test_a_rebuilt_session_replays_a_replys_tool_rounds_as_a_turns_are(monkeypat
 
 class _FedGeminiLive(GeminiLiveDriver):
     """Gemini Live's encoder on connections the test feeds (tests/session/
-    test_gemini_live_streaming.py FedLive), on which a queued tool acknowledgement does not
-    drain."""
+    test_gemini_live_streaming.py FedLive); ``views`` holds the frames of the view each reply was
+    asked for on."""
 
     def __init__(self, config, *, clock=None, streaming=False):
         config = config.model_copy(update={"api_key": "replay-dummy-key"})
         super().__init__(config, clock=clock, streaming=streaming)
         self.live = FedLive()
-        self.live.stall = lambda message: wire(message) == "tool_response"
         self.client = SimpleNamespace(aio=SimpleNamespace(live=self.live))
+        self.views: list[list[str]] = []
+
+    async def request_reply(self, request):
+        frames = [item.block.id for item in request.canonical.items if item.block.kind == "frame"]
+        self.views.append(frames)
+        return await super().request_reply(request)
+
+
+class _UndrainedGeminiLive(_FedGeminiLive):
+    """_FedGeminiLive, on whose connections a queued tool acknowledgement does not drain."""
+
+    def __init__(self, config, *, clock=None, streaming=False):
+        super().__init__(config, clock=clock, streaming=streaming)
+        self.live.stall = lambda message: wire(message) == "tool_response"
+
+
+TURN_COMPLETE = {
+    "serverContent": {"turnComplete": True},
+    "usageMetadata": {"promptTokenCount": 20, "responseTokenCount": 3, "totalTokenCount": 23},
+}
+
+
+def _called(call_id: str, frame: int) -> dict:
+    click = {"x": 10, "y": 20, "button": "left", "frame": frame}
+    return {"toolCall": {"functionCalls": [{"id": call_id, "name": "click", "args": click}]}}
+
+
+async def _released(socket) -> None:
+    """Let a write stalled on ``socket`` go out: on the execution thread's loop, whose event it
+    sets."""
+    socket.release()
+
+
+def test_a_reply_asked_while_a_push_writes_its_frame_carries_that_frame(monkeypatch, clock):
+    """Gemini Live's encoder: frame 2's push holds the session while its video is written, and
+    the agent enters frame 2 in its view only once that push returned. A reply asked meanwhile is
+    asked for on a view of frame 1 alone; its trigger waits for the write, and carries frame 2,
+    the newest frame the session got, its text with its screenshot, not frame 1."""
+    agent = make_agent(monkeypatch, clock, _FedGeminiLive)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    first = observation(clock, 1)
+    agent.push(first)
+    socket = agent.driver.live.sockets[0]
+    socket.stall = lambda message: wire(message) == "video"
+    clock.sleep(1.0)
+    pushing, pushed = _on_worker(clock, lambda: agent.push(observation(clock, 2)))
+    clock.sleep(0.1)  # frame 2's video write has started and does not drain
+    socket.answer("client_content", _called("c1", 2), TURN_COMPLETE)
+    replying, replied = _on_worker(clock, lambda: agent.generate(7, 3, first, BUDGET))
+    clock.sleep(0.1)  # the reply waits for the session frame 2's push holds
+    asked = [wire(message) for message in socket.sent]
+    agent._execution.run(_released(socket))
+    assert clock.wait(pushing, 10.0) and clock.wait(replying, 10.0)
+    assert "error" not in pushed and "error" not in replied
+    agent.accept(7)
+    agent.close()
+    assert asked == ["video"]
+    assert agent.driver.views == [["f1.frame"]]
+    videos = [message for message in socket.sent if wire(message) == "video"]
+    (trigger,) = [message for message in socket.sent if wire(message) == "client_content"]
+    ((role, (text, mime)),) = turns(trigger)
+    assert (role, mime) == ("user", "image/png")
+    assert text.startswith("This text goes with the streamed screenshot labelled FRAME 2.")
+    assert image(trigger) == image(videos[1]) != image(videos[0])
+
+
+def test_a_trigger_whose_write_fails_is_asked_again_on_the_session_the_next_push_rebuilds(
+    monkeypatch, clock
+):
+    """Gemini Live's encoder, with nothing marked by hand: reply 4's trigger does not go out,
+    the connection closing under it before the model said anything. The agent leaves the session
+    dirty, so frame 3, pushed while the reply waits to be asked again, goes into nothing of the
+    broken connection: its push rebuilds the session first, whose seed replays reply 3's click as
+    its tool transcript and its feedback once, then sends frame 3. Asked again, reply 4 triggers
+    on the rebuilt session with frame 3 alone, the seed having carried the feedback, and each
+    click arrives once."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, _FedGeminiLive, trace=trace)
+    posted = []
+    agent.bind_inbox(posted.append, ORIGIN)
+    frame = _two_frames(agent, clock)
+    live = agent.driver.live
+    first = live.sockets[0]
+    first.answer("client_content", _called("c1", 2), TURN_COMPLETE)
+    agent.generate(7, 3, frame, BUDGET)
+    agent.accept(7)
+    clicked = [event for event in posted if isinstance(event, ActionArrived)]
+    agent.commit(_outcome(3, "applied", "c1", action=clicked[0].action))
+
+    connect = live.connect
+
+    def answering(*, model, config):
+        """Each new connection answers its first trigger after a frame went out on it."""
+        opened = connect(model=model, config=config)
+        socket = live.sockets[-1]
+
+        def trigger(message):
+            return wire(message) == "client_content" and "video" in map(wire, socket.sent)
+
+        socket.answer(trigger, _called("c2", 3), TURN_COMPLETE)
+        return opened
+
+    live.connect = answering
+    first.fail = lambda message: wire(message) == "client_content"
+    first.failure = ConnectionClosedError(None, None)
+    replying, replied = _on_worker(clock, lambda: agent.generate(8, 4, frame, BUDGET))
+    clock.sleep(0.1)  # the trigger failed, and the reply waits out its backoff
+    failed = [wire(message) for message in first.sent]
+    agent.push(observation(clock, 3))
+    assert clock.wait(replying, 30.0) and "error" not in replied
+    agent.accept(8)
+    agent.close()
+    # Nothing went into the broken connection after its trigger failed.
+    assert failed == [wire(message) for message in first.sent]
+    assert failed == ["video", "video", "client_content", "tool_response"]
+    second = live.sockets[1]
+    assert [wire(message) for message in second.sent] == [
+        "client_content", "video", "client_content", "tool_response",
+    ]  # fmt: skip
+    seed, video, trigger, _ = second.sent
+    seeded = [text for _, parts in turns(seed) for text in parts]
+    assert sum(text.startswith("EXECUTION RESULT") for text in seeded) == 1
+    header = agent._context_policy.texts.gemini_tool_history_header
+    assert sum(text.startswith(header + "\n") for text in seeded) == 1
+    ((_, (text, _)),) = turns(trigger)
+    assert text.startswith("This text goes with the streamed screenshot labelled FRAME 3.")
+    assert image(trigger) == image(video)
+    assert [e.call_id for e in posted if isinstance(e, ActionArrived)] == ["c1", "c2"]
+    attempts = [
+        (a["kind"], a["outcome"], a["failure_kind"])
+        for a in trace.of(TraceEvent.MODEL_ATTEMPT_FINISHED)
+    ]
+    assert attempts == [("reply", "retry", TRANSIENT), ("reply", "ok", None)]
 
 
 @pytest.mark.parametrize("said", [False, True], ids=["silent", "said_first"])
@@ -1486,7 +1620,7 @@ def test_a_reply_given_up_while_its_acknowledgement_is_written_keeps_its_call(
     recorded before it handed the click over: the session rebuilt for the next frame holds the
     click in the tool transcript, after what the model said, and not as bare action text or
     through its result alone."""
-    agent = make_agent(monkeypatch, clock, _FedGeminiLive)
+    agent = make_agent(monkeypatch, clock, _UndrainedGeminiLive)
     posted = []
     agent.bind_inbox(posted.append, ORIGIN)
     frame = _two_frames(agent, clock)
@@ -1495,7 +1629,7 @@ def test_a_reply_given_up_while_its_acknowledgement_is_written_keeps_its_call(
     click = {"x": 10, "y": 20, "button": "left", "frame": 2}
     said_first = {"serverContent": {"outputTranscription": {"text": "Clicking the button."}}}
     called = {"toolCall": {"functionCalls": [{"id": "c1", "name": "click", "args": click}]}}
-    first.answer("activityEnd", *((said_first,) if said else ()), called)
+    first.answer("client_content", *((said_first,) if said else ()), called)
     done, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
     clock.sleep(1.0)
     assert [arrived.call_id for arrived in posted] == ["c1"]

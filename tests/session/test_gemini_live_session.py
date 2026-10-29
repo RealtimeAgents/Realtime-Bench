@@ -37,7 +37,6 @@ from realtime_framework.providers.gemini.session import (
     Delivery,
     Orphan,
     Part,
-    RealtimeInput,
     Received,
     SessionCore,
     Trigger,
@@ -49,7 +48,6 @@ GO_AWAY_RECONNECT = {
     "go_away_time_left": "30s",
 }
 QUEUED = {"status": "queued"}
-ACTIVITY = ("activity_start", "audio_carrier", "activity_end")  # a trigger without feedback
 
 
 def session_core(
@@ -181,10 +179,10 @@ def clean_turn(core: SessionCore, generation_id: str, handle: str, *messages) ->
 
 
 def start_reply(core: SessionCore, generation_id: str, blocks=None) -> None:
-    """A streaming reply: the newest of the accepted ``blocks`` pushed, the generation, then its
-    trigger."""
+    """A streaming reply: the newest of the accepted ``blocks`` pushed and written, the
+    generation, then its trigger."""
     history = streaming_view(blocks or [pushed(0)])
-    core.push(history)
+    core.pushed(core.push(history))
     core.start_generation(generation_id)
     core.trigger(history)
 
@@ -372,35 +370,38 @@ def test_a_streaming_rebuild_skips_an_empty_reply_output():
 
 def test_a_streaming_frame_is_pushed_as_its_video_alone():
     """A pushed frame is a video frame, with no activity around it, and counts as sent once
-    written; its text waits for the next trigger."""
+    written; no push carries its text. Written, it is the newest frame the session got, which
+    the next trigger carries, its text with its screenshot."""
     core = session_core(streaming=True)
     connected(core)
     push = core.push(streaming_view([pushed(1), pushed(2)]))
-    video = RealtimeInput("video", image=frame_content(2).parts[1].image)
-    assert push.inputs == (video,)
+    assert push.image == frame_content(2).parts[1].image
     assert (push.observation_id, push.keys) == ("obs-2", (("block", "f2.frame"),))
     assert core.delivery[("block", "f2.frame")] == Delivery.UNKNOWN
     core.pushed(push)
     assert core.delivery[("block", "f2.frame")] == Delivery.SENT
-    assert core.trigger(streaming_view([pushed(1), pushed(2)])).inputs[1] == RealtimeInput(
-        "text", text="frame 2"
-    )
+    assert core.trigger(streaming_view([pushed(1), pushed(2)])).contents == (frame_content(2),)
 
 
-def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
-    """A trigger is one activity holding the feedback no seed or trigger has carried into the
-    session yet, then the silent audio an activity must hold. A rebuild's seed carries the
-    feedback it replays; a resume keeps what the session held."""
-    start, carrier, end = (RealtimeInput(kind) for kind in ACTIVITY)
+def test_a_streaming_trigger_is_one_turn_of_the_feedback_since_the_last_and_the_newest_frame():
+    """A trigger is one client content turn: the feedback no seed or trigger has carried into
+    the session yet, each its own Content, then the newest frame written to the session, its
+    text with its screenshot, as a seed replays a frame. Every trigger carries that frame, one
+    with no feedback to carry too. A rebuild's seed carries the feedback it replays; a resume
+    keeps what the session held."""
     core = session_core(streaming=True)
-    blocks = [
-        pushed(1),
+    connected(core)
+    blocks = [pushed(1)]
+    core.pushed(core.push(streaming_view(blocks)))
+    blocks += [
         output_block(1, "click P1", "obs-1", None),
         feedback_block(1, None, "EXECUTION RESULT: ok", None),
         pushed(2),
     ]
+    core.pushed(core.push(streaming_view(blocks)))
     connected(core, streaming_view(blocks))
-    assert core.trigger(streaming_view(blocks)) == Trigger((start, carrier, end), ())
+    newest = ("frame_text", "f2.frame")
+    assert core.trigger(streaming_view(blocks)) == Trigger((frame_content(2),), (newest,))
 
     for decision, feedback in ((2, "EXECUTION RESULT: missed"), (3, "SUPERSEDED")):
         blocks += [
@@ -408,11 +409,15 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
             feedback_block(decision, None, feedback, None),
         ]
     trigger = core.trigger(streaming_view(blocks))
-    text = RealtimeInput("text", text="EXECUTION RESULT: missed\nSUPERSEDED")
-    keys = (("block", "d2.feedback"), ("block", "d3.feedback"))
-    assert trigger == Trigger((start, text, carrier, end), keys)
-    assert core.delivery[keys[-1]] == Delivery.UNKNOWN  # until written
-    assert core.trigger(streaming_view(blocks)).keys == ()
+    keys = (("block", "d2.feedback"), ("block", "d3.feedback"), newest)
+    contents = (
+        feedback_content("EXECUTION RESULT: missed"),
+        feedback_content("SUPERSEDED"),
+        frame_content(2),
+    )
+    assert trigger == Trigger(contents, keys)
+    assert all(core.delivery[key] == Delivery.UNKNOWN for key in keys)  # until written
+    assert core.trigger(streaming_view(blocks)) == Trigger((frame_content(2),), (newest,))
 
     connected(core, resume_handle="handle-0")
     blocks += [
@@ -420,65 +425,58 @@ def test_a_streaming_trigger_is_an_activity_with_the_feedback_since_the_last():
         feedback_block(4, None, "EXECUTION RESULT: ok", None),
     ]
     trigger = core.trigger(streaming_view(blocks))
-    assert trigger.inputs[1] == RealtimeInput("text", text="EXECUTION RESULT: ok")
-    assert trigger.keys == (("block", "d4.feedback"),)
+    assert trigger == Trigger(
+        (feedback_content("EXECUTION RESULT: ok"), frame_content(2)),
+        (("block", "d4.feedback"), newest),
+    )
 
 
-def test_a_streaming_trigger_carries_the_text_of_each_frame_pushed_since_the_last():
-    """After the feedback, the text of each frame pushed since the last trigger, in the order
-    they were pushed: sent outside an activity while the model generates, a text is input that
-    interrupts its reply. A frame whose push failed has none in it, and each text goes in once,
-    heard with its frame's block."""
-    start, carrier, end = (RealtimeInput(kind) for kind in ACTIVITY)
+def test_a_streaming_trigger_carries_the_newest_frame_written_and_no_earlier_frame_s_text():
+    """The frames pushed between two triggers went in as video alone: a trigger carries the
+    newest one written, and not the text of those before it. A frame whose push failed was not
+    written: the newest is the one written before it, and the failed one stays unknown. The view
+    a trigger is planned from may not hold the newest frame written yet, as the agent enters a
+    frame in its view once its push returned: the trigger carries that frame all the same. Each
+    block is heard once written."""
     heard = []
     core = SessionCore(
         {"completion_signal": "turn_complete", "tool_response_scheduling": "when_idle"},
         streaming=True,
         on_delivery=lambda state, contents, connection: heard.append((state, contents)),
     )
-    blocks = [pushed(1)]
-    connected(core, streaming_view(blocks))
-    for k in (2, 3):
+    connected(core)
+    blocks = []
+    for k in (1, 2, 3):
         blocks.append(pushed(k))
         core.pushed(core.push(streaming_view(blocks)))
     core.send_failed(core.push(streaming_view([*blocks, pushed(4)])).keys)
-    blocks += [
+    view = [
+        *blocks[:2],
         output_block(1, "click P1", "obs-1", None),
         feedback_block(1, None, "EXECUTION RESULT: ok", None),
     ]
-    trigger = core.trigger(streaming_view(blocks))
-    texts = (
-        RealtimeInput("text", text=text) for text in ("EXECUTION RESULT: ok", "frame 2", "frame 3")
-    )
-    keys = (("block", "d1.feedback"), ("frame_text", "f2.frame"), ("frame_text", "f3.frame"))
-    assert trigger == Trigger((start, *texts, carrier, end), keys)
-    assert all(core.delivery[key] == Delivery.UNKNOWN for key in keys)  # until written
+    trigger = core.trigger(streaming_view(view))
+    keys = (("block", "d1.feedback"), ("frame_text", "f3.frame"))
+    assert trigger == Trigger((feedback_content("EXECUTION RESULT: ok"), frame_content(3)), keys)
     core.sent(trigger.keys)
-    assert heard[-1] == (
-        "sent",
-        [(keys[0], "d1.feedback"), (keys[1], "f2.frame"), (keys[2], "f3.frame")],
-    )
-    assert core.trigger(streaming_view(blocks)) == Trigger((start, carrier, end), ())
+    assert heard[-1] == ("sent", [(keys[0], "d1.feedback"), (keys[1], "f3.frame")])
+    assert core.delivery[("block", "f4.frame")] == Delivery.UNKNOWN
 
 
-def test_a_seed_carries_its_frames_texts_and_a_resume_keeps_those_no_trigger_carried():
-    """A rebuild's seed replays each frame with its text, so no trigger after it carries them
-    again; a resumed session holds what the handle held, so the next trigger carries the texts
-    no trigger has."""
-    start, carrier, end = (RealtimeInput(kind) for kind in ACTIVITY)
+def test_a_trigger_after_a_rebuild_or_a_resume_carries_the_newest_frame_again():
+    """A rebuild's seed replays the newest frame with its text and screenshot, and a resumed
+    session holds what its handle held, which may lack the newest frame; either way the next
+    trigger carries the newest frame, as every trigger does."""
     core = session_core(streaming=True)
     connected(core)
     blocks = [pushed(1)]
     core.pushed(core.push(streaming_view(blocks)))
-    connected(core, streaming_view(blocks))
-    assert core.trigger(streaming_view(blocks)) == Trigger((start, carrier, end), ())
-
-    blocks.append(pushed(2))
-    core.pushed(core.push(streaming_view(blocks)))
+    rebuilt = connected(core, streaming_view(blocks))
+    assert rebuilt.seed == ([frame_content(1)],)
+    newest = Trigger((frame_content(1),), (("frame_text", "f1.frame"),))
+    assert core.trigger(streaming_view(blocks)) == newest
     connected(core, resume_handle="handle-1")
-    trigger = core.trigger(streaming_view(blocks))
-    assert trigger.inputs[1] == RealtimeInput("text", text="frame 2")
-    assert trigger.keys == (("frame_text", "f2.frame"),)
+    assert core.trigger(streaming_view(blocks)) == newest
 
 
 def fed(k: int, feedback: str) -> CanonicalTurn:
@@ -916,6 +914,7 @@ def test_a_reply_s_first_message_is_its_generation_s_once_it_starts_before_the_t
 
     late = session_core(streaming=True)
     connected(late)
+    late.pushed(late.push(streaming_view([pushed(0)])))
     late.trigger(streaming_view([pushed(0)]))
     assert isinstance(arrive(late, call), Orphan)
 

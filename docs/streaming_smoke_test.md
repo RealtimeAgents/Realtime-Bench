@@ -9,7 +9,7 @@ it is run, the command, which record to read, and what passes. What the checks s
 - the stuck thresholds of a streaming episode (a reply 30 s, a frame push 10 s, 3 failed pushes in
   a row);
 - how Gemini Live starts a reply while frames keep coming (frames as realtime_input video, a reply
-  started by one activity under NO_INTERRUPTION);
+  started by one client_content turn carrying the newest frame's text and screenshot);
 - whether models read the frame number drawn on each screenshot;
 - the highest frame rate OpenAI Realtime takes, which its driver does not declare yet;
 - that a streaming capture probing the page on a CDP connection of its own works in a real Chrome.
@@ -217,7 +217,11 @@ minutes.
   `setup.realtimeInputConfig` is `{"automatic_activity_detection": {"disabled": true},
   "activity_handling": "NO_INTERRUPTION", "turn_coverage": "TURN_INCLUDES_ALL_INPUT"}`.
 - The prompt size over time: the `usageMetadata.promptTokenCount` of each server message that has
-  one. A drop from above the trigger to near the target is one compression.
+  one. A drop from above the trigger to near the target is one compression. The trigger is when the
+  server compresses, not a cap on a reply's prompt. Each reply's trigger adds its screenshot as an
+  image (about 1100 tokens in the 10-29 probe, against about 66 for a video frame): report the
+  `IMAGE` tokens of `promptTokensDetails` per reply as well, and whether a reply's count is the
+  whole session or that turn's alone.
 - The session lasted: `run_summary.json` `invalid_run` is null and the last `gemini_live.ws`
   message is past 120 s.
 - The task: whether the actions after the first compression still serve the task (the
@@ -294,40 +298,48 @@ phase2.md's fallback is element ids that stay fixed across frames.
 
 ### 4. Gemini Live: starting a reply while frames keep coming
 
-phase2.md, 落地前要验证 4; decision 22 (plan b); stream-gemini. Run `gemini-3.8-live` for 3
-minutes.
+phase2.md, 落地前要验证 4; decision 22, whose trigger is now one client_content turn instead of
+an activity (10-29); stream-gemini. Run each Gemini preset, `gemini-live`, `gemini-3.8-live` and
+`gemini-3.8-live-extended-thinking`, for 3 minutes.
 
 - Frames go in as `realtime_input` video, outside any activity, and keep going during replies:
-  the client's `realtime_input` messages that carry `video` come about once a second throughout,
+  every client `realtime_input` message carries `video`, about once a second throughout,
   `uv run python session_bodies.py <dir> realtime_input | jq -r 'select(.[4].realtime_input.video) | .[0]'`
-  printing their times. Count only those: each trigger sends three or more others (the
-  activity's start and end, the silence, the feedback and the frame texts).
-- Each reply starts with one activity: `activityStart`, the feedback since the last trigger as
-  text if any, the text of each frame pushed since the last trigger, each naming the number on
-  its screenshot (`... labelled FRAME 12.`), 100 ms of silent audio, `activityEnd`; each is
-  followed by a `toolCall` or a `turnComplete` well within the reply watchdog.
-- The first trigger has no feedback yet, only the first frames' texts and the silence: it must
-  start a reply too.
+  printing their times. Report the largest gap between two during a reply, and
+  `streaming.frames.dropped_by_reason`.
+- Each reply starts with one `client_content` whose `turnComplete` is true: the feedback since the
+  last trigger, each its own user turn, then the newest frame pushed, its text naming the number
+  on its screenshot (`... labelled FRAME 12. ...`, with its element list) and its screenshot as
+  `inlineData`, the same image as that frame's video. A trigger with no frame pushed since the
+  last carries the same frame again. After a rebuild the seed's own `client_content` messages
+  come first, starting no reply, and the trigger after them.
+- Each trigger is followed by its reply's whole tool round, well within the reply watchdog: the
+  `toolCall`, its `tool_response`, and the turn's end with its `usageMetadata` (`turnComplete`;
+  on `gemini-3.8-live-extended-thinking` the `IDLE` interaction status after any intermediate
+  `turnComplete`). Then nothing comes until the next trigger: no `serverContent`, `toolCall` or
+  `toolCallCancellation` between a turn's end and the next `client_content`, also when the
+  `tool_response` went out after the turn's end (the driver only logs such a message and runs none
+  of its calls). A client_content trigger interrupts whatever the model is still generating, so
+  this must hold before the defaults are set; `gemini-live` declares non-blocking functions that
+  Google documents no asynchronous calling for.
 - No reply is interrupted:
   `uv run python session_bodies.py <dir> serverContent | jq -r 'select(.[4].serverContent.interrupted) | .[0]'`
-  prints nothing. On Gemini 3.1 Flash Live a text sent outside an activity once the model has
-  begun its reply interrupts the reply, which then ends in `interrupted` and `turnComplete` with
-  no call and ends the run invalid (`native tool accounting requires a complete reply`); a video
-  frame does not. That is why a frame's text goes with the next trigger.
+  prints nothing.
+- No transcription holds `¿Qué es el número de cuenta?` (RealtimeAgents/Realtime-Bench#4), what
+  the 100 ms of silent audio the activity trigger sent before was heard as.
+- The screenshot, its number and its element list agree: for a few triggers, the `FRAME n` drawn
+  on the inline image, the n its text names and the marks of its list on that image. Count the
+  actions that name a frame pushed between two triggers, which the model got as video alone, with
+  how their marks resolved (`reference_resolution`), and their `frame_age_frames` against the
+  actions naming a trigger's frame.
 - No fixed wait after the video in streaming:
   `jq -c 'select(.event=="SessionWait" and .payload.wait=="video_ingestion")' episode_trace.jsonl`
   prints nothing.
-- Frames pushed between activities count for the next reply: a reply's actions name frames pushed
-  outside its activity with a small `frame_age_frames`.
-- The server starts no reply on its own: no `toolCall` or `serverContent` arrives between a
-  `turnComplete` and the next `activityStart` (the driver only logs such a message and runs none
-  of its calls).
-- Not covered by a normal episode, which never triggers during a reply: what NO_INTERRUPTION does
-  with a trigger during a reply (queued or ignored). It needs a probe of its own.
 
-Pass: every trigger got a reply, frames kept their rate during replies, and nothing came outside a
-reply. If silence alone starts no reply, or video outside an activity is not seen, report it:
-decision 22 is final only after this check.
+Pass: every trigger got its whole tool round, nothing came between a turn's end and the next
+trigger, no reply was interrupted, and frames kept their rate during replies. If anything arrives
+between a turn's end and the next trigger, report it: a client_content trigger is then not safe as
+it stands.
 
 ### 5. Gemini Live: resumption and cancelled calls
 
@@ -459,7 +471,7 @@ jq -s '[.[] | select(.event=="KernelRecord") | .payload] as $k
 | 1 | tokens per frame, peak `input_tokens`, context limit, result for K 10/20/40, null usage details |
 | 2 | prompt tokens per frame, time between compressions, peak against 131072, task still served |
 | 3 | per preset: actions arrived, `invalid_grounding_frame` by detail, `frame_age_frames` p90 |
-| 4 | triggers without a reply, frame rate during replies, messages outside a reply |
+| 4 | per preset: triggers without a whole tool round, messages between rounds, largest video gap during a reply, actions naming a frame between triggers |
 | 5 | handle interval, resumable share, goAway reconnects, cancellation timing |
 | 6 | largest reply and push durations, watchdogs fired |
 | 7 | connections seen, errors found |

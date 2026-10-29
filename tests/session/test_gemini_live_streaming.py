@@ -74,7 +74,8 @@ class FedSocket:
         self.read_scopes: list[tuple] = []  # each server message's kind and its trace scope
         self._frames: asyncio.Queue = asyncio.Queue()
         self._answers: list[tuple] = []  # (kind, frames), in the order they are due
-        self.fail = None  # a predicate on a client message whose send raises
+        self.fail = None  # a predicate on a client message whose send raises ``failure``
+        self.failure: BaseException = RuntimeError("the write does not go out")
         self.stall = None  # a predicate on a client message whose send does not drain
         # Closing waits for a write that does not drain, as websockets' close does.
         self.close_stalls = False
@@ -93,8 +94,9 @@ class FedSocket:
             )
 
     def answer(self, kind, *frames) -> None:
-        """Feed ``frames`` as soon as the client sends a message that is ``kind`` (wire()), as a
-        server answers it, before the send returns."""
+        """Feed ``frames`` as soon as the client sends a message that is ``kind`` (wire()), or
+        that the predicate ``kind`` holds for, as a server answers it, before the send
+        returns."""
         self._answers.append((kind, frames))
 
     async def recv(self, decode=None):
@@ -109,7 +111,7 @@ class FedSocket:
     async def send(self, message):
         message = json.loads(message)
         if self.fail is not None and self.fail(message):
-            raise RuntimeError("the activity end does not go out")
+            raise self.failure
         if self.stall is not None and self.stall(message):
             waits = [
                 asyncio.ensure_future(event.wait()) for event in (self._dropped, self._drained)
@@ -120,7 +122,7 @@ class FedSocket:
             if self._dropped.is_set():
                 raise ConnectionClosedError(None, None)
         self.sent.append(message)
-        if self._answers and wire(message) == self._answers[0][0]:
+        if self._answers and _is(self._answers[0][0], message):
             self.feed(*self._answers.pop(0)[1])
         # A write gives the loop its turns, as a real socket's does: a reader then takes what
         # came meanwhile.
@@ -169,6 +171,10 @@ class _Opened:
     async def __aexit__(self, *exc):
         if self._socket.close_stalls:
             await self._socket._dropped.wait()
+
+
+def _is(kind, message: dict) -> bool:
+    return kind(message) if callable(kind) else wire(message) == kind
 
 
 def setup_message(config) -> dict:
@@ -598,8 +604,8 @@ def test_a_failed_read_ends_every_reply_on_the_connection():
 
 def test_a_pushed_frame_goes_on_the_video_stream_alone_and_starts_no_reply():
     """A frame goes out as a video frame, with no activity around it and no wait: its block is
-    sent once it is written, and its text goes with the next trigger. After a goAway nothing is
-    pushed until the session is renewed."""
+    sent once it is written, and no push carries its text. After a goAway nothing is pushed
+    until the session is renewed."""
     rig = Rig()
 
     async def run():
@@ -638,23 +644,53 @@ def wire(message: dict):
     return ("text", value) if field == "text" else field
 
 
-ACTIVITY = ["activityStart", "audio", "activityEnd"]
+def turns(message: dict) -> list[tuple]:
+    """A trigger's turns, which complete the client's turn: each its role and its parts, a text
+    as itself and an image as its MIME type."""
+    body = message["client_content"]
+    assert body["turnComplete"] is True
+    return [
+        (
+            content["role"],
+            [part.get("text") or part["inlineData"]["mime_type"] for part in content["parts"]],
+        )
+        for content in body["turns"]
+    ]
 
 
-def test_a_reply_is_one_activity_with_the_feedback_and_frame_texts_the_session_lacks():
-    """request_reply starts the reply's generation, then sends one activity: the feedback the
-    session does not hold yet, the text of each frame pushed since the last trigger, and the
-    silent audio an activity must hold. The reply's first message, right after its activity, is
-    that reply's; the next trigger carries only what came since."""
+def image(message: dict) -> str:
+    """The image a video push or a trigger carries, as the wire's base64."""
+    if "realtime_input" in message:
+        return message["realtime_input"]["video"]["data"]
+    (data,) = (
+        part["inlineData"]["data"]
+        for content in message["client_content"]["turns"]
+        for part in content["parts"]
+        if "inlineData" in part
+    )
+    return data
+
+
+def frame_turn(k: int) -> tuple:
+    """Frame k (pushed()) in a trigger: its text, then its screenshot."""
+    return ("user", [f"frame {k}", "image/png"])
+
+
+def test_a_reply_is_one_client_content_turn_of_the_feedback_the_session_lacks_and_the_newest_frame():
+    """request_reply starts the reply's generation, then sends one client content turn: the
+    feedback the session does not hold yet, then the newest frame written, its text with the
+    screenshot its push sent as video, and no silent audio. The reply's first message, right
+    after it, is that reply's; the next trigger carries only the feedback that came since, and
+    the newest frame again."""
     rig = Rig()
     blocks = [pushed(1)]
     triggers = []
 
     async def reply(generation_id: str, *messages):
-        """One reply, which the server starts as soon as its activity ends; what request_reply
+        """One reply, which the server starts as soon as its trigger arrives; what request_reply
         sent goes to ``triggers``."""
         request = GenerationRequest(generation_id, "inf", canonical=rig.view(blocks))
-        rig.socket.answer("activityEnd", *messages, TURN_COMPLETE)
+        rig.socket.answer("client_content", *messages, TURN_COMPLETE)
         before = len(rig.socket.sent)
         generation = await rig.driver.request_reply(request)
         triggers.append(rig.socket.sent[before:])
@@ -680,19 +716,25 @@ def test_a_reply_is_one_activity_with_the_feedback_and_frame_texts_the_session_l
     call_event = next(event for event in events if isinstance(event, FunctionCall))
     assert (call_event.generation_id, call_event.call_id) == ("turn-0", "call-0")
     assert generation.metadata["video_ingestion_wait_ms"] == 0
-    assert generation.metadata["gemini_live_input_transport"] == "realtime_input"
+    assert generation.metadata["input_audio_carrier_ms"] == 0
+    assert generation.metadata["gemini_live_input_transport"] == "client_content"
     assert [[wire(message) for message in trigger] for trigger in triggers] == [
-        ["activityStart", ("text", "frame 1"), "audio", "activityEnd"],
-        ["activityStart", ("text", "EXECUTION RESULT: ok"), "audio", "activityEnd"],
-        ["activityStart", ("text", "EXECUTION RESULT: missed"), "audio", "activityEnd"],
+        ["client_content"]
+    ] * 3
+    assert [turns(trigger) for (trigger,) in triggers] == [
+        [frame_turn(1)],
+        [("user", ["EXECUTION RESULT: ok"]), frame_turn(1)],
+        [("user", ["EXECUTION RESULT: missed"]), frame_turn(1)],
     ]
+    video = image(rig.socket.sent[0])
+    assert [image(trigger) for (trigger,) in triggers] == [video] * 3
     assert delivery == Delivery.SENT
     assert rig.log == []
 
 
 def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
     """The event log hears a pushed frame as sent after its video went out, and a trigger's
-    feedback and frame text after the activity ended, on the connection they went out on; and
+    feedback and frame after its client content did, on the connection they went out on; and
     once each reply is done, no queue is left for it."""
     rig = Rig()
     blocks = [
@@ -707,7 +749,7 @@ def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
         await rig.connect()
         await rig.driver.push_frame(None, rig.view(blocks))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view(blocks))
-        rig.socket.answer("activityEnd", TURN_COMPLETE)
+        rig.socket.answer("client_content", TURN_COMPLETE)
         await drain(rig.driver.events(await rig.driver.request_reply(request)))
         left = dict(rig.driver._core.replies)
         await rig.driver.close()
@@ -717,29 +759,61 @@ def test_a_push_or_a_trigger_is_sent_once_its_last_message_is_written():
     connection = "gemini_live.ws-1"
     assert log.events[1:] == [
         ("sent", ["f1.frame"], connection, 1),
-        ("sent", ["d1.feedback", "f1.frame"], connection, 6),
+        ("sent", ["d1.feedback", "f1.frame"], connection, 2),
     ]
 
 
 def test_a_push_and_a_trigger_go_out_one_after_the_other():
-    """A frame pushed while a reply is requested goes out before or after the activity, never
-    inside it; its text goes with a trigger planned after it."""
+    """A frame pushed while a reply is requested goes out before or after its trigger, never
+    inside it; the trigger carries the newest frame written before it."""
     rig = Rig()
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         await asyncio.gather(
-            rig.driver.push_frame(None, rig.view([pushed(1)])),
+            rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)])),
             rig.driver.request_reply(request),
         )
         await rig.driver.close()
 
     asyncio.run(run())
-    assert [wire(message) for message in rig.socket.sent] in (
-        ["video", "activityStart", ("text", "frame 1"), "audio", "activityEnd"],
-        [*ACTIVITY, "video"],
+    first, *rest = rig.socket.sent
+    sent = [(wire(message), image(message)) for message in rest]
+    second = image(next(message for message in rest if wire(message) == "video"))
+    assert sent in (
+        [("video", second), ("client_content", second)],
+        [("client_content", image(first)), ("video", second)],
     )
+
+
+def test_a_trigger_asked_while_a_push_writes_waits_for_it_and_carries_that_frame():
+    """The agent enters a frame in its view once its push returned, so a reply asked while the
+    push of frame 2 is being written comes with a view of frame 1 alone. Its trigger waits for
+    the session the push holds, and carries frame 2, the newest frame written, not frame 1."""
+    rig = Rig()
+
+    async def run():
+        await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        rig.socket.stall = lambda message: wire(message) == "video"
+        push = asyncio.ensure_future(rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)])))
+        await settle()
+        request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
+        reply = asyncio.ensure_future(rig.driver.request_reply(request))
+        await settle()
+        waiting = [wire(message) for message in rig.socket.sent]
+        rig.socket.release()
+        await asyncio.wait({push, reply})
+        await rig.driver.close()
+        return waiting
+
+    assert asyncio.run(run()) == ["video"]
+    first, second, trigger = rig.socket.sent
+    assert wire(second) == "video" and image(second) != image(first)
+    assert turns(trigger) == [frame_turn(2)]
+    assert image(trigger) == image(second)
 
 
 def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
@@ -774,30 +848,6 @@ def test_a_write_cancelled_while_it_waits_for_the_session_records_nothing():
     assert list(delivery) == [("setup",)] and carried == {}
     assert replies == {}
     assert rig.socket.sent == []
-
-
-def test_a_reply_is_refused_while_an_activity_is_left_open():
-    """An activity whose write failed cannot be closed as canonical context: no reply is
-    requested on that connection until the session is rebuilt."""
-    rig = Rig()
-
-    async def run():
-        await rig.connect()
-        request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
-        rig.socket.fail = lambda message: wire(message) == "activityEnd"
-        failures = []
-        for _ in range(2):
-            try:
-                await rig.driver.request_reply(request)
-            except RuntimeError as exc:
-                failures.append(str(exc))
-        await rig.driver.close()
-        return failures
-
-    assert asyncio.run(run()) == [
-        "the activity end does not go out",
-        "Gemini Live input activity is already open",
-    ]
 
 
 def go_away(time_left: str) -> dict:
@@ -995,8 +1045,9 @@ def test_events_carry_the_number_the_trace_gives_their_connection():
         with pytest.raises(ConnectionClosedError):
             await rig.connect()
         await rig.connect()
-        request = GenerationRequest("turn-1", "inf", canonical=rig.view([]))
-        rig.socket.answer("activityEnd", call("call-1"), TURN_COMPLETE)
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        request = GenerationRequest("turn-1", "inf", canonical=rig.view([pushed(1)]))
+        rig.socket.answer("client_content", call("call-1"), TURN_COMPLETE)
         events = await drain(rig.driver.events(await rig.driver.request_reply(request)))
         await rig.driver.close()
         return events
@@ -1015,10 +1066,11 @@ def test_each_message_is_traced_under_the_reply_it_was_read_for():
     async def run():
         with trace_scope(phase="initialize"):
             await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         for k in (1, 2):
-            request = GenerationRequest(f"turn-{k}", "inf", canonical=rig.view([]))
+            request = GenerationRequest(f"turn-{k}", "inf", canonical=rig.view([pushed(1)]))
             with trace_scope(phase="decision", generation=k):
-                rig.socket.answer("activityEnd", call(f"call-{k}"), TURN_COMPLETE)
+                rig.socket.answer("client_content", call(f"call-{k}"), TURN_COMPLETE)
                 await drain(rig.driver.events(await rig.driver.request_reply(request)))
             rig.socket.feed(update(f"handle-{k}"))
             await settle()
@@ -1061,7 +1113,8 @@ def test_nothing_read_after_a_reply_is_traced_under_it_however_it_ended():
 
     async def run():
         await rig.connect()
-        request = GenerationRequest("turn-0", "inf", canonical=rig.view([]))
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         with trace_scope(phase="decision", generation=1):
             events = rig.driver.events(await rig.driver.request_reply(request))
             rig.socket.feed(call("call-0"))
@@ -1069,7 +1122,7 @@ def test_nothing_read_after_a_reply_is_traced_under_it_however_it_ended():
             await events.aclose()
         rig.socket.feed(TURN_COMPLETE, update("handle-1"))
         await settle()
-        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        rig.socket.fail = lambda message: wire(message) == "client_content"
         with trace_scope(phase="decision", generation=2), pytest.raises(RuntimeError):
             await rig.driver.request_reply(replace(request, generation_id="turn-1"))
         rig.socket.feed(update("handle-2"))
@@ -1139,6 +1192,7 @@ def test_a_reply_is_refused_while_one_is_in_flight():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         await rig.driver.request_reply(request)
         written = len(rig.socket.sent)
@@ -1162,6 +1216,7 @@ def test_a_reply_read_to_its_end_is_in_flight_until_its_events_are_done():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"), TURN_COMPLETE)
@@ -1177,10 +1232,11 @@ def test_a_reply_read_to_its_end_is_in_flight_until_its_events_are_done():
     assert asyncio.run(run()) == "Gemini Live has a reply in flight on the connection"
 
 
-def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
-    """A trigger whose write failed is no reply: its feedback is unknown, no generation takes
-    the connection's messages, so a cancellation read later waits for the next reply, as one
-    held for this reply does; and the activity left open refuses a push as well as a reply."""
+def test_a_failed_trigger_leaves_no_reply_registered_and_its_contents_unknown():
+    """A trigger whose write failed is no reply: its feedback and its frame are unknown, and no
+    generation takes the connection's messages, so a cancellation read later waits for the next
+    reply, as one held for this reply does. The connection takes no further input once the agent
+    left the session dirty, which tests/streaming/test_agent.py runs through."""
     rig = Rig()
     blocks = [
         pushed(1),
@@ -1192,53 +1248,59 @@ def test_a_failed_trigger_leaves_no_reply_registered_and_the_activity_open():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks))
         rig.socket.feed(cancelled("call-0"))
         await settle()
-        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        rig.socket.fail = lambda message: wire(message) == "client_content"
         request = GenerationRequest("turn-0", "inf", canonical=rig.view(blocks))
-        try:
+        with pytest.raises(RuntimeError, match="the write does not go out"):
             await rig.driver.request_reply(request)
-        except RuntimeError:
-            pass
         state = dict(rig.driver._core.replies)
         rig.socket.feed(cancelled("call-1"))
         await settle()
         held = [orphan.cancelled for orphan in rig.driver._core.cancelled_between]
-        try:
-            await rig.driver.push_frame(None, rig.view([*blocks, pushed(2)]))
-        except RuntimeError as exc:
-            refused = str(exc)
         await rig.driver.close()
-        return state, held, refused
+        return state, held
 
-    state, held, refused = asyncio.run(run())
+    state, held = asyncio.run(run())
     assert state == {}
     assert held == [("call-0",), ("call-1",)]
-    assert refused == "Gemini Live input activity is already open"
-    # Its start, feedback and audio went out before its end failed.
-    assert ("unknown", ["d1.feedback"], "gemini_live.ws-1", 3) in log.events
+    assert log.events[1:] == [
+        ("sent", ["f1.frame"], "gemini_live.ws-1", 1),
+        ("unknown", ["d1.feedback", "f1.frame"], "gemini_live.ws-1", 1),
+    ]
 
 
 def test_a_push_whose_write_failed_is_unknown():
+    """Frame 1 is written and frame 2's video write fails: frame 2 is unknown, and stays out of
+    the agent's view (harnesses/streaming/agent.py _push). The trigger after it carries frame 1,
+    the newest frame written, and nothing of frame 2."""
     rig = Rig()
     log = DeliveryLog(lambda: rig.live.sockets[-1].sent if rig.live.sockets else [])
     rig.driver.bind_trace(log)
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         rig.socket.fail = lambda message: wire(message) == "video"
-        try:
-            await rig.driver.push_frame(None, rig.view([pushed(1)]))
-        except RuntimeError:
-            pass
-        request = GenerationRequest("turn-0", "inf", canonical=rig.view([]))
+        with pytest.raises(RuntimeError, match="the write does not go out"):
+            await rig.driver.push_frame(None, rig.view([pushed(1), pushed(2)]))
+        request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         await rig.driver.request_reply(request)
+        delivery = rig.driver._core.delivery[("block", "f2.frame")]
         await rig.driver.close()
+        return delivery
 
-    asyncio.run(run())
-    # Its text goes with no trigger: the frame is not in the session.
-    assert log.events[1:] == [("unknown", ["f1.frame"], "gemini_live.ws-1", 0)]
-    assert [wire(message) for message in rig.socket.sent] == ACTIVITY
+    assert asyncio.run(run()) == Delivery.UNKNOWN
+    connection = "gemini_live.ws-1"
+    assert log.events[1:] == [
+        ("sent", ["f1.frame"], connection, 1),
+        ("unknown", ["f2.frame"], connection, 1),
+        ("sent", ["f1.frame"], connection, 2),
+    ]
+    video, trigger = rig.socket.sent
+    assert turns(trigger) == [frame_turn(1)]
+    assert image(trigger) == image(video)
 
 
 def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply_ended():
@@ -1250,6 +1312,7 @@ def test_after_a_go_away_input_waits_for_the_renewal_that_resumes_once_the_reply
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(update("handle-1"), GO_AWAY)
@@ -1316,10 +1379,9 @@ def test_a_reply_a_go_away_refuses_while_it_waits_for_the_session_is_asked_again
     assert left == (["video"], {}, RuntimeState.READY, "go_away")
     assert renewed.provider_metadata["session_resumed"]
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
-    # The resumed session holds what the handle held: the frame's text goes with this trigger.
-    assert [wire(message) for message in rig.socket.sent] == [
-        "activityStart", ("text", "frame 1"), "audio", "activityEnd",
-    ]  # fmt: skip
+    # The resumed session holds what the handle held; the trigger carries the newest frame.
+    (trigger,) = rig.socket.sent
+    assert turns(trigger) == [frame_turn(1)]
 
 
 def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
@@ -1327,6 +1389,7 @@ def test_a_renewal_before_the_reply_ended_closes_the_connection_under_it():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(update("handle-1"), GO_AWAY)
@@ -1359,6 +1422,7 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view(blocks))
         rig.socket.feed(update("handle-1"))
         await settle()
@@ -1368,7 +1432,7 @@ def test_after_an_abort_or_a_failed_trigger_the_renewal_rebuilds(lost):
             await settle()
             await rig.driver.abort(generation)
         else:
-            rig.socket.fail = lambda message: wire(message) == "activityEnd"
+            rig.socket.fail = lambda message: wire(message) == "client_content"
             with pytest.raises(RuntimeError):
                 await rig.driver.request_reply(request)
             rig.driver.mark_dirty()
@@ -1398,7 +1462,8 @@ def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
 
     async def run():
         await rig.connect()
-        rig.socket.fail = lambda message: wire(message) == "activityEnd"
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
+        rig.socket.fail = lambda message: wire(message) == "client_content"
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         with pytest.raises(RuntimeError):
             await rig.driver.request_reply(request)
@@ -1418,6 +1483,98 @@ def test_a_handle_that_comes_after_a_failed_trigger_resumes_nothing_either():
         None,
     )
     assert [config.session_resumption.handle for config in rig.live.configs] == [None, None]
+
+
+def test_the_first_reply_after_a_rebuild_triggers_on_its_own_after_the_seed():
+    """A rebuild seeds the new connection with the history view under HistoryConfig, the last
+    seed message completing the initial history, which starts no reply: no generation is
+    registered, and the seed is no trigger. The next reply's trigger is a client content turn
+    of its own after it: the feedback the seed replayed does not go again, the newest frame does,
+    its text with the screenshot its push sent, and the reply is the new connection's first
+    generation."""
+    rig = Rig()
+    blocks = [
+        pushed(1),
+        output_block(1, "click P1", "obs-1", None),
+        feedback_block(1, None, "EXECUTION RESULT: ok", None),
+        pushed(2),
+    ]
+
+    async def run():
+        await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks[:1]))
+        await rig.driver.push_frame(None, rig.view(blocks))
+        rig.driver.mark_dirty()
+        ready = await rig.driver.ensure_ready(rig.seed, rig.view(blocks), lambda *_, **__: None)
+        seeded = (list(rig.socket.sent), dict(rig.driver._core.replies))
+        rig.socket.answer("client_content", call("call-1"), TURN_COMPLETE)
+        request = GenerationRequest("turn-1", "inf", canonical=rig.view(blocks))
+        events = await drain(rig.driver.events(await rig.driver.request_reply(request)))
+        await rig.driver.close()
+        return ready, seeded, events
+
+    ready, (seeded, replies), events = asyncio.run(run())
+    assert (ready.disposition, ready.detail) == (SyncDisposition.REBUILT, "runtime_recovery")
+    first, second = rig.live.sockets
+    assert rig.live.configs[1].history_config.initial_history_in_client_content
+    (seed,) = seeded
+    assert turns(seed) == [
+        frame_turn(1),
+        ("model", ["click P1"]),
+        ("user", ["EXECUTION RESULT: ok"]),
+        frame_turn(2),
+    ]
+    assert replies == {}
+    assert [wire(message) for message in second.sent] == [
+        "client_content", "client_content", "tool_response",
+    ]  # fmt: skip
+    trigger = second.sent[1]
+    assert turns(trigger) == [frame_turn(2)]
+    assert image(trigger) == image(first.sent[1])
+    assert {(e.connection, e.generation, e.generation_id) for e in events} == {(2, 1, "turn-1")}
+
+
+def test_the_first_reply_after_a_resume_carries_the_newest_frame_but_no_feedback_already_carried():
+    """A goAway renewal resumes the session at the latest resumable handle, with no seed: the
+    first trigger on the resumed connection carries the newest frame again, its text with its
+    screenshot. Feedback a trigger carried after that handle is lost with the server's state, and
+    no trigger carries it again (SessionCore.carried): a known limit of resuming at the latest
+    handle rather than at a clean one."""
+    rig = Rig()
+    blocks = [pushed(1)]
+
+    async def reply(generation_id: str, *messages):
+        request = GenerationRequest(generation_id, "inf", canonical=rig.view(blocks))
+        rig.socket.answer("client_content", *messages, TURN_COMPLETE)
+        return await drain(rig.driver.events(await rig.driver.request_reply(request)))
+
+    async def run():
+        await rig.connect()
+        await rig.driver.push_frame(None, rig.view(blocks))
+        await reply("turn-0", call("call-0"), update("handle-1"))
+        blocks.extend(
+            [
+                output_block(1, "click P1", "obs-1", None),
+                feedback_block(1, None, "EXECUTION RESULT: ok", None),
+            ]
+        )
+        await reply("turn-1", GO_AWAY)
+        renewed = await rig.driver.renew(rig.seed, rig.view(blocks), lambda *_, **__: None)
+        events = await reply("turn-2", call("call-2"))
+        await rig.driver.close()
+        return renewed, events
+
+    renewed, events = asyncio.run(run())
+    assert renewed.provider_metadata["session_resumed"]
+    assert [config.session_resumption.handle for config in rig.live.configs] == [None, "handle-1"]
+    first, second = rig.live.sockets
+    assert [turns(message) for message in first.sent if wire(message) == "client_content"] == [
+        [frame_turn(1)],
+        [("user", ["EXECUTION RESULT: ok"]), frame_turn(1)],
+    ]
+    assert [wire(message) for message in second.sent] == ["client_content", "tool_response"]
+    assert turns(second.sent[0]) == [frame_turn(1)]
+    assert {(e.connection, e.generation, e.generation_id) for e in events} == {(2, 1, "turn-2")}
 
 
 def test_an_acknowledgement_written_after_a_reconnect_is_recorded_on_its_connection():
@@ -1455,6 +1612,7 @@ def test_a_reply_is_read_on_the_connection_it_started_on():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         generation = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
@@ -1482,6 +1640,7 @@ def test_a_reply_on_a_closed_connection_is_bound_by_no_go_away_of_the_new_one():
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         old = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
@@ -1510,6 +1669,7 @@ def test_a_call_handed_over_after_a_reconnect_is_no_call_of_the_new_connection()
 
     async def run():
         await rig.connect()
+        await rig.driver.push_frame(None, rig.view([pushed(1)]))
         request = GenerationRequest("turn-0", "inf", canonical=rig.view([pushed(1)]))
         old = await rig.driver.request_reply(request)
         rig.socket.feed(call("call-0"))
