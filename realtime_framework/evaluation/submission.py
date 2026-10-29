@@ -202,8 +202,13 @@ def main(jobs: list[Path], *, url: str | None = None, token: str | None = None,
     key = hashlib.sha256("\n".join(str(job.resolve()) for job in jobs).encode()).hexdigest()[:16]
     archive = folder / f"{key}.tar.gz"
     manifest_path = archive.with_suffix(".json")
-    if archive.exists() and manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+    cached = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    # Only the archive of the results just checked resumes: jobs replaced at these paths repack.
+    runs = json.loads(json.dumps(
+        [{"job": job.name, "report": report} for job, report in zip(jobs, reports)]
+    ))
+    if archive.exists() and cached is not None and cached["runs"] == runs:
+        manifest = cached
     else:
         print("Packing results...")
         manifest = build_archive(jobs, reports, archive)
