@@ -334,6 +334,25 @@ def _rounded(value):
     return None if value is None else round(float(value), 9)
 
 
+def success_metrics(solved, termination: dict | None, horizon_s) -> dict:
+    """A run's task-success rate and normalized time to success, from its score and the end of
+    its episode, as summarize_run_metrics counts them and a re-evaluation recounts them
+    (reevaluate_main). A run summary written before the termination record has no end."""
+    horizon = _number(horizon_s)
+    # A solved run always has a termination record: only a finalized loop is scored.
+    normalized_time_to_success = (
+        termination["end_s"] / horizon
+        if solved is True and termination is not None and horizon not in {None, 0}
+        else None
+    )
+    return {
+        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
+        # observation 1/0. Suite/category success rates are aggregated across these values.
+        "task_success_rate": float(solved) if isinstance(solved, bool) else None,
+        "normalized_time_to_success": _rounded(normalized_time_to_success),
+    }
+
+
 def _distribution(
     values,
     *,
@@ -473,20 +492,11 @@ def summarize_run_metrics(
                 parse_errors += 1
                 parse_error_reasons[str(protocol.get("protocol_failure") or "unspecified")] += 1
 
-    task_success_rate = float(solved) if isinstance(solved, bool) else None
-    horizon = _number(horizon_s)
-    # A solved run always has a termination record: only a finalized loop is scored.
-    normalized_time_to_success = (
-        termination["end_s"] / horizon
-        if solved is True and horizon not in {None, 0}
-        else None
-    )
+    success = success_metrics(solved, termination, horizon_s)
 
     return {
         "run_metrics_schema": RUN_METRICS_SCHEMA,
-        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
-        # observation 1/0. Suite/category success rates are aggregated across these values.
-        "task_success_rate": task_success_rate,
+        "task_success_rate": success["task_success_rate"],
         "decision_simulated_latency_s": _distribution(
             simulated_latencies,
             total_decisions=total_decisions,
@@ -520,7 +530,7 @@ def summarize_run_metrics(
         "action_parse_eligible_decisions": parse_eligible,
         "action_parse_error_reasons": dict(sorted(parse_error_reasons.items())),
         "action_parse_error_definition": "action_protocol.valid_action == false",
-        "normalized_time_to_success": _rounded(normalized_time_to_success),
+        "normalized_time_to_success": success["normalized_time_to_success"],
         "normalized_time_to_success_definition": (
             "termination.end_s/(max_minutes*60), defined only when solved == true"
         ),
@@ -778,6 +788,131 @@ def invalid_evaluation(result):
     if type(result.get("evaluation_version")) is not int:
         return "evaluation_missing_version"
     return None
+
+
+from dataclasses import dataclass as dataclass
+
+
+@dataclass(frozen=True)
+class Conclusion:
+    """How a finished run concludes: whether it counts and, when not, the failure it is invalid
+    for (conclude). main() (runner.py), its emergency summary and a re-evaluation
+    (reevaluate_main) each write it into their own summary's layout, from the same values."""
+
+    invalid_run: dict | None  # the failure the run is invalid for; None when it counts
+    failures: tuple[dict, ...]  # each different failure the run found, in the order found
+    run_status: str  # invalid; scored, or experimental for a model outside maintained results
+    solved: bool | None  # the evaluation's resolved when the run counts, None otherwise
+    stop_reason: str | None  # invalid_run, or how the episode stopped when the run counts
+    evaluation: object = None  # the evaluator's result of the frozen snapshot, if there is one
+
+    @property
+    def failure_attribution(self) -> str | None:
+        return (self.invalid_run or {}).get("category") if self.invalid_run else None
+
+    @property
+    def progress(self):
+        """Partial-credit progress, the evaluation's whether the run counts or not (None for
+        games without partial credit)."""
+        return (self.evaluation or {}).get("progress")
+
+    def listed(self) -> dict:
+        """The summary's invalid_runs: each failure after the run's too, which a re-evaluation
+        keeps (reevaluate_main), only when there was more than one."""
+        return {"invalid_runs": list(self.failures)} if len(self.failures) > 1 else {}
+
+    def environment_valid(self, environment_invalid: bool) -> bool | None:
+        """False when the run is invalid for its environment, or a check found the environment
+        invalid as the run set up (``environment_invalid``); None otherwise, as nothing checks
+        an environment valid."""
+        return (
+            False
+            if (self.invalid_run or {}).get("category") == "environment" or environment_invalid
+            else None
+        )
+
+
+def _distinct(failures: list[dict]) -> list[dict]:
+    """The failures a run found, each once: a failed snapshot read is found by the kernel and
+    again by main(), with the same category and reason."""
+    found, distinct = set(), []
+    for failure in failures:
+        if (failure["category"], failure["reason"]) not in found:
+            found.add((failure["category"], failure["reason"]))
+            distinct.append(failure)
+    return distinct
+
+
+def evaluator_failure(evaluation) -> dict | None:
+    """The evaluator's failure, when its result is not safe to score (invalid_evaluation), with
+    the result as its detail; None when it is safe."""
+    reason = invalid_evaluation(evaluation)
+    if reason is None:
+        return None
+    return {
+        "category": "evaluator",
+        "reason": reason,
+        "detail": json.dumps(evaluation, default=str)[:2000],
+    }
+
+
+def conclude(failures, evaluation=None, *, benchmark_eligible=None, stop_reason=None):
+    """How a run concludes from what it found: ``failures`` in the order found, a failure the
+    environment latched while the episode ran before those main() found after it (runner.py
+    main), an evaluation not safe to score among them as the evaluator's (evaluator_failure).
+    The run is invalid for the first. Without a failure it counts: scored, or experimental for a
+    model outside maintained results (``benchmark_eligible``), solved as ``evaluation`` resolved
+    and stopped as its episode stopped (``stop_reason``); those three are read only then, so a
+    run known to be invalid is concluded from its failures alone."""
+    failures = _distinct(failures)
+    return _concluded(
+        failures[0] if failures else None,
+        tuple(failures),
+        evaluation,
+        benchmark_eligible,
+        stop_reason,
+    )
+
+
+def conclude_reevaluation(summary: dict, evaluation) -> Conclusion:
+    """How a finished run concludes once its saved state is evaluated again (reevaluate_main),
+    from its run summary as written, by this runner or an earlier one. The new evaluation decides
+    the evaluator's failures alone: the run stays invalid for the first failure that was not the
+    evaluator's, from the failures the summary lists or its invalid run when it found only one,
+    whatever the new evaluation says, and is otherwise invalid for the evaluator when the new
+    evaluation is not safe to score. A record there that names no failure, such as an empty one,
+    leaves the run counting and stands as its invalid run. The summary says whether the run may
+    count, read only when it does, and how its loop stopped."""
+    persistent = next(
+        (
+            prior
+            for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
+            if isinstance(prior, dict) and prior.get("category") != "evaluator"
+        ),
+        None,
+    )
+    invalid_run = persistent if persistent else evaluator_failure(evaluation) or persistent
+    return _concluded(
+        invalid_run,
+        (invalid_run,) if invalid_run else (),
+        evaluation,
+        None if invalid_run else summary["benchmark_eligible"],
+        summary.get("loop_stop_reason") or summary.get("stop_reason"),
+    )
+
+
+def _concluded(invalid_run, failures, evaluation, benchmark_eligible, stop_reason) -> Conclusion:
+    """The run is invalid when its invalid run names a failure, and counts otherwise."""
+    if invalid_run:
+        return Conclusion(invalid_run, failures, "invalid", None, "invalid_run", evaluation)
+    return Conclusion(
+        invalid_run,
+        failures,
+        "scored" if benchmark_eligible else "experimental",
+        evaluation["resolved"],
+        stop_reason,
+        evaluation,
+    )
 
 
 def _episode_trace_ok(summary_path, summary) -> bool:
@@ -1859,6 +1994,13 @@ def reeval(run_dir: Path, *, allow_suite_hash_mismatch=False):
     raise RuntimeError(f"artifact kind {payload['kind']!r} is not re-evaluable")
 
 
+def _horizon_s(summary: dict):
+    """The scored horizon of the run a summary describes; None when it does not say (episode
+    outcomes read max_minutes the same way, _reached_horizon)."""
+    minutes = _number(summary.get("max_minutes"))
+    return None if minutes is None else minutes * 60
+
+
 def reevaluate_main():
     p = argparse.ArgumentParser()
     p.add_argument("run_dir", type=Path)
@@ -1879,7 +2021,12 @@ def reevaluate_main():
     import realtime_tasks.registry as registry
 
     invalid_reason = invalid_evaluation(result)
-    reported_invalid_reason = invalid_reason
+    # Without --replace-summary, whether the new evaluation alone scores, as a diagnostic.
+    reported = {
+        "run_status": "invalid" if invalid_reason else "scored",
+        "solved": None if invalid_reason else result.get("resolved"),
+        "invalid_reason": invalid_reason,
+    }
     record = {
         # Outside any episode: a finished run, re-evaluated from its saved state.
         "reevaluated_unix_s": time.time(),  # noqa: TID251
@@ -1927,42 +2074,29 @@ def reevaluate_main():
                     )
         if sp.exists() and not backup.exists():
             shutil.copy2(sp, backup)
-        # The first failure the evaluation did not decide; a summary lists its failures only when
-        # there was more than one (runner.py main).
-        persistent_invalid = next(
-            (
-                prior
-                for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
-                if isinstance(prior, dict) and prior.get("category") != "evaluator"
-            ),
-            None,
-        )
-        replacement_invalid = (
-            {
-                "category": "evaluator",
-                "reason": invalid_reason,
-                "detail": json.dumps(result, default=str)[:2000],
-            }
-            if invalid_reason
-            else persistent_invalid
-        )
-        if replacement_invalid:
-            reported_invalid_reason = replacement_invalid.get("reason")
+        conclusion = conclude_reevaluation(summary, result)
+        # The run summary's conclusion, which it says in the line printed too.
+        reported = {
+            "run_status": conclusion.run_status,
+            "solved": conclusion.solved,
+            "invalid_reason": (conclusion.invalid_run or {}).get("reason"),
+        }
         summary.update(
             {
-                "run_status": "invalid"
-                if replacement_invalid
-                else ("scored" if summary["benchmark_eligible"] else "experimental"),
-                "invalid_run": replacement_invalid,
-                "failure_attribution": (
-                    (replacement_invalid or {}).get("category") if replacement_invalid else None
+                "run_status": conclusion.run_status,
+                "invalid_run": conclusion.invalid_run,
+                "failure_attribution": conclusion.failure_attribution,
+                # Not valid once the run found it so, as it set up or now.
+                "environment_valid": conclusion.environment_valid(
+                    summary.get("environment_valid") is False
                 ),
-                "stop_reason": "invalid_run"
-                if replacement_invalid
-                else summary.get("loop_stop_reason") or summary.get("stop_reason"),
-                "solved": None if replacement_invalid else result.get("resolved"),
+                "stop_reason": conclusion.stop_reason,
+                "solved": conclusion.solved,
                 "verification": result,
-                "progress": (result or {}).get("progress"),
+                "progress": conclusion.progress,
+                **success_metrics(
+                    conclusion.solved, summary.get("termination"), _horizon_s(summary)
+                ),
                 "evaluation_artifact": out.name,
                 "reevaluated_from_saved_artifact": True,
             }
@@ -1973,9 +2107,7 @@ def reevaluate_main():
         json.dumps(
             {
                 "run_dir": str(a.run_dir),
-                "run_status": "invalid" if reported_invalid_reason else "scored",
-                "solved": None if reported_invalid_reason else result.get("resolved"),
-                "invalid_reason": reported_invalid_reason,
+                **reported,
                 "output": str(out),
             }
         )
