@@ -697,8 +697,10 @@ def _report_root(root, interaction_mode, streaming=TRACE, cell="cell"):
     from realtime_framework.providers.gemini.live import GeminiLiveDriver
 
     spec = RunSpec(clock_mode="wall", tokens_per_frame=64, interaction_mode=interaction_mode)
+    config = catalog.to_model_config(GEMINI, fps=spec.model_input_fps, reasoning_effort="fixed")
     prepare_episode_report(
-        spec, model=GEMINI, task=WEB, reasoning_effort="fixed", results_dir=str(root / cell)
+        spec, config, model=GEMINI, task=WEB, reasoning_effort="fixed",
+        results_dir=str(root / cell),
     )
     (expected,) = json.loads((root / cell / "summary.json").read_text())["runs"]
     run = root / cell / WEB

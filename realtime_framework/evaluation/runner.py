@@ -470,6 +470,7 @@ def main():
         build_image("realtime")
         prepare_episode_report(
             spec,
+            cfg,
             model=a.model,
             task=a.task,
             reasoning_effort=reasoning_effort,

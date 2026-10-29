@@ -557,8 +557,8 @@ def test_the_identity_a_local_report_expects_has_both_rates(tmp_path):
     from realtime_framework.evaluation.run_spec import RunSpec
 
     prepare_episode_report(
-        RunSpec(clock_mode="wall", fps=2.0, model_input_fps=1.0), model=GEMINI, task=WEB,
-        reasoning_effort=catalog.get(GEMINI).defaults["reasoning_effort"],
+        RunSpec(clock_mode="wall", fps=2.0, model_input_fps=1.0), gemini_config(1.0),
+        model=GEMINI, task=WEB, reasoning_effort=catalog.get(GEMINI).defaults["reasoning_effort"],
         results_dir=str(tmp_path),
     )
     (run,) = json.loads((tmp_path / "summary.json").read_text())["runs"]

@@ -1438,16 +1438,13 @@ def _streaming_totals(scored) -> dict:
     }
 
 
-def prepare_episode_report(spec, *, model, task, reasoning_effort, results_dir):
+def prepare_episode_report(spec, model_config, *, model, task, reasoning_effort, results_dir):
     """Record expected identity before execution, independently of the resulting summary, from
-    runner.main()'s run options ``spec`` (evaluation/run_spec.py) and its catalog ``model``,
-    ``task`` and ``reasoning_effort`` with its defaults filled in (config.apply_run_defaults)."""
+    runner.main()'s run options ``spec`` (evaluation/run_spec.py), the model configuration
+    ``model_config`` it runs, its catalog ``model``, ``task`` and ``reasoning_effort`` as the run
+    names it (the catalog's label, which the configuration may hold as None)."""
     from realtime_framework.evaluation.config import config_fingerprint, run_spec_config
-    from realtime_framework.providers import registry as catalog
 
-    model_config = catalog.to_model_config(
-        model, fps=spec.model_input_fps, reasoning_effort=reasoning_effort
-    )
     runtime_hash = config_fingerprint(run_spec_config(spec, model_config))
     expected = {
         **resolve_run_identity(
