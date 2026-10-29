@@ -1383,7 +1383,7 @@ def test_the_trace_tells_a_resumed_renewal_from_a_rebuild_as_a_turns_does(monkey
         ("session_resumed", "provider", "go_away"),
         ("rebuild", "recovery", "reconnect"),
     ]
-    replayed = ["tool_call_replay"]
+    replayed = ["tool_call_history"]
     assert [c["policy_item"] for c in changes] == [replayed, None, replayed]
     assert changes[1]["sync"]["provider_metadata"]["session_resumed"] is True
     states = trace.of(TraceEvent.SESSION_STATE_CHANGED)
@@ -1461,7 +1461,7 @@ def test_a_rebuilt_session_replays_a_replys_tool_rounds_as_a_turns_are(monkeypat
     (reconnect,) = [
         c for c in trace.of(TraceEvent.HISTORY_CHANGED) if c.get("sync") == {"reason": "reconnect"}
     ]
-    assert reconnect["policy_item"] == ["tool_call_replay"]
+    assert reconnect["policy_item"] == ["tool_call_history"]
     agent.close()
 
 
@@ -1664,13 +1664,15 @@ class _PolicyRetained(FakeLiveDriver):
     streaming_settings: ClassVar[dict] = {}
 
 
-@pytest.mark.parametrize(("driver", "item"), [(FakeLiveDriver, None), (_PolicyRetained, "visuals")])
+@pytest.mark.parametrize(
+    ("driver", "item"), [(FakeLiveDriver, None), (_PolicyRetained, "screenshots_kept")]
+)
 def test_each_frame_the_view_folds_is_recorded_as_a_turn_based_fold_is(
     monkeypatch, clock, driver, item
 ):
     """As a turn-based fold (RealtimeRuntime._record_retention): a HistoryChanged names the frame
-    each push folded, under the policy's visuals item where the view keeps the policy's count,
-    and under none where the encoder's own setting keeps it."""
+    each push folded, under the policy's screenshots_kept item where the view keeps the policy's
+    count, and under none where the encoder's own setting keeps it."""
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, driver, trace=trace)
     keep = agent._retained

@@ -642,7 +642,7 @@ def test_history_overflow(api, tmp_path):
         for e in events
         if e["event"] == "HistoryChanged" and e["payload"]["kind"] == "pressure_archive"
     ]
-    assert change["scope"]["decision"] == k and change["policy_item"] == "pressure_archive"
+    assert change["scope"]["decision"] == k and change["policy_item"] == "archive_over_window"
     assert change["ledger"] == {"archived_actions_before": 0, "archived_actions_after": 10}
     _settle("history_overflow", header, records, tmp_path)
 

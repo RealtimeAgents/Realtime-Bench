@@ -328,7 +328,7 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
         (2, "in_place_edit_fallback"),
     ]
     assert changes[1]["sync"]["disposition"] == "exact"
-    assert changes[1]["policy_item"] == ["visuals"]
+    assert changes[1]["policy_item"] == ["screenshots_kept"]
     fallback = changes[3]
     assert fallback["trigger"] == "fallback" and fallback["replayed_turns"] == 2
     assert "no such item" in fallback["sync"]["provider_metadata"]["history_in_place_edit_error"]
@@ -452,7 +452,7 @@ def test_gemini_live_session(tmp_path, monkeypatch):
     ]
     assert changes[0]["trigger"] == "provider" and changes[0]["sync"]["reason"] == "go_away"
     assert changes[1]["trigger"] == "fallback" and changes[1]["replayed_turns"] == 2
-    assert changes[1]["policy_item"] == ["tool_call_replay"]
+    assert changes[1]["policy_item"] == ["tool_call_history"]
     assert "resume_error" in changes[1]["sync"]["provider_metadata"]
     states = [e["payload"] for e in events if e["event"] == "SessionStateChanged"]
     assert [(s["state"], s["cause"]) for s in states] == [

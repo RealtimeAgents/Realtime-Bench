@@ -310,10 +310,10 @@ def _probe_runner(request: dict) -> dict:
             config.adapter_type, config.provider_options, config.context_preset
         )
         state["settings_at_agent_setup"] = {
-            "active_visual_budget": policy.visuals.keep,
-            "visual_fold_block_size": policy.visuals.block,
-            "detailed_history_turns": policy.turns.keep,
-            "detailed_history_drop_block_size": policy.turns.block,
+            "active_visual_budget": policy.screenshots_kept,
+            "visual_fold_block_size": policy.screenshot_fold_block,
+            "detailed_history_turns": policy.turns_kept,
+            "detailed_history_drop_block_size": policy.turn_archive_block,
         }
         state["prompts"] = policy.prompts
         return _Agent(config)

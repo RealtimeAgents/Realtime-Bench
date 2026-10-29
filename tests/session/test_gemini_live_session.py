@@ -490,7 +490,7 @@ def separate_view(turns):
     """view() under the policy with each action's feedback as its own block (item 3)."""
     policy = replace(
         current_context_policy().for_path("gemini_live", {"history_format": "native_tools"}, None),
-        feedback="separate_message",
+        execution_feedback="separate_message",
     )
     return build_request(
         policy,

@@ -43,6 +43,11 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   provider_options and run hashes changed.
 - kimi-k3 declares an output limit of 131072, not its whole window: its native_output_limit,
   provider_output_limit.uncapped_value and run hashes changed.
+- The context-policy items take the names of their configuration keys, and each retention is two
+  counts: every context_policy record has screenshots_kept, screenshot_fold_block, turns_kept and
+  turn_archive_block for visuals and turns, execution_feedback for feedback,
+  archive_over_window for pressure_archive and tool_call_history for tool_call_replay, with the
+  same values, so every run hash changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the

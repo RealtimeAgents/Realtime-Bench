@@ -291,7 +291,7 @@ class RealtimeRuntime:
         while True:
             canonical = request_builder(history.turns + tuple(incoming), history.ledger_block())
             request = replace(request, canonical=canonical)
-            if self.session is not None or not self.policy.pressure_archive:
+            if self.session is not None or not self.policy.archive_over_window:
                 break
             estimate = await self.driver.request_context_status(request)
             if estimate is None:
@@ -619,24 +619,27 @@ class RealtimeRuntime:
         """The policy archive and screenshot fold applied before this turn's request."""
         self._compaction_items = []
         if retention.archived:
-            self._compaction_items.append("turns")
+            self._compaction_items.append("turns_kept")
             self._history_changed(
                 "archive",
                 "policy",
-                "turns",
-                policy_values={"keep": self.policy.turns.keep, "block": self.policy.turns.block},
+                "turns_kept",
+                policy_values={
+                    "turns_kept": self.policy.turns_kept,
+                    "turn_archive_block": self.policy.turn_archive_block,
+                },
                 turns=self._turn_refs(retention.archived),
                 ledger=self._ledger_change(retention.archived_actions),
             )
         if retention.folded:
-            self._compaction_items.append("visuals")
+            self._compaction_items.append("screenshots_kept")
             self._history_changed(
                 "visual_fold",
                 "policy",
-                "visuals",
+                "screenshots_kept",
                 policy_values={
-                    "keep": self.policy.visuals.keep,
-                    "block": self.policy.visuals.block,
+                    "screenshots_kept": self.policy.screenshots_kept,
+                    "screenshot_fold_block": self.policy.screenshot_fold_block,
                 },
                 turns=self._turn_refs(retention.folded),
             )
@@ -645,8 +648,8 @@ class RealtimeRuntime:
         self._history_changed(
             "pressure_archive",
             "policy",
-            "pressure_archive",
-            policy_values={"block": self.policy.turns.block},
+            "archive_over_window",
+            policy_values={"turn_archive_block": self.policy.turn_archive_block},
             turns=self._turn_refs(archived),
             ledger=self._ledger_change(archived_actions),
             request_context=status,
@@ -665,8 +668,8 @@ class RealtimeRuntime:
         self._history_changed(
             "ledger_omission",
             "policy",
-            "pressure_archive",
-            policy_values={"block": self.policy.turns.block},
+            "archive_over_window",
+            policy_values={"turn_archive_block": self.policy.turn_archive_block},
             ledger={
                 "archived_actions": self.history.archived,
                 "omitted_actions_before": self.history.omitted - omitted,

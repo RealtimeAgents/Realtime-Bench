@@ -76,7 +76,7 @@ class RealtimeCapabilities:
     roles: tuple[str, ...] = ()
     # The protocol has no roles: blocks are told apart by their position and labels.
     labels_instead_of_roles: bool = False
-    # Item 3: where execution feedback can go (PathPolicy.feedback values).
+    # Item 3: where execution feedback can go (PathPolicy.execution_feedback values).
     feedback_placements: tuple[str, ...] = ()
     # Item 6: whether past reasoning can be sent back, and whether the provider's documentation
     # requires it in multi-turn conversations.
@@ -86,7 +86,7 @@ class RealtimeCapabilities:
     # conversation besides what the client sent: nothing, or a session's own items the client
     # never sees (reasoning, thoughts, audio).
     server_context: Literal["none", "unknown"] = "unknown"
-    # Item 10: the forms past tool calls can be replayed in (PathPolicy.tool_call_replay values).
+    # Item 10: the forms past tool calls can be replayed in (PathPolicy.tool_call_history values).
     tool_call_replay: tuple[str, ...] = ()
     # Not a context-policy item. Choice channel: options per question; the selection flow groups
     # larger candidate sets.

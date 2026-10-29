@@ -7,7 +7,7 @@ Line numbers cite those code paths as they were on 7912231.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 
 import pytest
 
@@ -24,6 +24,7 @@ from realtime_framework.entity.context_policy import (
     PRESETS,
     PROMPT_CHANNELS,
     DecisionHistory,
+    PathPolicy,
     current_context_policy,
 )
 from realtime_framework.entity.model import implements
@@ -42,14 +43,41 @@ def test_one_path_per_registered_api():
     assert all(path.version == POLICY.version for path in POLICY.paths.values())
 
 
+def test_policy_fields():
+    """The items carry the names of their configuration keys; the two retentions are each a
+    count kept and a block."""
+    assert [field.name for field in fields(PathPolicy)] == [
+        "version",
+        "api",
+        "preset",
+        "screenshots_kept",
+        "screenshot_fold_block",
+        "turns_kept",
+        "turn_archive_block",
+        "execution_feedback",
+        "ledger_role",
+        "texts",
+        "reasoning_replay",
+        "verbatim_replay",
+        "archive_over_window",
+        "decision_history",
+        "tool_call_history",
+        "prompts",
+        "observation",
+    ]
+    assert list(POLICY.paths["chat_completions"].to_record()) == [
+        field.name for field in fields(PathPolicy)
+    ]
+
+
 def test_retention_and_texts_are_shared():
     # entity/config.py:35-38; hermetic.py clears the STREAM_* overrides.
     for path in POLICY.paths.values():
-        assert (path.visuals.keep, path.visuals.block) == (
+        assert (path.screenshots_kept, path.screenshot_fold_block) == (
             DEFAULT_ACTIVE_VISUAL_BUDGET,
             DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
         )
-        assert (path.turns.keep, path.turns.block) == (
+        assert (path.turns_kept, path.turn_archive_block) == (
             DEFAULT_DETAILED_HISTORY_TURNS,
             DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE,
         )
@@ -62,7 +90,12 @@ def test_retention_follows_the_environment(monkeypatch):
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_TURNS", "12")
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE", "4")
     path = current_context_policy().paths["chat_completions"]
-    assert (path.visuals.keep, path.visuals.block, path.turns.keep, path.turns.block) == (
+    assert (
+        path.screenshots_kept,
+        path.screenshot_fold_block,
+        path.turns_kept,
+        path.turn_archive_block,
+    ) == (
         8,
         3,
         12,
@@ -76,7 +109,7 @@ def test_feedback_placement(api):
     digest carries its own."""
     caps = capabilities(api)
     expected = "digest" if caps.history_replay == "action_digest" else "separate_message"
-    assert POLICY.paths[api].feedback == expected
+    assert POLICY.paths[api].execution_feedback == expected
 
 
 def test_presets():
@@ -102,7 +135,7 @@ def test_model_preset():
     # The row's own Decision history form wins over JEV's digest. No model YAML can name jev
     # (MODEL_PRESETS); this pins the order for_path applies.
     jev = POLICY.for_path("openai_decisions", {}, "jev")
-    assert (jev.preset, jev.decision_history, jev.feedback, jev.observation) == (
+    assert (jev.preset, jev.decision_history, jev.execution_feedback, jev.observation) == (
         "jev",
         DecisionHistory("turns"),
         "digest",
@@ -127,7 +160,7 @@ def test_replay_and_pressure_sets():
     # Version 5: one pressure-archive rule, which the runtime applies where the API estimates its
     # requests (harnesses/default/context.py _run_turn). That is where version 4 had it on, plus
     # JEV, which estimates its digest instead of dropping history for one rejected option.
-    assert all(path.pressure_archive for path in paths.values())
+    assert all(path.archive_over_window for path in paths.values())
     assert {api for api in APIS if implements(adapter_class(api), "request_context_status")} == {
         "chat_completions",
         "openai_decisions",
@@ -155,8 +188,8 @@ def test_ledger_roles():
 def test_gemini_tool_history_format():
     from realtime_framework.providers.gemini.live import LIVE_OPTIONS, live_options
 
-    assert POLICY.paths["gemini_live"].tool_call_replay == LIVE_OPTIONS["history_format"][0]
-    assert POLICY.for_path("gemini_live", {}, None).tool_call_replay == "native_tools"
+    assert POLICY.paths["gemini_live"].tool_call_history == LIVE_OPTIONS["history_format"][0]
+    assert POLICY.for_path("gemini_live", {}, None).tool_call_history == "native_tools"
     keys = [
         key
         for key in catalog.keys(provider="gemini")
@@ -168,9 +201,9 @@ def test_gemini_tool_history_format():
         resolved = POLICY.for_path(
             config.adapter_type, config.provider_options, config.context_preset
         )
-        assert resolved.tool_call_replay == live_options(config)["history_format"]
+        assert resolved.tool_call_history == live_options(config)["history_format"]
     assert all(
-        path.tool_call_replay is None for api, path in POLICY.paths.items() if api != "gemini_live"
+        path.tool_call_history is None for api, path in POLICY.paths.items() if api != "gemini_live"
     )
 
 

@@ -137,17 +137,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -164,17 +166,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -248,7 +244,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4ebf08faaed69e6684904c48072763e50eb1b1d5d1fbb41a39322fb2a13a3cfd"
+    "hash": "c7e3d38f127368a0dd41d87b651f20effcb1335bcfc4ab851be3b5c647779440"
    },
    "token/None": {
     "config": {
@@ -265,17 +261,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -292,17 +290,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -376,7 +368,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e22bd6027f8120e64f3873771bb9f25d831dc2081ede87264242743e7d37a548"
+    "hash": "9d46000526f9a9e5992454d8352caad4b3fd7651aad9a74c57e22d275ffe9d61"
    },
    "wall/None": {
     "config": {
@@ -393,17 +385,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -420,17 +414,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -504,7 +492,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "79ed629952934907f57427a03765a3362af0bced105eb2b6b7a4e3578f67d491"
+    "hash": "8f4d4734eb3d830861b61c811def3d86f6d5493ddd052068f1e72081cfb5c648"
    }
   },
   "vendor": "anthropic"
@@ -599,17 +587,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -626,17 +616,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -710,7 +694,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "aeb5a68fdcaaec5739fc51913e56615b86511995294b5f146bd475cd69cb7eeb"
+    "hash": "8a44acfcac535f2a6900384bd740209d9228eba2fcfb697a9fb18d252d91484d"
    },
    "token/None": {
     "config": {
@@ -727,17 +711,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -754,17 +740,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -838,7 +818,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8e8a81d190da54974ac3f5e4d84ac9f57eef57a1c45e83ba283fcff7a6e7c313"
+    "hash": "3f5614e5c14713efe8bf2b0e8bab6dd8303e14d9d40f10a9da9cdcbaceb86b1a"
    },
    "wall/None": {
     "config": {
@@ -855,17 +835,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -882,17 +864,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -966,7 +942,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4bfb1cadb0de022da161cdfbc37a21569ceef80c3906884aa4a3b906ff372d72"
+    "hash": "463bb326bd441d0e80b06e76b1a0a1bdc5adb3b85257eaded2be483ae171fc40"
    }
   },
   "vendor": "anthropic"
@@ -1055,17 +1031,19 @@
      },
      "context_policy": {
       "api": "anthropic_messages",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1082,17 +1060,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1164,7 +1136,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4bdef8f093a970c3726841a9497610ee419ed119273e12f017b25aabef3dbfaf"
+    "hash": "a26aaf19cfc8e39393234ac8c088397c1106a7a034d36d67816b79b5979d464e"
    },
    "token/None": {
     "config": {
@@ -1181,17 +1153,19 @@
      },
      "context_policy": {
       "api": "anthropic_messages",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1208,17 +1182,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1290,7 +1258,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1671a318e45fb6e5acb3ba8968ebdb0358b778949b6b891af8295f04027348a3"
+    "hash": "d918a7be8aec2d6be4de3b042d48cd8aef419afa3da074094730b15d68cec2c9"
    },
    "wall/None": {
     "config": {
@@ -1307,17 +1275,19 @@
      },
      "context_policy": {
       "api": "anthropic_messages",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1334,17 +1304,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1416,7 +1380,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ae4fd4e77740c7a3ca7a1607b5e75f59f83a51a58c1fc31fcf4a995460384d64"
+    "hash": "15556909057ec9b91bb5c2190944f18fae080780a8a46fcbae123f8b19d7dd8d"
    }
   },
   "vendor": "anthropic"
@@ -1506,17 +1470,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1533,17 +1499,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1615,7 +1575,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "734a2febac8d0ed37306216a84745dd3868668aa73bf0cb7c6ee1493dfe0eecd"
+    "hash": "dfe926460701eed2fa4803a0a8cf1d43972f942ab24444eab71e759baacc062c"
    },
    "token/None": {
     "config": {
@@ -1632,17 +1592,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1659,17 +1621,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1741,7 +1697,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d5cb42b70f338458d9ff3054f8df89af91d958f1f92e588de528c68dd7a38b97"
+    "hash": "af0bdc990d1ae8648ec8c7833e2e2ee684ced531ffa9cf63ab96d5a31dc4feff"
    },
    "wall/None": {
     "config": {
@@ -1758,17 +1714,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1785,17 +1743,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -1867,7 +1819,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "abf7ad0aa1d1e67aa8229c5a406b77aa3cf4f08f16ec6bf068ef5fe9e0c81b95"
+    "hash": "48d751e621788f21ca2238be10d3818ee860dd2d287383fc7b20f05369a01636"
    }
   },
   "vendor": "deepseek"
@@ -1962,17 +1914,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -1989,17 +1943,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2073,7 +2021,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "845c180a37d5b73d8dea6b379b7e7857b48e70689c0fdc83e588f3781a037203"
+    "hash": "dc63ec8ab50dbdbb8245aa8f7de0596e08fa4ec8f3d2d8d200c4690ba87fc9fd"
    },
    "token/None": {
     "config": {
@@ -2090,17 +2038,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2117,17 +2067,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2201,7 +2145,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0cc512a1cf0e273186fbea17e31ac14cb07cc2ceafef28362ef81838d0bbe5a8"
+    "hash": "7f67364aec7a8551def527b4e5ec3e80930b100ec59795ff0eae16f8f8142e97"
    },
    "wall/None": {
     "config": {
@@ -2218,17 +2162,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2245,17 +2191,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2329,7 +2269,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d1905b76016ea0d4332b3d8468ae1181951b835ebd3fbd72685552477aa50e02"
+    "hash": "b0b58ff45f0852e9676d104c0bf13f18da5f21604b48aa377675623567903f17"
    }
   },
   "vendor": "google"
@@ -2424,17 +2364,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2451,17 +2393,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2530,7 +2466,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8a991bc2c549e950186b31d17a14860e642a8ea16306b5a274443d0a533659d0"
+    "hash": "de21b4241e0b738b10df0e0d7359563ec6ac0199dfcd1e02bbba327375cc8aa4"
    },
    "token/None": {
     "config": {
@@ -2547,17 +2483,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2574,17 +2512,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2653,7 +2585,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "159c5d6d1495c98fe19b0e99129d425c5bab8b7821575f0eba2bb4e756f2fdbc"
+    "hash": "2cdd808a96487ab71746fbfd7b3a433a0adc03c4a44ea1b47c52d43de9683f2f"
    },
    "wall/None": {
     "config": {
@@ -2670,17 +2602,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2697,17 +2631,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2776,7 +2704,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2489c404e364f2ed614635c75187d6bf27a5cea9b65d75cfe34e72f6f0feed17"
+    "hash": "a7b754a022d97744138b737ac33bf923ae380b106e2cea25035f566102de2802"
    }
   },
   "vendor": "google"
@@ -2872,17 +2800,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -2899,17 +2829,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -2978,7 +2902,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "8aee989253341b1d6fc6be5b6076857b2db274206b661cce7962985891ec63dc"
+    "hash": "4e31c702038d6b0e73d87a8536666a6340450eae8b01f1664534848f74a0ac7f"
    },
    "token/None": {
     "config": {
@@ -2995,17 +2919,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3022,17 +2948,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3101,7 +3021,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "274a5e3b0674695649d4993c911ac57b9fae5893640db441dd4d9bbee954c643"
+    "hash": "c888cbd4ee3531a13f6a508fe07022a53bb54940dc485f0e4bf2d4d62a37ff08"
    },
    "wall/None": {
     "config": {
@@ -3118,17 +3038,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3145,17 +3067,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3224,7 +3140,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "64b9b3378fa25fdd1643a998cd42b8442aa8fef5a1d2f3e181523e23f2af0e16"
+    "hash": "cf4755947d2901528cee918a7fba3c716f16e373943386ffb13b9a07fb59ce21"
    }
   },
   "vendor": "google"
@@ -3326,17 +3242,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3353,17 +3271,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3432,7 +3344,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e5933b762d2502040fa36a48dab8de0ecbffd423d2b5f0ff89181760ac7ed8c1"
+    "hash": "1782191525337bbf22cc1425e02774c11f71eeddfee87cb6ac98870d3d4478be"
    },
    "token/None": {
     "config": {
@@ -3449,17 +3361,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3476,17 +3390,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3555,7 +3463,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f87c527b377f5ee8ee691fa869281c7d87d6ab3d929cd0d80a8338903d7cfeb0"
+    "hash": "717aa3a1a83db63e90dc17f405b3e19d64d83c4eb699e12b5a956533d55b200f"
    },
    "wall/None": {
     "config": {
@@ -3572,17 +3480,19 @@
      },
      "context_policy": {
       "api": "gemini_live",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3599,17 +3509,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": "tool_transcript",
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": "tool_transcript",
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3678,7 +3582,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a7eae43195ee114351f4436753f88eccf6aab1bf0bd9f07182ed7a1e9729ebca"
+    "hash": "7d93fb053f498082df2ea9c002e29e8f61d08366c34d494d52bf8cbce5096c95"
    }
   },
   "vendor": "google"
@@ -3768,17 +3672,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3795,17 +3701,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -3877,7 +3777,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a605bb8e7c6f46f0e62fa62ecddc483870cb6003a2d788ad591539ab8a49792b"
+    "hash": "2ba213719ac0e782df524245df25b1b673b5a076e650b018162bc05d5b8bd22f"
    },
    "token/None": {
     "config": {
@@ -3894,17 +3794,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -3921,17 +3823,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4003,7 +3899,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "da1136d00a0d86a589d0844987d900167abe78d08556e990c5d8762a3fc6c548"
+    "hash": "4191bc49cb4f54269f6a4cd50bcde794ede5f00412c9724eeca8bf94d8883e37"
    },
    "wall/None": {
     "config": {
@@ -4020,17 +3916,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4047,17 +3945,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4129,7 +4021,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2c28d26506ac719ce3817099ac9113f2e4a2acb1b1276a50a5309491ff0f0e02"
+    "hash": "c9cf723357e2f4ae651bd871c278aae2419225a8d36246d680c2ad65df675691"
    }
   },
   "vendor": "openai"
@@ -4219,17 +4111,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4246,17 +4140,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4328,7 +4216,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3b50794854f513cef58070815b36e51e18a84c7031cdbd6d18e68a93f13f91a6"
+    "hash": "6451f7b7e80c3ced21d2fad72e79781585dd52021ee8b27edd8fa30360a37a12"
    },
    "token/None": {
     "config": {
@@ -4345,17 +4233,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4372,17 +4262,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4454,7 +4338,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "258f24df82523589ad283d26edaefa40958c7fce454590973d87c555855c1ee2"
+    "hash": "5e3e5cef993e9e2d8d1b05acbea074bc4dd674685935170ccda04f16c9c2378c"
    },
    "wall/None": {
     "config": {
@@ -4471,17 +4355,19 @@
      },
      "context_policy": {
       "api": "openrouter",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4498,17 +4384,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4580,7 +4460,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "016fdb6ebd3f4df0fb4b61f9fdc710d0bacb0e2df793851ffe427d0c80111010"
+    "hash": "a476af265434742827001b112e1c9335487def9b27db8528e882d4b3b02532e4"
    }
   },
   "vendor": "openai"
@@ -4669,19 +4549,21 @@
      },
      "context_policy": {
       "api": "openai_decisions",
+      "archive_over_window": true,
       "decision_history": {
        "form": "turns"
       },
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "observation_json_screenshot",
       "preset": "luna",
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "multimodal_game_decisions",
        "realtime": "multimodal_decisions"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4698,17 +4580,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4771,7 +4647,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c12513ebff98d3fe2aa5d6ee44e964f52341527617c6cf33c3c6662241e509db"
+    "hash": "22318360b03ea98728b26ccda0f9cec315d54c4c98272ceb76fd32ecff6d4253"
    }
   },
   "vendor": "openai"
@@ -4860,17 +4736,19 @@
      },
      "context_policy": {
       "api": "openai_realtime",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -4887,17 +4765,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -4960,7 +4832,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2abd1c311667ec2ca52f2154a3a68bbd7e7430e4dc1aad1274191eb64c376232"
+    "hash": "3b9f4c57ad22324b19b1a101472ba52024fecdd340b536f5079fa258a95a48a7"
    },
    "token/None": {
     "config": {
@@ -4977,17 +4849,19 @@
      },
      "context_policy": {
       "api": "openai_realtime",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5004,17 +4878,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5077,7 +4945,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3a45cdf332a6238ce201392f9ca38e736903d96fcff0b2ed6ad963833967fa4c"
+    "hash": "7fc8416a59563ede2aecb2392be555f45b781abd0a6924cf5ad0a8eb34c97ecc"
    },
    "wall/None": {
     "config": {
@@ -5094,17 +4962,19 @@
      },
      "context_policy": {
       "api": "openai_realtime",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5121,17 +4991,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5194,7 +5058,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7ffd4dd422cac37fa08774aa749f76855f79c2409125e1cbd0a3222eb7d5b17e"
+    "hash": "30c07c28ce6c3f58e896e73f9f19f2d9ea9f001f6eea2590cf78fdf8090af8cf"
    }
   },
   "vendor": "openai"
@@ -5282,19 +5146,21 @@
      },
      "context_policy": {
       "api": "jev_decisions",
+      "archive_over_window": true,
       "decision_history": {
        "form": "action_digest"
       },
-      "feedback": "digest",
+      "execution_feedback": "digest",
       "ledger_role": "input",
       "observation": "observation_json_text",
       "preset": "jev",
-      "pressure_archive": true,
       "prompts": {
        "browser_game": null,
        "realtime": "jev_decisions"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5311,17 +5177,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5384,7 +5244,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "eedfa156b0baf6aa61ea946293d69118626a387edb3f5faae912b00463e4cac1"
+    "hash": "b8739fdac572b870ca341b4054da9efb4a72113851307ed5cf02e0e2a4cc331b"
    }
   },
   "vendor": "typesafe"
@@ -5474,17 +5334,19 @@
      },
      "context_policy": {
       "api": "moonshot",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": "kimi_k3",
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": true,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5501,17 +5363,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5583,7 +5439,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "9a4ddf4d2ad44fafc638050f260768eecbfef030e4cd73c8593227fb66724fd0"
+    "hash": "577a4b5d62e7947e9f05ddb024c699e81b7f63f6fe7f3fc946eec730e977a61f"
    },
    "token/None": {
     "config": {
@@ -5600,17 +5456,19 @@
      },
      "context_policy": {
       "api": "moonshot",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": "kimi_k3",
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": true,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5627,17 +5485,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5709,7 +5561,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ac094efb40fe91393120dfd1346cde299a1be76f5a9908dce95860eb475add06"
+    "hash": "5d2c81eb2df5576ea0a495710108db55ed9766f91fdc9d22b4dc3a30d1d96906"
    },
    "wall/None": {
     "config": {
@@ -5726,17 +5578,19 @@
      },
      "context_policy": {
       "api": "moonshot",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": "kimi_k3",
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": true,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5753,17 +5607,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -5835,7 +5683,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "58043195b61478fddfebf485b7bc2f4e3312dc9b3407a12b9862517a3c0b89b3"
+    "hash": "b800ed56c44abfafe52d943cc0cdf13754f25a9026545bbeacc7d4cc97b5d368"
    }
   },
   "vendor": "moonshot"
@@ -5935,17 +5783,19 @@
      },
      "context_policy": {
       "api": "litellm",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -5962,17 +5812,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -6044,7 +5888,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "5a8762c822f008b85ff84d15283fc821be1468ff39c08b50214c830046aecd06"
+    "hash": "d86663e1ae7d463d8ad0d0d44376af6f59af9b15286fa51d3a15be5e23eac951"
    }
   },
   "vendor": "litellm"
@@ -6146,17 +5990,19 @@
      },
      "context_policy": {
       "api": "chat_completions",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -6173,17 +6019,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -6255,7 +6095,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f24961950e85927eaa391fc844c9e01204a5866eb1b0a32dde9aa05e762ce201"
+    "hash": "0dbf63e2c8aef542161a0973ce1d0f3e08d2ed997ffd72db9b7913704fa2d551"
    }
   },
   "vendor": "compatible"
@@ -6355,17 +6195,19 @@
      },
      "context_policy": {
       "api": "chat_completions",
+      "archive_over_window": true,
       "decision_history": null,
-      "feedback": "separate_message",
+      "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
       "preset": null,
-      "pressure_archive": true,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
       },
       "reasoning_replay": false,
+      "screenshot_fold_block": 10,
+      "screenshots_kept": 20,
       "texts": {
        "folded_visual": "[Earlier screenshot and its interactables were folded from active visual context.]",
        "gemini_queued_tool_response": {
@@ -6382,17 +6224,11 @@
        "luna_action_label": "Chosen action: ",
        "luna_observation_label": "Observation: "
       },
-      "tool_call_replay": null,
-      "turns": {
-       "block": 10,
-       "keep": 50
-      },
+      "tool_call_history": null,
+      "turn_archive_block": 10,
+      "turns_kept": 50,
       "verbatim_replay": false,
-      "version": 6,
-      "visuals": {
-       "block": 10,
-       "keep": 20
-      }
+      "version": 6
      },
      "detailed_history_drop_block_size": 10,
      "detailed_history_turns": 50,
@@ -6464,7 +6300,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1a422bb0dd346234a24c01c2368eb6fe284c4adc167412f6b0312066c2653f1a"
+    "hash": "7a32ce47a2fef75130ba13ce01afeca4a11c2096b97f9de846b9ef076c60fb2c"
    }
   },
   "vendor": "compatible"

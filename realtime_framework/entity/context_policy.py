@@ -108,14 +108,6 @@ GEMINI_QUEUED_TOOL_RESPONSE = {
 
 
 @dataclass(frozen=True)
-class Retention:
-    keep: int  # screenshots: active images; turns: verbatim turns
-    # screenshots: fold block; turns: archive block, also under context pressure, and the block
-    # of archived actions a request that still does not fit leaves out
-    block: int
-
-
-@dataclass(frozen=True)
 class DecisionHistory:
     form: Literal["turns", "action_digest"]
 
@@ -157,11 +149,18 @@ class PathPolicy:
     version: int
     api: str
     preset: str | None  # the PRESETS entry in effect: the model config's, else the row's
-    visuals: Retention  # 1 screenshot retention
-    turns: Retention  # 2 turn retention; archived actions form the ledger
+    # 1 screenshot retention: at screenshots_kept + 1 active screenshots, the oldest
+    # screenshot_fold_block are folded
+    screenshots_kept: int
+    screenshot_fold_block: int
+    # 2 turn retention, the archived actions forming the ledger: at turns_kept + 1 verbatim turns,
+    # the oldest turn_archive_block are archived; the block is also the one archived under context
+    # pressure, and the block of archived actions a request that still does not fit leaves out
+    turns_kept: int
+    turn_archive_block: int
     # 3 execution feedback; under the action digest (item 9) every turn's feedback is in the
     # digest, whatever the value
-    feedback: Literal["separate_message", "digest"]
+    execution_feedback: Literal["separate_message", "digest"]
     # 4 role of the archived-action ledger; an encoder without roles places it by position and
     # header (RealtimeCapabilities.labels_instead_of_roles), and the value is at most a label
     # there (providers/decisions/history.py JEV_ROLES)
@@ -176,11 +175,11 @@ class PathPolicy:
     # for the rest of the episode as archived turns do. On allows it; it acts only where the
     # API's driver estimates its requests (it overrides StatelessEncoder.request_context_status)
     # and the model config has a window
-    pressure_archive: bool
+    archive_over_window: bool
     # 9 Decision history form; the pre-run checks take only the form the API replays
     # (RealtimeCapabilities.history_replay)
     decision_history: DecisionHistory | None
-    tool_call_replay: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
+    tool_call_history: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
     # 11 task category -> InteractionProfile.name; None: no profile for the category. The pre-run
     # checks reject the one such pairing, a text-only choice model on a browser game, from the
     # capabilities (providers/preflight.py check_choice_task), and take only profiles that ask for
@@ -230,13 +229,13 @@ class ContextPolicy:
                 preset=context_preset,
                 **{**STANDARD, **PRESETS[context_preset], **self.own_values[path.api]},
             )
-        if path.tool_call_replay is None:
+        if path.tool_call_history is None:
             return path
         # Gemini Live takes the format from the model YAML's provider_options; a model that sets
         # none keeps the row's.
         return replace(
             path,
-            tool_call_replay=provider_options.get("history_format", path.tool_call_replay),
+            tool_call_history=provider_options.get("history_format", path.tool_call_history),
         )
 
 
@@ -253,13 +252,13 @@ _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"
 # The standard values of the items that come neither from the environment (items 1 and 2) nor
 # from FIXED_TEXTS (item 5).
 STANDARD = {
-    "feedback": "separate_message",
+    "execution_feedback": "separate_message",
     "ledger_role": "input",
     "reasoning_replay": False,
     "verbatim_replay": False,
-    "pressure_archive": True,
+    "archive_over_window": True,
     "decision_history": None,
-    "tool_call_replay": None,
+    "tool_call_history": None,
     "prompts": _TEXT_JSON_PROMPTS,
     "observation": "som_screenshot",
 }
@@ -272,7 +271,7 @@ PRESETS = {
     # JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and
     # the observation JSON without a screenshot.
     "jev": {
-        "feedback": "digest",
+        "execution_feedback": "digest",
         "decision_history": DecisionHistory("action_digest"),
         "observation": "observation_json_text",
     },
@@ -289,8 +288,8 @@ MODEL_PRESETS = ("kimi_k3",)
 def current_context_policy() -> ContextPolicy:
     """The values at CONTEXT_POLICY_VERSION; history windows keep their STREAM_* environment
     overrides."""
-    visuals = Retention(*effective_visual_fold_policy())
-    turns = Retention(*effective_detailed_history_policy())
+    screenshots_kept, screenshot_fold_block = effective_visual_fold_policy()
+    turns_kept, turn_archive_block = effective_detailed_history_policy()
     own_values = {}
 
     def path(api, preset=None, **values) -> PathPolicy:
@@ -299,8 +298,10 @@ def current_context_policy() -> ContextPolicy:
             version=CONTEXT_POLICY_VERSION,
             api=api,
             preset=preset,
-            visuals=visuals,
-            turns=turns,
+            screenshots_kept=screenshots_kept,
+            screenshot_fold_block=screenshot_fold_block,
+            turns_kept=turns_kept,
+            turn_archive_block=turn_archive_block,
             texts=FIXED_TEXTS,
             **{**STANDARD, **(PRESETS[preset] if preset else {}), **values},
         )
@@ -314,7 +315,7 @@ def current_context_policy() -> ContextPolicy:
         path("openai_realtime"),
         path(
             "gemini_live",
-            tool_call_replay="native_tools",
+            tool_call_history="native_tools",
             prompts={"realtime": "function_call", "browser_game": "function_call"},
         ),
         path(

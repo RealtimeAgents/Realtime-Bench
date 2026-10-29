@@ -145,8 +145,8 @@ def _check_agent_trace(run_dir: Path, stub: ChatCompletionsStub, records: list[d
         return [turn["observation_id"] for turn in change["turns"]]
 
     observation_ids = [r["observation"]["observation_id"] for r in records]
-    assert turns(FIRST_FOLD, "visual_fold", "visuals") == observation_ids[:FOLDED]
-    assert turns(FIRST_ARCHIVE, "archive", "turns") == observation_ids[:ARCHIVED]
+    assert turns(FIRST_FOLD, "visual_fold", "screenshots_kept") == observation_ids[:FOLDED]
+    assert turns(FIRST_ARCHIVE, "archive", "turns_kept") == observation_ids[:ARCHIVED]
     first_changes = {
         e["payload"]["scope"]["decision"] for e in events if e["event"] == "HistoryChanged"
     }

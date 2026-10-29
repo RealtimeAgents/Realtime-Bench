@@ -10,7 +10,7 @@ from dataclasses import replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import Retention, current_context_policy
+from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import GenerationBoundary, ProviderHistoryState
 from realtime_framework.entity.model import (
     GenerationHandle,
@@ -141,12 +141,12 @@ def _observation(k: int) -> ProviderObservation:
 
 
 class _Rig:
-    def __init__(self, turns: Retention | None = None, driver=_LiveDriver):
+    def __init__(self, driver=_LiveDriver, **retention):
         clock = SystemClock()
         self.trace = _Trace()
         self.driver = driver(clock, self.trace)
         policy = current_context_policy().for_path("openai_realtime", {}, None)
-        self.policy = policy if turns is None else replace(policy, turns=turns)
+        self.policy = replace(policy, **retention)
         self.execution = ExecutionThread(clock, "runtime-session-test")
         self.runtime = RealtimeRuntime(
             self.driver,
@@ -230,7 +230,7 @@ def test_the_session_reopened_after_an_abort_is_recorded_as_a_recovery_rebuild()
 def test_the_sync_after_an_archive_records_the_turns_it_removed():
     """With one verbatim turn kept, decision 1's request archives decision 0's turn and the
     session is brought to the history without it; that sync's HistoryChanged names the turn."""
-    with _Rig(turns=Retention(keep=1, block=1)) as rig:
+    with _Rig(turns_kept=1, turn_archive_block=1) as rig:
         rig.accept(0)
         rig.trace.events.clear()
         rig.turn(1)
@@ -249,7 +249,7 @@ def test_a_stateless_driver_is_aborted_and_readied_without_a_session():
     generation is under way, and is dirty until the next generation waited for that cleanup. That
     generation opens nothing and sends no observation, and the turn it archives is synchronized
     with nothing: each request carries the whole history."""
-    with _Rig(turns=Retention(keep=1, block=1), driver=_StatelessDriver) as rig:
+    with _Rig(turns_kept=1, turn_archive_block=1, driver=_StatelessDriver) as rig:
         rig.accept(0)
         rig.trace.events.clear()
         rig.runtime.abort()

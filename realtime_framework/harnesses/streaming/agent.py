@@ -309,9 +309,10 @@ class NativeStreamingAgent(VisionAgentBase):
         # the policy's.
         own = "retained_frames" in self.driver.streaming_settings
         self._retained = self.driver.streaming_settings.get(
-            "retained_frames", self._context_policy.visuals.keep
+            "retained_frames", self._context_policy.screenshots_kept
         )
-        self._fold_item = None if own else "visuals"  # the policy item a fold is recorded under
+        # The policy item a fold is recorded under.
+        self._fold_item = None if own else "screenshots_kept"
         self._execution.start()
         with self._lock:
             view = self._view()

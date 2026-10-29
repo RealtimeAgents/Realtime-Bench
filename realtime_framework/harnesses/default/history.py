@@ -183,11 +183,11 @@ class History:
             case Retain():
                 return self._retain(change)
             case ArchiveBlock(wall_ns):
-                archived = tuple(self._turns[: self._policy.turns.block])
+                archived = tuple(self._turns[: self._policy.turn_archive_block])
                 del self._turns[: len(archived)]
                 return archived, self._archive(archived, wall_ns)
             case OmitBlock():
-                count = min(self._policy.turns.block, self.archived - self.omitted)
+                count = min(self._policy.turn_archive_block, self.archived - self.omitted)
                 self.omitted += count
                 return count
             case Accept(decision, turn, record, unattached):
@@ -208,7 +208,7 @@ class History:
                 raise TypeError(f"not a history change: {change!r}")
 
     def _retain(self, change: Retain) -> Retained:
-        window, block_size = self._policy.turns.keep, self._policy.turns.block
+        window, block_size = self._policy.turns_kept, self._policy.turn_archive_block
         archive_count = 0
         while len(self._turns) - archive_count + len(change.incoming) > window:
             removable = len(self._turns) - archive_count
@@ -221,7 +221,9 @@ class History:
         candidates = [*self._turns, *change.incoming]
         previously_folded = {id(turn): turn.visual_folded for turn in candidates}
         records = [turn.retention_record() for turn in candidates]
-        apply_active_visual_budget(records, self._policy.visuals.keep, self._policy.visuals.block)
+        apply_active_visual_budget(
+            records, self._policy.screenshots_kept, self._policy.screenshot_fold_block
+        )
         for turn, record in zip(candidates, records):
             if record.get("visual_folded"):
                 turn.fold_visual()

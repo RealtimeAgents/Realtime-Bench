@@ -574,10 +574,10 @@ def effective_run_config(
     context_policy = current_context_policy().for_path(
         adapter_type, model_config["provider_options"], model_config["context_preset"]
     )
-    visual_budget = context_policy.visuals.keep
-    visual_fold_block_size = context_policy.visuals.block
-    detailed_turns = context_policy.turns.keep
-    detailed_drop_block_size = context_policy.turns.block
+    visual_budget = context_policy.screenshots_kept
+    visual_fold_block_size = context_policy.screenshot_fold_block
+    detailed_turns = context_policy.turns_kept
+    detailed_drop_block_size = context_policy.turn_archive_block
     config = {
         "version": 47,
         "seed": task_seed(seed),

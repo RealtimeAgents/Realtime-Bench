@@ -474,12 +474,12 @@ def policy_check(config, **values):
     [
         (
             "gpt-realtime-2",
-            {"feedback": "digest"},
+            {"execution_feedback": "digest"},
             "The openai_realtime API cannot place execution feedback as digest",
         ),
         (
             "jev-1.13",
-            {"feedback": "separate_message"},
+            {"execution_feedback": "separate_message"},
             "The jev_decisions API cannot place execution feedback as separate_message",
         ),
         (
@@ -529,12 +529,12 @@ def policy_check(config, **values):
         ),
         (
             "claude-opus-5",
-            {"tool_call_replay": "tool_transcript"},
+            {"tool_call_history": "tool_transcript"},
             "The openrouter API cannot replay past tool calls as tool_transcript",
         ),
         (
             "gpt-realtime-2",
-            {"tool_call_replay": "native_tools"},
+            {"tool_call_history": "native_tools"},
             "The openai_realtime API cannot replay past tool calls as native_tools",
         ),
     ],

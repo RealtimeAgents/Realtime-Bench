@@ -232,8 +232,10 @@ def check_context_policy(driver, policy, config) -> None:
     """The context policy's items, held against what the encoder declares it can render."""
     capabilities = driver.capabilities
     api = config.adapter_type
-    if policy.feedback not in capabilities.feedback_placements:
-        raise ValueError(f"The {api} API cannot place execution feedback as {policy.feedback}")
+    if policy.execution_feedback not in capabilities.feedback_placements:
+        raise ValueError(
+            f"The {api} API cannot place execution feedback as {policy.execution_feedback}"
+        )
     if policy.ledger_role not in capabilities.roles and not capabilities.labels_instead_of_roles:
         raise ValueError(f"The {api} API has no {policy.ledger_role} role for the action ledger")
     if capabilities.reasoning_replay == "required" and not policy.reasoning_replay:
@@ -244,7 +246,7 @@ def check_context_policy(driver, policy, config) -> None:
     if capabilities.reasoning_replay == "unsupported" and policy.reasoning_replay:
         raise ValueError(f"The {api} API cannot send past reasoning back")
     if (
-        policy.pressure_archive
+        policy.archive_over_window
         and config.context_window_tokens is not None
         and not implements(driver, "request_context_status")
     ):
@@ -255,11 +257,11 @@ def check_context_policy(driver, policy, config) -> None:
     if form != _HISTORY_FORMS[capabilities.history_replay]:
         raise ValueError(f"The {api} API cannot replay history as {form}")
     if (
-        policy.tool_call_replay is not None
-        and policy.tool_call_replay not in capabilities.tool_call_replay
+        policy.tool_call_history is not None
+        and policy.tool_call_history not in capabilities.tool_call_replay
     ):
         raise ValueError(
-            f"The {api} API cannot replay past tool calls as {policy.tool_call_replay}"
+            f"The {api} API cannot replay past tool calls as {policy.tool_call_history}"
         )
     if (policy.observation == "observation_json_text") != (
         capabilities.observation_modality == "text"

@@ -206,7 +206,7 @@ def test_separate_feedback_stays_where_it_was_accepted():
 
 def test_every_output_and_separate_feedback_stays_past_the_turn_window():
     # More replies than the turn-based window keeps verbatim; none of them is archived.
-    replies = POLICY.turns.keep + POLICY.turns.block + 1
+    replies = POLICY.turns_kept + POLICY.turn_archive_block + 1
     history = History().play("FRB" * replies)
     view = _view(history.blocks)
     texts = [item.block for item in view.items if item.block.kind != "frame"]

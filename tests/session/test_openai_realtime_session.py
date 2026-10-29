@@ -158,7 +158,7 @@ def test_observe_adds_the_newest_frame():
 
 
 # The policy with each action's execution feedback as its own block (context policy item 3).
-SEPARATE = replace(POLICY, feedback="separate_message")
+SEPARATE = replace(POLICY, execution_feedback="separate_message")
 
 
 def fed(k: int, output: str = "", feedback: str = "") -> CanonicalTurn:
