@@ -11,8 +11,9 @@ connection and generation a server message belongs to and whether that generatio
 with it. Nothing in it awaits, so each call is one transition, in the order of the session.
 
 The open connection keeps what the client wrote on it, by key: ``("setup",)``, ``("block",
-<history block id>)`` and ``("tool_response", <call id>)``, each unknown while it is written,
-sent once written, confirmed when the server acknowledges it (only the setup is:
+<history block id>)``, ``("frame_text", <frame block id>)`` (a streamed frame's text, which goes
+with the trigger after its video) and ``("tool_response", <call id>)``, each unknown while it is
+written, sent once written, confirmed when the server acknowledges it (only the setup is:
 setupComplete) and unknown when its write failed. A seed is recorded once the connection
 counts, as sent. When the write of a seed batch failed, the connection never counts: the setup is
 heard as confirmed, the blocks of the batches written before as sent and those of the failed
@@ -110,22 +111,25 @@ class RealtimeInput:
 @dataclass(frozen=True)
 class Push:
     """The newest frame of a streaming history view as native streaming pushes it: on the
-    realtime_input video stream, then its text, outside any activity, so that it starts no reply.
-    Nothing waits between the two."""
+    realtime_input video stream, outside any activity, so that it starts no reply. Its text goes
+    with the next trigger: sent outside an activity once the model has begun its reply, a text is
+    input that interrupts the reply (Gemini 3.1 Flash Live), which a video frame is not."""
 
     inputs: tuple[RealtimeInput, ...]
     observation_id: str | None
     keys: tuple[tuple, ...]  # the delivery key of its frame block
+    text: tuple[str, str]  # the frame block's id and its text
 
 
 @dataclass(frozen=True)
 class Trigger:
     """A reply's start as native streaming sends it: one activity on realtime_input, not a client
     turn_complete. It holds the execution feedback no seed or trigger has handed to the session
-    yet, and the silent audio an activity must hold."""
+    yet, then the text of each frame pushed since the last trigger, in the order pushed, and the
+    silent audio an activity must hold."""
 
     inputs: tuple[RealtimeInput, ...]
-    keys: tuple[tuple, ...]  # the delivery keys of the feedback blocks it carries
+    keys: tuple[tuple, ...]  # the delivery keys of the feedback blocks and frame texts it carries
 
 
 def _frame_prefixes(history: CanonicalRequest) -> dict:
@@ -156,10 +160,11 @@ def _feedback_content(item) -> Content:
 
 
 def _block_of(key: tuple) -> str | None:
-    """The history block a delivery key carries: the setup carries the system block."""
+    """The history block a delivery key carries: the setup carries the system block, a frame's
+    text its frame block."""
     if key == ("setup",):
         return "system"
-    return key[1] if key[0] == "block" else None
+    return key[1] if key[0] in ("block", "frame_text") else None
 
 
 def _unrecorded(state: str, contents: list[tuple], connection: int | None) -> None:
@@ -349,6 +354,10 @@ class SessionCore:
         # seed replays it. A resume keeps it: what a trigger handed after the handle the session
         # resumed from is lost with the server's state, and no trigger hands it again.
         self.carried: dict[str, str] = {}
+        # Streaming: the text of each frame pushed that no seed or trigger has handed to the
+        # session yet, by frame block id, in the order pushed. The next trigger hands them, as it
+        # does the feedback; a seed hands those of the frames it replays, and a resume keeps them.
+        self.frame_texts: dict[str, str] = {}
         # The generation started last on each connection, until its reply ended and its events()
         # are done: the one whose reply takes what is read there until it ended.
         self.replies: dict[int, _Generation] = {}
@@ -397,9 +406,10 @@ class SessionCore:
         Content of its own; an execution feedback of its own is a text Content after the turn's
         tool rounds. In the streaming view (harnesses/streaming/history.py) a reply's tool block
         likewise stands for its output: each other output that said anything and each execution
-        feedback is a text Content, in the view's order, and a frame is its own text, as a push
-        sends it. That order is not the one the live session got them in: there each feedback
-        came with the trigger after it, after the frames pushed meanwhile.
+        feedback is a text Content, in the view's order, and a frame is its own text with its
+        screenshot. That order is not the one the live session got them in: there each feedback
+        and each frame's text came with the trigger after them, after the frames' videos pushed
+        meanwhile.
         """
         if history is None:
             return [], []
@@ -515,6 +525,8 @@ class SessionCore:
         self._set([("setup",)], Delivery.CONFIRMED)
         self._set((("block", block_id) for block_id in connect.seeded), Delivery.SENT)
         self.carried.update(connect.carried)
+        for block_id in connect.seeded:
+            self.frame_texts.pop(block_id, None)
         self.renewal_required = False
 
     def closed(self) -> None:
@@ -618,18 +630,26 @@ class SessionCore:
         native streaming pushes it, and record it as being written."""
         frame = next(item.block for item in reversed(history.items) if item.block.kind == "frame")
         push = Push(
-            (RealtimeInput("video", image=frame.image), RealtimeInput("text", text=frame.text)),
+            (RealtimeInput("video", image=frame.image),),
             frame.observation_id,
             (("block", frame.id),),
+            (frame.id, frame.text),
         )
         self.sending(push.keys)
         return push
 
+    def pushed(self, push: Push) -> None:
+        """The push was written: its frame is sent, and its text waits for the next trigger."""
+        self.sent(push.keys)
+        block_id, text = push.text
+        self.frame_texts[block_id] = text
+
     def trigger(self, history: CanonicalRequest) -> Trigger:
         """Plan the activity that starts a streaming session's next reply, with what the session
-        lacks of the history view's execution feedback, and record it as being written. Start
-        the reply's generation (start_generation) before the activity goes out: read as it
-        arrives, the reply's first message would otherwise be an orphan, and its calls lost."""
+        lacks of the history view's execution feedback and the texts of the frames pushed since,
+        and record it as being written. Start the reply's generation (start_generation) before
+        the activity goes out: read as it arrives, the reply's first message would otherwise be
+        an orphan, and its calls lost."""
         lacking = [
             item.block
             for item in history.items
@@ -637,16 +657,20 @@ class SessionCore:
             and self.carried.get(item.block.id) != item.block.text
         ]
         text = "\n".join(block.text for block in lacking)
+        frames = list(self.frame_texts.items())
         trigger = Trigger(
             (
                 RealtimeInput("activity_start"),
                 *((RealtimeInput("text", text=text),) if lacking else ()),
+                *(RealtimeInput("text", text=frame_text) for _, frame_text in frames),
                 RealtimeInput("audio_carrier"),
                 RealtimeInput("activity_end"),
             ),
-            tuple(("block", block.id) for block in lacking),
+            tuple(("block", block.id) for block in lacking)
+            + tuple(("frame_text", block_id) for block_id, _ in frames),
         )
         self.carried.update((block.id, block.text) for block in lacking)
+        self.frame_texts.clear()
         self.sending(trigger.keys)
         return trigger
 
