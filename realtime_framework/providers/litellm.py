@@ -468,6 +468,232 @@ class _AuditedSDKStream:
         await self.stream.close()
 
 
+class RequestEvidence:
+    """One request's evidence, from its send to the end of its events: its wire record, and the
+    usage and route the provider itself reported.
+
+    The pinned LiteLLM rebuilds usage, and answers some refused requests with a reply of its own
+    (complete), so the driver reports usage and route only as this object saw them in the
+    provider's reply: a stream's raw chunks, observed before LiteLLM parses them, or a complete
+    reply's body, from LiteLLM's logger callback, which must back the output count of its
+    normalized usage. The wire record is the HttpCapture of the client that sent the request; the
+    generic API, which has no client to hook, is recorded from the logger callback instead
+    (LoggerCapture).
+    """
+
+    def __init__(self, driver: LiteLLMDriver, kwargs: dict):
+        self.driver = driver
+        self.kwargs = kwargs
+        self.route = driver._backend_route()
+        if driver.protocol.client is None:
+            self.capture, self.logger = None, LoggerCapture(driver)
+        else:
+            # Kept as the request goes: an abort can replace the client, and its capture, before
+            # the request or its events end.
+            self.capture, self.logger = driver._http_capture, None
+        self.interrupted = False
+        # A stream: LiteLLM's response, and what its raw chunks reported.
+        self.response = None
+        self.raw_usage = None
+        self.usage_revision = 0
+        self.taken_revision = 0
+        self.raw_route = None
+        self.anthropic_start = None
+        self.anthropic_delta = None
+        self.anthropic_message = None
+        self.stop_reason = None
+        # A complete reply: its message, the provider's body and the usage that body backs.
+        self.reply = None
+        self.raw_reply = {}
+        self.reply_usage = None
+
+    async def stream(self) -> None:
+        """Send the request for a stream whose raw chunks are observed before LiteLLM parses
+        them. A hooked client records with the request the past reasonings it carries back
+        (capture.py replayed_reasoning)."""
+        with replayed_reasoning(self.kwargs["messages"]):
+            response = await self.driver._sdk.acompletion(**self.kwargs)
+        try:
+            # Fail closed if LiteLLM no longer exposes the provider payload before parsing it.
+            raw_stream = response.completion_stream
+            parse = getattr(raw_stream, "chunk_parser", None)
+            if callable(parse):
+
+                def parse_observed(chunk):
+                    self._observe(chunk)
+                    return parse(chunk)
+
+                raw_stream.chunk_parser = parse_observed
+            else:
+                from openai import AsyncStream as AsyncStream
+
+                if not isinstance(raw_stream, AsyncStream):
+                    raise RuntimeError("LiteLLM stream has no auditable provider SSE parser")
+                response.completion_stream = _AuditedSDKStream(raw_stream, self._observe)
+        except BaseException:
+            await response.aclose()
+            raise
+        with self.driver._lock:
+            self.driver._responses[id(response)] = response
+        self.response = response
+
+    def _observe(self, chunk: dict) -> None:
+        if self.driver.protocol.usage == "anthropic":
+            kind = chunk.get("type")
+            if kind == "message_start":
+                message = chunk.get("message") or {}
+                self.anthropic_start = copy.deepcopy(message.get("usage"))
+                self.anthropic_message = {"model": message.get("model"), "id": message.get("id")}
+            elif kind == "message_delta":
+                self.anthropic_delta = copy.deepcopy(chunk.get("usage"))
+                self.stop_reason = (chunk.get("delta") or {}).get("stop_reason")
+            return
+        raw_usage = chunk.get("usage")
+        if raw_usage is None:
+            choices = chunk.get("choices") or []
+            raw_usage = choices[0].get("usage") if choices else None
+        if isinstance(raw_usage, dict):
+            self.raw_usage = copy.deepcopy(raw_usage)
+            self.usage_revision += 1
+        route = chunk.get("openrouter_metadata")
+        if route is not None:
+            self.raw_route = copy.deepcopy(route)
+
+    def check_route(self) -> None:
+        """Keep the route OpenRouter reported for a pinned request, and refuse a provider other
+        than the pinned one."""
+        if not self.driver.deployment.pin_route:
+            return
+        route = self._route_metadata(self.raw_route)
+        if route is None:
+            return
+        self.route["response_metadata"] = route
+        selected = route.get("selected_provider")
+        expected = self.driver.config.upstream_provider
+        if selected is not None and expected is not None and self._provider_slug(selected) != expected:
+            raise RuntimeError(f"OpenRouter selected {selected!r}; expected pinned {expected!r}")
+
+    @staticmethod
+    def _provider_slug(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
+
+    @staticmethod
+    def _route_metadata(value) -> dict | None:
+        value = object_dict(value)
+        if value is None:
+            return None
+        endpoints = value.get("endpoints") or {}
+        available = endpoints.get("available") or []
+        selected = [endpoint for endpoint in available if endpoint.get("selected")]
+        endpoint = selected[0] if len(selected) == 1 else None
+        return {
+            "requested_model": value.get("requested"),
+            "strategy": value.get("strategy"),
+            "attempt": value.get("attempt"),
+            "selected_provider": endpoint.get("provider") if endpoint else None,
+            "selected_model": endpoint.get("model") if endpoint else None,
+            "selected_endpoint_count": len(selected),
+        }
+
+    def revised_usage(self) -> dict | None:
+        """The stream's usage as its raw chunks last reported it, normalized, when one revised it
+        since the last call; never LiteLLM's reconstructed or estimated usage. An Anthropic
+        stream has none here (terminal_usage)."""
+        if self.usage_revision == self.taken_revision:
+            return None
+        self.taken_revision = self.usage_revision
+        return self.driver._normalize_usage(self.raw_usage)
+
+    def terminal_usage(self) -> dict | None:
+        """An Anthropic stream's usage. Only the terminal message_delta carries authoritative
+        output usage; an interrupted stream has no complete count and reports none."""
+        if self.anthropic_delta is None:
+            return None
+        return anthropic_usage(
+            self.anthropic_start, self.anthropic_delta, stop_reason=self.stop_reason
+        )
+
+    def boundary_metadata(self) -> dict:
+        if self.driver.protocol.usage != "anthropic":
+            return {"backend_route": self.route}
+        message = self.anthropic_message or {}
+        self.route.update(response_model=message.get("model"), response_id=message.get("id"))
+        return {"stop_reason": self.stop_reason, "backend_route": dict(self.route)}
+
+    async def interrupt(self) -> None:
+        self.interrupted = True
+        if self.response is not None:
+            await self.response.aclose()
+            with self.driver._lock:
+                self.driver._responses.pop(id(self.response), None)
+
+    async def finish(self) -> None:
+        """Close the stream, and record the responses still open on its client's capture."""
+        try:
+            await self.driver.clock.wait_for(self.response.aclose(), 1.0)
+        finally:
+            with self.driver._lock:
+                self.driver._responses.pop(id(self.response), None)
+            self.capture.record_open()
+
+    async def complete(self) -> None:
+        """Send the request for a complete reply, keeping its message and the usage the
+        provider's body backs."""
+        kwargs = self.kwargs
+        kwargs["logger_fn"] = self._logged
+        with response_statuses() as statuses, replayed_reasoning(kwargs["messages"]):
+            response = await self.driver._sdk.acompletion(**kwargs)
+        if not response.choices:
+            raise RuntimeError("LiteLLM returned no response choices")
+        self.reply = response.choices[0].message.model_dump(exclude_none=True)
+        # LiteLLM answers a 400 saying the output limit was reached with an empty completion of
+        # its own, whose prompt count it estimated (llms/openai/common_utils.py
+        # build_output_token_limit_response): a reply the provider refused reported no usage. Only
+        # a hooked client sees the status; the generic API takes the estimate.
+        refused = any(status >= 400 for status in statuses)
+        self.reply_usage = None if refused else self._reported_usage(response)
+
+    def _logged(self, details: dict) -> None:
+        if self.logger is not None:
+            self.logger(details)
+        if details.get("log_event_type") != "post_api_call":
+            return
+        value = details.get("original_response")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                return
+        if isinstance(value, dict) and ("usage" in value or "usageMetadata" in value):
+            # Do not retain callback credentials, request headers, or prompt logging fields.
+            self.raw_reply.update(copy.deepcopy(value))
+
+    def _reported_usage(self, response):
+        """Accept normalized counters only when backed by a raw provider output count."""
+        raw = self.raw_reply
+        raw_usage = raw.get("usage") or raw.get("usageMetadata") or {}
+        output = next(
+            (
+                raw_usage[k]
+                for k in ("completion_tokens", "output_tokens")
+                if type(raw_usage.get(k)) is int
+            ),
+            None,
+        )
+        if output is None and type(raw_usage.get("candidatesTokenCount")) is int:
+            output = raw_usage["candidatesTokenCount"] + (raw_usage.get("thoughtsTokenCount") or 0)
+        normalized = getattr(response, "usage", None)
+        if normalized is None or output is None:
+            return None
+        usage = normalized.model_dump(exclude_none=True)
+        if usage.get("completion_tokens") != output:
+            raise RuntimeError("LiteLLM output usage disagrees with the provider response")
+        usage.pop("cost", None)
+        if type(raw_usage.get("cost")) in (int, float):
+            usage["cost"] = raw_usage["cost"]
+        return usage
+
+
 # Driver
 class LiteLLMDriver(StatelessEncoder):
     """Stateless HTTP driver: canonical history is rendered into every request.
@@ -498,6 +724,7 @@ class LiteLLMDriver(StatelessEncoder):
         self._sdk = self._load_sdk()
         self.api_key = self._resolve_key()
         self._http = None
+        # Streams still open, which close() ends; each RequestEvidence adds and removes its own.
         self._responses: dict[int, object] = {}
         self._lock = threading.Lock()
         self._session_id = "rtb-" + uuid.uuid4().hex
@@ -659,147 +886,40 @@ class LiteLLMDriver(StatelessEncoder):
     # ---- generation ------------------------------------------------------------------------
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
-        if not self._stream_enabled():
-            return await self._start_complete_response(request)
         await asyncio.to_thread(pace_request, self)
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
-        # An abort can replace the client, and its capture, before the request or these events end.
-        capture = self._http_capture
-        with replayed_reasoning(kwargs["messages"]):
-            response = await self._sdk.acompletion(**kwargs)
-        audit = {
-            "usage": None,
-            "usage_revision": 0,
-            "route": None,
-            "anthropic_start": None,
-            "anthropic_delta": None,
-            "stop_reason": None,
-            "message": None,
-        }
-        try:
-            # Fail closed if LiteLLM no longer exposes the provider payload before parsing it.
-            raw_stream = response.completion_stream
-            parse = getattr(raw_stream, "chunk_parser", None)
-            if callable(parse):
-
-                def parse_with_audit(chunk):
-                    self._observe_raw(audit, chunk)
-                    return parse(chunk)
-
-                raw_stream.chunk_parser = parse_with_audit
-            else:
-                from openai import AsyncStream as AsyncStream
-
-                if not isinstance(raw_stream, AsyncStream):
-                    raise RuntimeError("LiteLLM stream has no auditable provider SSE parser")
-                response.completion_stream = _AuditedSDKStream(
-                    raw_stream, lambda chunk: self._observe_raw(audit, chunk)
-                )
-        except BaseException:
-            await response.aclose()
-            raise
-        with self._lock:
-            self._responses[id(response)] = response
-        return GenerationHandle(
-            request.generation_id,
-            opaque=response,
-            metadata={
-                "response": response,
-                "raw_audit": audit,
-                "backend_route": self._backend_route(),
-                "http_capture": capture,
-            },
-        )
-
-    def _observe_raw(self, audit: dict, chunk: dict) -> None:
-        if self.protocol.usage == "anthropic":
-            kind = chunk.get("type")
-            if kind == "message_start":
-                message = chunk.get("message") or {}
-                audit["anthropic_start"] = copy.deepcopy(message.get("usage"))
-                audit["message"] = {"model": message.get("model"), "id": message.get("id")}
-            elif kind == "message_delta":
-                audit["anthropic_delta"] = copy.deepcopy(chunk.get("usage"))
-                audit["stop_reason"] = (chunk.get("delta") or {}).get("stop_reason")
-            return
-        raw_usage = chunk.get("usage")
-        if raw_usage is None:
-            choices = chunk.get("choices") or []
-            raw_usage = choices[0].get("usage") if choices else None
-        if isinstance(raw_usage, dict):
-            audit["usage"] = copy.deepcopy(raw_usage)
-            audit["usage_revision"] += 1
-        route = chunk.get("openrouter_metadata")
-        if route is not None:
-            audit["route"] = copy.deepcopy(route)
-
-    @staticmethod
-    def _provider_slug(value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")
-
-    @staticmethod
-    def _route_metadata(value) -> dict | None:
-        value = object_dict(value)
-        if value is None:
-            return None
-        endpoints = value.get("endpoints") or {}
-        available = endpoints.get("available") or []
-        selected = [endpoint for endpoint in available if endpoint.get("selected")]
-        endpoint = selected[0] if len(selected) == 1 else None
-        return {
-            "requested_model": value.get("requested"),
-            "strategy": value.get("strategy"),
-            "attempt": value.get("attempt"),
-            "selected_provider": endpoint.get("provider") if endpoint else None,
-            "selected_model": endpoint.get("model") if endpoint else None,
-            "selected_endpoint_count": len(selected),
-        }
-
-    def _check_route(self, generation, audit) -> None:
-        route = self._route_metadata(audit["route"])
-        if route is None:
-            return
-        generation.metadata["backend_route"]["response_metadata"] = route
-        selected = route.get("selected_provider")
-        expected = self.config.upstream_provider
-        if selected is not None and expected is not None and self._provider_slug(selected) != expected:
-            raise RuntimeError(f"OpenRouter selected {selected!r}; expected pinned {expected!r}")
+        evidence = RequestEvidence(self, kwargs)
+        if self._stream_enabled():
+            await evidence.stream()
+        else:
+            await evidence.complete()
+        return GenerationHandle(request.generation_id, opaque=evidence)
 
     async def events(self, generation: GenerationHandle):
-        if generation.metadata.get("complete_response"):
+        evidence = generation.opaque
+        if evidence.response is None:
             async for event in self._complete_response_events(generation):
                 yield event
             return
         sequence = 0
-        response = generation.metadata["response"]
-        audit = generation.metadata["raw_audit"]
-        anthropic = self.protocol.usage == "anthropic"
-        emitted_usage_revision = 0
         calls: dict = {}
         try:
-            events = response.__aiter__()
+            events = evidence.response.__aiter__()
             # The runtime can interrupt while consuming a yielded delta. Check before
             # requesting another SDK event: interrupt() has already closed its socket.
-            while not generation.metadata.get("interrupted", False):
+            while not evidence.interrupted:
                 try:
                     event = await anext(events)
                 except StopAsyncIteration:
                     break
                 raw_type = type(event).__name__
-                if self.deployment.pin_route:
-                    self._check_route(generation, audit)
-                # Never expose LiteLLM's reconstructed/estimated usage as provider usage.
-                if not anthropic and audit["usage_revision"] != emitted_usage_revision:
-                    emitted_usage_revision = audit["usage_revision"]
+                evidence.check_route()
+                usage = evidence.revised_usage()
+                if usage is not None:
                     sequence += 1
-                    yield UsageSnapshot(
-                        generation.generation_id,
-                        sequence,
-                        raw_type,
-                        self._normalize_usage(audit["usage"]),
-                    )
-                    if generation.metadata.get("interrupted", False):
+                    yield UsageSnapshot(generation.generation_id, sequence, raw_type, usage)
+                    if evidence.interrupted:
                         break
                 choices = getattr(event, "choices", None) or []
                 if not choices:
@@ -818,25 +938,17 @@ class LiteLLMDriver(StatelessEncoder):
                     yield TextDelta(
                         generation.generation_id, sequence, raw_type, reasoning, "reasoning"
                     )
-                    if generation.metadata.get("interrupted", False):
+                    if evidence.interrupted:
                         break
                 text = getattr(delta, "content", None) or ""
                 if text:
                     sequence += 1
                     yield TextDelta(generation.generation_id, sequence, raw_type, text, "visible")
-            interrupted = bool(generation.metadata.get("interrupted", False))
-            if (
-                not anthropic
-                and not interrupted
-                and audit["usage_revision"] != emitted_usage_revision
-            ):
+            interrupted = evidence.interrupted
+            usage = None if interrupted else evidence.revised_usage()
+            if usage is not None:
                 sequence += 1
-                yield UsageSnapshot(
-                    generation.generation_id,
-                    sequence,
-                    "usage",
-                    self._normalize_usage(audit["usage"]),
-                )
+                yield UsageSnapshot(generation.generation_id, sequence, "usage", usage)
             if calls and not interrupted:
                 # No tools were supplied: preserve unexpected tool output for protocol validation.
                 sequence += 1
@@ -847,26 +959,11 @@ class LiteLLMDriver(StatelessEncoder):
                     "\n" + json.dumps({"tool_calls": [{"function": v} for v in calls.values()]}),
                     "visible",
                 )
-            metadata = {"backend_route": generation.metadata.get("backend_route")}
-            if anthropic:
-                route = generation.metadata["backend_route"]
-                route["response_model"] = (audit["message"] or {}).get("model")
-                route["response_id"] = (audit["message"] or {}).get("id")
-                metadata = {"stop_reason": audit["stop_reason"], "backend_route": dict(route)}
-                if audit["anthropic_delta"] is not None:
-                    # Only the terminal message_delta carries authoritative output usage. An
-                    # interrupted stream has no complete count and reports none.
-                    sequence += 1
-                    yield UsageSnapshot(
-                        generation.generation_id,
-                        sequence,
-                        "message_delta",
-                        anthropic_usage(
-                            audit["anthropic_start"],
-                            audit["anthropic_delta"],
-                            stop_reason=audit["stop_reason"],
-                        ),
-                    )
+            metadata = evidence.boundary_metadata()
+            usage = evidence.terminal_usage()
+            if usage is not None:
+                sequence += 1
+                yield UsageSnapshot(generation.generation_id, sequence, "message_delta", usage)
             sequence += 1
             yield GenerationBoundary(
                 generation.generation_id,
@@ -877,12 +974,7 @@ class LiteLLMDriver(StatelessEncoder):
                 metadata,
             )
         finally:
-            try:
-                await self.clock.wait_for(response.aclose(), 1.0)
-            finally:
-                with self._lock:
-                    self._responses.pop(id(response), None)
-                generation.metadata["http_capture"].record_open()
+            await evidence.finish()
 
     @staticmethod
     def _delta_reasoning(delta) -> str:
@@ -911,76 +1003,10 @@ class LiteLLMDriver(StatelessEncoder):
 
     # ---- complete responses ----------------------------------------------------------------
 
-    async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        await asyncio.to_thread(pace_request, self)
-        raw = {}
-        # Only the generic API has no hooked HTTP client; the others are recorded on the wire.
-        logged = LoggerCapture(self) if self.protocol.client is None else None
-
-        def observe(details):
-            if logged is not None:
-                logged(details)
-            if details.get("log_event_type") != "post_api_call":
-                return
-            value = details.get("original_response")
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except (ValueError, TypeError):
-                    return
-            if isinstance(value, dict) and ("usage" in value or "usageMetadata" in value):
-                # Do not retain callback credentials, request headers, or prompt logging fields.
-                raw.update(copy.deepcopy(value))
-
-        kwargs = self._request_kwargs(request)
-        kwargs.update(self._transport_kwargs())
-        kwargs["logger_fn"] = observe
-        with response_statuses() as statuses, replayed_reasoning(kwargs["messages"]):
-            response = await self._sdk.acompletion(**kwargs)
-        if not response.choices:
-            raise RuntimeError("LiteLLM returned no response choices")
-        message = response.choices[0].message.model_dump(exclude_none=True)
-        # LiteLLM answers a 400 saying the output limit was reached with an empty completion of
-        # its own, whose prompt count it estimated (llms/openai/common_utils.py
-        # build_output_token_limit_response): a reply the provider refused reported no usage. Only
-        # a hooked client sees the status; the generic API takes the estimate.
-        refused = any(status >= 400 for status in statuses)
-        metadata = {
-            "complete_response": True,
-            "usage": None if refused else self._reported_usage(raw, response),
-            "message": message,
-            "backend_route": self._backend_route(),
-        }
-        return GenerationHandle(request.generation_id, opaque=response, metadata=metadata)
-
-    @staticmethod
-    def _reported_usage(raw, response):
-        """Accept normalized counters only when backed by a raw provider output count."""
-        raw_usage = raw.get("usage") or raw.get("usageMetadata") or {}
-        output = next(
-            (
-                raw_usage[k]
-                for k in ("completion_tokens", "output_tokens")
-                if type(raw_usage.get(k)) is int
-            ),
-            None,
-        )
-        if output is None and type(raw_usage.get("candidatesTokenCount")) is int:
-            output = raw_usage["candidatesTokenCount"] + (raw_usage.get("thoughtsTokenCount") or 0)
-        normalized = getattr(response, "usage", None)
-        if normalized is None or output is None:
-            return None
-        usage = normalized.model_dump(exclude_none=True)
-        if usage.get("completion_tokens") != output:
-            raise RuntimeError("LiteLLM output usage disagrees with the provider response")
-        usage.pop("cost", None)
-        if type(raw_usage.get("cost")) in (int, float):
-            usage["cost"] = raw_usage["cost"]
-        return usage
-
     async def _complete_response_events(self, generation):
+        evidence = generation.opaque
         sequence = 0
-        if generation.metadata.get("interrupted"):
+        if evidence.interrupted:
             yield GenerationBoundary(
                 generation.generation_id,
                 1,
@@ -989,13 +1015,13 @@ class LiteLLMDriver(StatelessEncoder):
                 ProviderHistoryState.EXACT,
             )
             return
-        usage = generation.metadata["usage"]
+        usage = evidence.reply_usage
         if usage is not None:
             sequence += 1
             yield UsageSnapshot(
                 generation.generation_id, sequence, "litellm.completion", usage
             )
-        message = generation.metadata["message"]
+        message = evidence.reply
         content = message.get("content") or ""
         if isinstance(content, list):
             content = "\n".join(
@@ -1021,18 +1047,13 @@ class LiteLLMDriver(StatelessEncoder):
             "litellm.completion",
             "turn_complete",
             ProviderHistoryState.EXACT,
-            {"backend_route": generation.metadata["backend_route"]},
+            evidence.boundary_metadata(),
         )
 
     # ---- interruption and cleanup ----------------------------------------------------------
 
     async def interrupt(self, generation: GenerationHandle) -> None:
-        generation.metadata["interrupted"] = True
-        response = generation.metadata.get("response")
-        if response is not None:
-            await response.aclose()
-            with self._lock:
-                self._responses.pop(id(response), None)
+        await generation.opaque.interrupt()
 
     async def close(self) -> None:
         with self._lock:
