@@ -989,7 +989,7 @@ class GuestEnvironment:
         """
         modifier = action.parameters.get("modifier")
         if modifier:
-            identities = [self._key_identity(part.strip()) for part in str(modifier).split("+")]
+            identities = [self._key_identity(part.strip()) for part in modifier.split("+")]
         else:
             try:
                 parts, _ = self._key_chord(action)
