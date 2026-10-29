@@ -112,6 +112,7 @@ from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.providers.preflight import UnsupportedTokenBudget
 from realtime_framework.providers.preflight import check_episode
 from realtime_framework.providers.preflight import check_token_budget
@@ -850,7 +851,12 @@ def main():
                     else "runner"
                 ),
                 "reason": (
-                    "environment_preflight_failed" if environment_invalid else "run_exception"
+                    "environment_preflight_failed"
+                    if environment_invalid
+                    # A live session's connect at initialize(), as its driver classified it.
+                    else sys.exc_info()[1].failure.invalid_reason
+                    if isinstance(sys.exc_info()[1], TransportFailureError)
+                    else "run_exception"
                 ),
                 "detail": error,
             }

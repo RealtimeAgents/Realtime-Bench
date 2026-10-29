@@ -52,6 +52,7 @@ from realtime_framework.entity.model import SessionEncoder
 from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
@@ -153,7 +154,19 @@ class RealtimeRuntime:
         if self.session is None:
             self._dirty = False
             return
-        self.execution.run(self.session.connect(ConnectRequest(seed=seed)), timeout=timeout)
+        self.execution.run(self._open(seed), timeout=timeout)
+
+    async def _open(self, seed: SessionSeed) -> None:
+        """Open the episode's first session, as the encoder's connect does, retried or in one
+        attempt (Gemini Live's). One that fails raises its failure as the driver classifies a
+        turn's, which the run is invalid for (runner.py main); a connect the encoder's own
+        retry gave up on raises it so already."""
+        try:
+            await self.session.connect(ConnectRequest(seed=seed))
+        except TransportFailureError:
+            raise
+        except Exception as exc:
+            raise TransportFailureError(self.driver.classify_transport_error(exc), exc, 0) from exc
 
     def _abandoned(self, cancel: threading.Event) -> bool:
         """Whether the generation of this cancel event was aborted, or the runtime closed."""
