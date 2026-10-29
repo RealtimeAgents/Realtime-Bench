@@ -120,6 +120,10 @@ class StreamingKernelAgent(KernelAgent, Protocol):
         """PushFrame: put the frame into the session. Raises when it did not go out; only that
         frame is lost."""
 
+    def end_pushes(self) -> None:
+        """The episode ended, before the end's abort closes the session: a push still out gives
+        up, and one that abort fails is no failed push."""
+
 
 def run_streaming_episode(
     agent: StreamingKernelAgent,
@@ -251,6 +255,8 @@ class _StreamingShell:
             case Commit(outcome=outcome):
                 self._commit(outcome)
             case FreezeSnapshot():
+                # The end's first command: its AbortGeneration follows in this batch.
+                self.agent.end_pushes()
                 self._frozen = self.clocks.operational.event()
                 self.clocks.operational.start_thread(self._freezing, name="snapshot")
             case ReleaseInputs():
@@ -482,14 +488,15 @@ class _StreamingShell:
 
     def _wrap_up(self, failure: str) -> None:
         """The kernel raised (N11): the episode is wrapped up without it, as the turn-based shell
-        does (evaluation/shell.py _Shell._wrap_up). The replies running are given up, the
-        snapshot taken unless FreezeSnapshot took it, the inputs released and the termination
-        written. A failure on the way is only logged."""
+        does (evaluation/shell.py _Shell._wrap_up). The pushes and the replies running are given
+        up, the snapshot taken unless FreezeSnapshot took it, the inputs released and the
+        termination written. A failure on the way is only logged."""
         self._raised(failure)
         # What the environment latched by now came first; a failure during the wrap-up after.
         latched = self.end.latched(self.env)
         first = self.kernel.invalid is None and latched is None
         try:
+            self.agent.end_pushes()
             for generation, done in list(self._replies.items()):
                 if not done.is_set():
                     self._abort(generation)

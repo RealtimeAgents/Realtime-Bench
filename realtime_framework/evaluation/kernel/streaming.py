@@ -545,11 +545,13 @@ class StreamingPolicy:
         kernel.cancel_timer(self._push_watchdog)
         self._push_watchdog = None
         # Counted also once the episode is over: every frame captured goes in or is dropped, but
-        # one that invalidates the run and one in a push still out when the run finishes.
+        # one that invalidates the run and one in a push still out when the run finishes. A push
+        # that fails once the episode ended, as the end's abort closing the session fails it, is
+        # no failed push: the end kept its frame out.
         if event.error is None:
             self.frames_pushed += 1
         else:
-            self._drop(frame.observation_id, "push_failed")
+            self._drop(frame.observation_id, "push_failed" if kernel.ending is None else "ended")
         if self._stopped():
             return
         if event.error is None:
