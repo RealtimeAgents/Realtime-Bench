@@ -274,7 +274,7 @@ ENDPOINT = "http://127.0.0.1:9/v1"
 INLINE = [
     ("remote-vlm", ["--model", "dep-1", "--base-url", ENDPOINT, "--model-revision", "r1"]),
     ("remote-vlm", ["--model", "dep-1", "--base-url", ENDPOINT, "--no-stream",
-                    "--context-preset", "kimi_k3"]),
+                    "--context", "reasoning_replay=true"]),
     ("litellm-vlm", ["--model", "openai/vlm-1", "--base-url", ENDPOINT, "--model-revision", "r2"]),
     ("litellm-vlm", ["--model", "openai/vlm-1"]),
 ]  # fmt: skip
@@ -302,6 +302,7 @@ def test_a_launch_file_carries_the_model_configuration_the_trial_worker_resolved
     key, which no launch file holds and which the driver reads from its variable, and the
     streaming settings as the driver merges them, and so the same run configuration and hash."""
     from realtime_framework.entity.config import ModelConfig, merge_streaming_settings
+    from realtime_framework.entity.context_policy import ContextLayers
     from realtime_framework.evaluation import _trial
     from realtime_framework.evaluation.config import config_fingerprint, run_spec_config
 
@@ -313,10 +314,17 @@ def test_a_launch_file_carries_the_model_configuration_the_trial_worker_resolved
                 patch, tmp_path, *argv, "--task", WEB, "--interaction-mode", interaction_mode
             )
             launch = _trial.read_launch(path)
-            # As the trial worker resolved it, in the environment the runner gets.
+            # As the trial worker resolved it, in the environment the runner gets, with the
+            # settings its command line gave.
             catalog._catalog_entries.cache_clear()
+            run = _trial.context_settings(
+                [argv[index + 1] for index, part in enumerate(argv) if part == "--context"]
+            )
             resolved = catalog.to_model_config(
-                key, fps=launch.spec.model_input_fps, reasoning_effort=launch.reasoning_effort
+                key,
+                context=ContextLayers(run=run),
+                fps=launch.spec.model_input_fps,
+                reasoning_effort=launch.reasoning_effort,
             )
             launched = launch.model_config
             for field in ModelConfig.model_fields:

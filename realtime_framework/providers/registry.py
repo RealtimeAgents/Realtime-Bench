@@ -79,7 +79,7 @@ import yaml
 from functools import lru_cache
 
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.context_policy import layer_error, resolve_context
+from realtime_framework.entity.context_policy import ContextLayers, layer_error, resolve_context
 
 # The removed context_preset, refused wherever it is set.
 CONTEXT_PRESET_REMOVED = (
@@ -725,8 +725,12 @@ def validate_reasoning_effort(key: str, value: str) -> str:
     return value
 
 
-def to_model_config(key: str, **overrides) -> ModelConfig:
+def to_model_config(key: str, *, context: ContextLayers | None = None, **overrides) -> ModelConfig:
     """Build a ModelConfig for a catalog key, layering: entry.defaults < overrides.
+
+    The context settings are resolved once from the defaults file, the experiment file of
+    ``context``, the model's YAML and the command line of ``context``, in that order
+    (resolve_context).
 
     Runtime overrides such as fps win over entry defaults. Provider-default temperature
     and each entry's upstream provider are
@@ -735,6 +739,7 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     (each adapter resolves its own key_env at backend setup).
     """
     e = get(key)
+    context = context or ContextLayers()
     if "temperature" in overrides:
         raise ValueError("temperature must be omitted; all models use the provider default")
     if "temperature_policy" in overrides:
@@ -749,17 +754,9 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     fields["api_key_env"] = e.key_env
     if fields.get("reasoning_effort") == "provider_default":
         fields["reasoning_effort"] = None
-    model_layer = e.context
     if e.adapter_type == "chat_completions":
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
-            # Transitional, until the trial worker takes context settings: its
-            # --context-preset kimi_k3, K3's reasoning replay as the endpoint's own setting.
-            preset = os.environ.get("BENCHMARK_CONTEXT_PRESET")
-            if preset:
-                if preset != "kimi_k3":
-                    raise ValueError("BENCHMARK_CONTEXT_PRESET must be one of ['kimi_k3']")
-                model_layer = {**model_layer, "reasoning_replay": True}
         for field in (
             "context_window_tokens",
             "context_counter",
@@ -783,6 +780,13 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
         adapter_type=e.adapter_type,
         model_name=e.model_name,
         api_base_url=e.api_base_url,
-        context=resolve_context(e.adapter_type, e.model_name, model_layer=model_layer),
+        context=resolve_context(
+            e.adapter_type,
+            e.model_name,
+            experiment=context.experiment,
+            experiment_file=context.experiment_file,
+            model_layer=e.context,
+            run=context.run,
+        ),
         **fields,
     )

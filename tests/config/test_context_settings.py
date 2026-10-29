@@ -5,7 +5,9 @@ values and approved deviations, which come from the package's defaults file alon
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from dataclasses import fields
 from pathlib import Path
 
@@ -16,18 +18,24 @@ from pydantic import ValidationError
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import (
+    CONTEXT_PRESET_OPTION_REMOVED,
     DEFAULTS_FILE,
+    LEGACY_CONTEXT_VARIABLES,
     SETTINGS,
+    ContextLayers,
     Deviation,
+    ExperimentFile,
     Overridden,
     PathPolicy,
     context_defaults,
     load_context_defaults,
     path_policy,
+    read_experiment_file,
     resolve_context,
 )
 from realtime_framework.providers.registry import CONTEXT_PRESET_REMOVED
 
+WEB = "rt_waitlist_fit"
 STANDARD = {
     "screenshots_kept": 20,
     "screenshot_fold_block": 10,
@@ -416,3 +424,301 @@ def test_the_configuration_hashes_take_the_values_alone():
     assert hashes(ModelConfig.model_validate(dump)) == hashes(config)
     changed = hashes(with_context(run={"reasoning_replay": True}))
     assert changed[0] != hashes(config)[0] and changed[1] != hashes(config)[1]
+
+
+# The layers a run adds: an experiment file and the trial worker's command line
+
+
+EVERY = {
+    "screenshots_kept": 8,
+    "screenshot_fold_block": 3,
+    "turns_kept": 12,
+    "turn_archive_block": 4,
+    "execution_feedback": "digest",
+    "observation": "observation_json_text",
+    "reasoning_replay": True,
+    "archive_over_window": False,
+    "tool_call_history": "tool_transcript",
+    "decision_history": "action_digest",
+}
+
+
+def test_each_layer_takes_the_place_of_the_one_below():
+    """The defaults file, then the experiment file, then the model's YAML, then the run's command
+    line; each value records the ones it replaced."""
+    file = ExperimentFile(path="/experiments/a.yaml", sha256="0" * 64)
+    settings = resolve_context(
+        "moonshot",
+        "kimi-k3",
+        experiment={"reasoning_replay": False, "screenshots_kept": 12, "turns_kept": 30},
+        experiment_file=file,
+        model_layer={"reasoning_replay": True},
+        run={"turns_kept": 40},
+    )
+    replay = settings.item("reasoning_replay")
+    assert (replay.value, replay.source, replay.overridden) == (
+        True, "model",
+        (Overridden(source="default", value=False), Overridden(source="experiment", value=False)),
+    )  # fmt: skip
+    turns = settings.item("turns_kept")
+    assert (turns.value, turns.source, turns.overridden) == (
+        40, "run",
+        (Overridden(source="default", value=50), Overridden(source="experiment", value=30)),
+    )  # fmt: skip
+    assert settings.item("screenshots_kept").source == "experiment"
+    assert settings.experiment_file == file
+
+
+@pytest.mark.parametrize("layer", ["experiment", "run"])
+def test_an_experiment_file_and_the_command_line_set_any_setting(layer):
+    """Every setting, those that do not apply to the API among them, which are kept and recorded
+    as not applying."""
+    settings = resolve_context("chat_completions", "m", **{layer: EVERY})
+    assert settings.values() == EVERY
+    assert {item.key for item in settings.items if not item.applies} == {
+        "tool_call_history", "decision_history",
+    }  # fmt: skip
+
+
+def test_the_hashes_ignore_where_the_values_came_from(tmp_path):
+    """An experiment file's path and digest, and what each value replaced, are recorded, not
+    hashed: the same values from two files, from the command line or as the standard ones give
+    the same configuration and runtime-config hashes."""
+    first = tmp_path / "first.yaml"
+    first.write_text("reasoning_replay: false\n")
+    second = tmp_path / "elsewhere" / "second.yaml"
+    second.parent.mkdir()
+    second.write_text("# The standard value, from another file.\nreasoning_replay: false\n")
+    config = catalog.to_model_config("my-model", fps=1.0)
+    configs = [config]
+    for path in (first, second):
+        experiment_file, experiment = read_experiment_file(path)
+        layers = ContextLayers(experiment=experiment, experiment_file=experiment_file)
+        configs.append(catalog.to_model_config("my-model", fps=1.0, context=layers))
+    layers = ContextLayers(run={"reasoning_replay": False})
+    configs.append(catalog.to_model_config("my-model", fps=1.0, context=layers))
+    assert len({config.context for config in configs}) == len(configs)
+    assert len({_hashes(config) for config in configs}) == 1
+
+
+def _hashes(config):
+    from realtime_framework.evaluation.config import (
+        config_fingerprint,
+        configuration_sha256,
+        run_spec_config,
+    )
+    from realtime_framework.evaluation.run_spec import run_spec
+
+    launch = {"model_config": config.model_dump(exclude={"api_key"}), "model_revision": None}
+    spec = run_spec("trial")
+    return configuration_sha256(launch), config_fingerprint(run_spec_config(spec, config))
+
+
+@pytest.fixture
+def environment():
+    """The trial worker writes os.environ (evaluation/_trial.py main)."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+def trial(capsys, *argv) -> dict:
+    """The settings the trial worker resolves (its dry run prints them)."""
+    from realtime_framework.evaluation._trial import main
+
+    assert main(["--task", WEB, "--dry-run", *argv]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def usage_error(capsys, argv, message):
+    """An argparse error: exit status 2 and the message as the last stderr line."""
+    from realtime_framework.evaluation._trial import main
+
+    with pytest.raises(SystemExit) as caught:
+        main(["--task", WEB, "--dry-run", *argv])
+    assert caught.value.code == 2
+    assert capsys.readouterr().err.strip().splitlines()[-1].endswith("error: " + message)
+
+
+def _items(settings) -> dict:
+    return {item["key"]: item for item in settings["model_config"]["context"]["items"]}
+
+
+def test_the_trial_worker_takes_an_experiment_file_and_settings(environment, tmp_path, capsys):
+    path = tmp_path / "experiment.yaml"
+    path.write_text("screenshots_kept: 8\nscreenshot_fold_block: 3\nreasoning_replay: false\n")
+    settings = trial(
+        capsys, "--catalog-model", "my-model", "--context-file", str(path),
+        "--context", "screenshots_kept=12", "--context", "observation=som_screenshot",
+    )  # fmt: skip
+    items = _items(settings)
+    assert items["screenshots_kept"] == {
+        "key": "screenshots_kept", "value": 12, "source": "run",
+        "overridden": [{"source": "default", "value": 20}, {"source": "experiment", "value": 8}],
+        "applies": True, "category": "nonstandard",
+    }  # fmt: skip
+    assert (items["screenshot_fold_block"]["value"], items["screenshot_fold_block"]["source"]) == (
+        3, "experiment",
+    )  # fmt: skip
+    assert items["observation"]["source"] == "run"
+    assert settings["model_config"]["context"]["experiment_file"] == {
+        "path": str(path.resolve()),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["--context", "screenshots_kept"], "--context takes KEY=VALUE, got 'screenshots_kept'"),
+        (
+            ["--context", "screenshots_kept=20.0"],
+            (
+                "The run context settings of YOUR_MODEL: screenshots_kept must be a positive "
+                "integer, got 20.0"
+            ),
+        ),
+        (
+            ["--context", "reasoning_replay=1.0"],
+            (
+                "The run context settings of YOUR_MODEL: reasoning_replay must be true or false, "
+                "got 1.0"
+            ),
+        ),
+        (
+            ["--context", "reasoning=true"],
+            "The run context settings of YOUR_MODEL: has unknown settings ['reasoning']",
+        ),
+    ],
+    ids=["no-value", "float-count", "float-bool", "unknown"],
+)
+def test_the_trial_worker_refuses_a_setting_it_cannot_take(environment, capsys, argv, message):
+    usage_error(capsys, ["--catalog-model", "my-model", *argv], message)
+
+
+def test_the_trial_worker_refuses_an_experiment_file_it_cannot_take(environment, tmp_path, capsys):
+    path = tmp_path / "experiment.yaml"
+    path.write_text("[screenshots_kept]\n")
+    usage_error(
+        capsys,
+        ["--catalog-model", "my-model", "--context-file", str(path)],
+        f"{path.resolve()}: a context file is a mapping of context settings to values",
+    )
+    path.write_text("screenshots_kept: many\n")
+    usage_error(
+        capsys,
+        ["--catalog-model", "my-model", "--context-file", str(path)],
+        "The experiment context settings of YOUR_MODEL: screenshots_kept must be a positive "
+        "integer, got 'many'",
+    )
+
+
+@pytest.mark.parametrize("variable", sorted(LEGACY_CONTEXT_VARIABLES))
+def test_the_settings_context_settings_replaced_are_refused(environment, capsys, variable):
+    """Not ignored: each removed variable stops the trial, naming the setting in its place."""
+    os.environ[variable] = "8"
+    usage_error(
+        capsys,
+        ["--catalog-model", "my-model"],
+        f"Unset {variable}: context settings replaced them ({variable} by "
+        f"{LEGACY_CONTEXT_VARIABLES[variable]}); give them with --context KEY=VALUE or in an "
+        "experiment file (--context-file)",
+    )
+
+
+def test_the_context_preset_option_is_refused(environment, capsys):
+    usage_error(
+        capsys,
+        ["--model", "m", "--base-url", "http://127.0.0.1:9/v1", "--context-preset", "kimi_k3"],
+        CONTEXT_PRESET_OPTION_REMOVED,
+    )
+
+
+def _harbor_command(**options):
+    """The trial worker's command line Harbor runs for these agent options
+    (evaluation/harbor.py ApptainerEnvironment._runner_command)."""
+    import types
+
+    from realtime_framework.evaluation.harbor import ApptainerEnvironment, RealtimeBenchOptions
+
+    options = RealtimeBenchOptions(**options)
+    request = {"model": "my-model", "mode": "default", **options.model_dump()}
+    request["catalog_model"] = "my-model"
+    task = {
+        "suite_id": "public", "task_id": WEB,
+        **{
+            field: request[field]
+            for field in ("fps", "model_input_fps", "interaction_mode", "duration_minutes", "seed")
+        },
+    }  # fmt: skip
+    environment_ = types.SimpleNamespace(python="python", lane=1, task=task)
+    return ApptainerEnvironment._runner_command(environment_, {**request, "task": task})
+
+
+def test_harbor_passes_the_context_settings_to_the_trial_worker(
+    environment, tmp_path, capsys, monkeypatch
+):
+    """--ak context_file=PATH (made absolute) and --ak context='{...}' reach the trial worker as
+    --context-file and --context, the values as given."""
+    from realtime_framework.evaluation import _trial
+
+    path = tmp_path / "experiment.yaml"
+    path.write_text("turns_kept: 30\n")
+    monkeypatch.chdir(tmp_path)
+    command = _harbor_command(
+        context_file="experiment.yaml",
+        context={"screenshots_kept": 12, "reasoning_replay": True, "observation": "som_screenshot"},
+    )
+    assert command[command.index("--context-file") + 1] == str(path.resolve())
+    assert [command[i + 1] for i, part in enumerate(command) if part == "--context"] == [
+        "screenshots_kept=12", "reasoning_replay=true", 'observation="som_screenshot"',
+    ]  # fmt: skip
+    assert _trial.main([*command[3:], "--dry-run"]) == 0
+    items = _items(json.loads(capsys.readouterr().out))
+    assert [items[key]["value"] for key in ("screenshots_kept", "turns_kept", "reasoning_replay")] == [
+        12, 30, True,
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "context, message",
+    [
+        ({"screenshots_kept": 20.0}, "screenshots_kept must be a positive integer, got 20.0"),
+        ({"reasoning_replay": 1.0}, "reasoning_replay must be true or false, got 1.0"),
+        ({"reasoning_replay": "true"}, "reasoning_replay must be true or false, got 'true'"),
+    ],
+    ids=["float-count", "float-bool", "string-bool"],
+)
+def test_harbor_refuses_a_setting_of_another_type(context, message):
+    """Harbor's options keep the values as given, so a value of another type is refused, as the
+    trial worker refuses it, not converted to one that passes."""
+    from realtime_framework.evaluation.harbor import RealtimeBenchOptions
+
+    with pytest.raises(ValidationError) as caught:
+        RealtimeBenchOptions(context=context)
+    assert f"context {message}" in str(caught.value)
+
+
+def test_harbor_finds_an_experiment_file_changed_after_resolution(
+    environment, tmp_path, capsys, monkeypatch
+):
+    """Harbor resolves a trial, then runs it, each time through the trial worker; a value changed
+    in the experiment file in between changes the configuration hash, which verify compares
+    (evaluation/harbor.py resolve, verify). A change that leaves the values alone does not."""
+    from realtime_framework.evaluation import _trial
+    from realtime_framework.evaluation.config import configuration_sha256
+
+    path = tmp_path / "experiment.yaml"
+    path.write_text("turns_kept: 30\n")
+    command = [*_harbor_command(context_file=str(path))[3:], "--dry-run"]
+
+    def resolved():
+        assert _trial.main(command) == 0
+        return configuration_sha256(json.loads(capsys.readouterr().out))
+
+    before = resolved()
+    path.write_text("# A comment changes the file, not its values.\nturns_kept: 30\n")
+    assert resolved() == before
+    path.write_text("turns_kept: 40\n")
+    assert resolved() != before

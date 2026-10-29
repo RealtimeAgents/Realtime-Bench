@@ -96,9 +96,17 @@ reasoning back, as Kimi requires for K3; other moonshot models leave it out and 
 behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) sets it too. An
 endpoint given on the trial worker's command line has no YAML (`python -m
 realtime_framework.evaluation._trial --model DEPLOYMENT_ID --base-url URL`) and sets it with
-`--context-preset kimi_k3`. The defaults file also lists the deviations some models are approved
-to take (`approved_deviations`). A setting the API cannot render is refused before the run, and the
-run records each setting's value, where it came from and whether it is standard.
+`--context reasoning_replay=true`. The defaults file also lists the deviations some models are
+approved to take (`approved_deviations`).
+
+A run may set any setting for every model, from an experiment file (the trial worker's
+`--context-file PATH`, Harbor's `--ak context_file=PATH`: a YAML mapping of settings to values),
+then the model's YAML, then the run's command line (`--context KEY=VALUE`, repeatable, the value
+read as JSON; Harbor's `--ak context='{"KEY": VALUE}'`), each over the one before. A setting that
+does not apply to a model's API is kept and recorded as not applying. The `STREAM_*` retention
+variables and `BENCHMARK_CONTEXT_PRESET` are refused: give the settings that replaced them. A
+setting the API cannot render is refused before the run, and the run records each setting's
+value, where it came from, what it replaced and whether it is standard.
 
 The run records each context-policy value as the policy sets it, and two of them say what the
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs

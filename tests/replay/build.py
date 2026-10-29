@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
@@ -32,7 +31,6 @@ from realtime_framework.sandbox.observation import som
 
 from . import baseline
 from .frames import FrameSource
-from .hermetic import HISTORY_ENV
 
 
 def wait_for_abort(agent, timeout: float) -> None:
@@ -156,13 +154,6 @@ def build_episode(
 
     def checked_create_agent(*args, **kwargs):
         agent = create_agent(*args, **kwargs)
-        # create_agent loads the repository .env (harnesses/registry.py:10 calls
-        # providers/registry.py:15-39), which could set history settings hermetic.py cleared.
-        injected = sorted(name for name in HISTORY_ENV if name in os.environ)
-        if injected:
-            raise RuntimeError(
-                f"the repository .env sets {injected}; replay baselines use the defaults"
-            )
         if before_initialize is not None:
             before_initialize(agent)
         return agent

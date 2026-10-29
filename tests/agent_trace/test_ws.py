@@ -231,8 +231,7 @@ def _realtime_server():
 
 def test_openai_realtime_session(tmp_path, monkeypatch):
     # Fold one screenshot per turn, so turn 1 edits history in place and turn 2's edit fails.
-    monkeypatch.setenv("STREAM_ACTIVE_VISUAL_BUDGET", "1")
-    monkeypatch.setenv("STREAM_VISUAL_FOLD_BLOCK_SIZE", "1")
+    retention = {"screenshots_kept": 1, "screenshot_fold_block": 1}
     monkeypatch.setenv("REPLAY_TRACE_KEY", KEY)
     state, handle = _realtime_server()
     with WsStub(handle, reject=1) as stub:
@@ -242,6 +241,9 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
                 model_name="gpt-realtime-replay",
                 api_base_url=f"http://127.0.0.1:{stub.port}/v1",
                 api_key_env="REPLAY_TRACE_KEY",
+                context=resolve_context(
+                    "openai_realtime", "gpt-realtime-replay", run=retention
+                ),
             )
         )
         original = driver.sync_history

@@ -82,12 +82,13 @@ def test_retention_and_texts_are_shared():
         assert path.texts == FIXED_TEXTS
 
 
-def test_retention_follows_the_environment(monkeypatch):
-    monkeypatch.setenv("STREAM_ACTIVE_VISUAL_BUDGET", "8")
-    monkeypatch.setenv("STREAM_VISUAL_FOLD_BLOCK_SIZE", "3")
-    monkeypatch.setenv("STREAM_DETAILED_HISTORY_TURNS", "12")
-    monkeypatch.setenv("STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE", "4")
-    path = api_policy("chat_completions")
+def test_retention_follows_the_run(monkeypatch):
+    """The run's settings, which the STREAM_* variables gave before."""
+    path = api_policy(
+        "chat_completions",
+        run={"screenshots_kept": 8, "screenshot_fold_block": 3, "turns_kept": 12,
+             "turn_archive_block": 4},
+    )  # fmt: skip
     assert (
         path.screenshots_kept,
         path.screenshot_fold_block,

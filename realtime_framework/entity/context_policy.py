@@ -31,7 +31,7 @@ fingerprint (or an external driver's identity) covers, and so does the model con
 run hash covers.
 """
 
-import os
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -40,7 +40,7 @@ from types import MappingProxyType
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER, FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.records import _jsonable
@@ -241,7 +241,7 @@ def blocks_error(values: Mapping) -> str | None:
     return None
 
 
-def _settings_error(settings) -> str | None:
+def settings_error(settings) -> str | None:
     """What is wrong with a mapping of some settings to values, if anything."""
     if not isinstance(settings, Mapping):
         return "must be a mapping of settings to values"
@@ -261,7 +261,7 @@ def _approved_deviation(name: str, entry) -> ApprovedDeviation:
             f"{name}: each approved deviation has api, model, settings and reason; got {entry!r}"
         )
     where = f"{name}: the approved deviation of {entry['api']} {entry['model']}"
-    error = _settings_error(entry["settings"])
+    error = settings_error(entry["settings"])
     if error or not entry["settings"]:
         raise ValueError(f"{where}: settings {error or 'name no setting'}")
     if not isinstance(entry["reason"], str) or not entry["reason"].strip():
@@ -319,7 +319,7 @@ def context_defaults() -> dict:
 
 
 # The resolved context settings
-Source = Literal["default", "model", "run"]
+Source = Literal["default", "experiment", "model", "run"]
 # A setting's value as its definition takes it (setting_error), never coerced from another type.
 Value = StrictBool | StrictInt | StrictStr
 _FROZEN = ConfigDict(frozen=True, extra="forbid")
@@ -361,17 +361,31 @@ class Deviation(BaseModel):
     category: Literal["approved", "nonstandard"]
 
 
+class ExperimentFile(BaseModel):
+    """The experiment file a run's settings came from (read_experiment_file)."""
+
+    model_config = _FROZEN
+
+    path: str  # absolute
+    sha256: str
+
+
 class ContextSettings(BaseModel):
     """A model configuration's context settings, resolved once (resolve_context): every setting
-    in SETTINGS order, and whether the run is on the standard context, which takes every
-    applicable setting standard or approved for the model. Immutable all the way down, and the
-    same after a dump and a validation, which read it back rather than resolve it again."""
+    in SETTINGS order, the experiment file some came from, and whether the run is on the standard
+    context, which takes every applicable setting standard or approved for the model. Immutable
+    all the way down, and the same after a dump and a validation, which read it back rather than
+    resolve it again."""
 
     model_config = _FROZEN
 
     api: str  # ModelConfig.adapter_type
     model: str  # ModelConfig.model_name, which approved deviations name
     items: tuple[ContextItem, ...]
+    # The record names one only where a run took one.
+    experiment_file: ExperimentFile | None = Field(
+        default=None, exclude_if=lambda file: file is None
+    )
     standard: bool
     deviations: tuple[Deviation, ...]
 
@@ -398,8 +412,9 @@ def _row_name(api: str) -> str:
 
 def layer_error(source: Source, api: str, layer: Mapping) -> str | None:
     """What a layer may not set, if anything: a model's YAML only the settings a model may set
-    (Setting.model), and only those that apply to its API; the command line any setting."""
-    error = _settings_error(layer)
+    (Setting.model), and only those that apply to its API; an experiment file and the command line
+    any setting."""
+    error = settings_error(layer)
     if error:
         return error
     if source == "model":
@@ -413,35 +428,73 @@ def layer_error(source: Source, api: str, layer: Mapping) -> str | None:
     return None
 
 
-# Transitional, until the trial worker's command line takes context settings: the STREAM_*
-# retention variables, as settings of the run.
-_STREAM_RETENTION = {
+# The variables and options context settings replaced, refused with where each went.
+LEGACY_CONTEXT_VARIABLES = {
     "STREAM_ACTIVE_VISUAL_BUDGET": "screenshots_kept",
     "STREAM_VISUAL_FOLD_BLOCK_SIZE": "screenshot_fold_block",
     "STREAM_DETAILED_HISTORY_TURNS": "turns_kept",
     "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE": "turn_archive_block",
+    "BENCHMARK_CONTEXT_PRESET": "reasoning_replay",
 }
+CONTEXT_PRESET_OPTION_REMOVED = (
+    "--context-preset was removed; give the context setting instead "
+    "(kimi_k3 was --context reasoning_replay=true)"
+)
 
 
-def _stream_retention() -> dict:
-    return {
-        key: int(os.environ[variable])
-        for variable, key in _STREAM_RETENTION.items()
-        if variable in os.environ
-    }
+def legacy_context_error(environ: Mapping) -> str | None:
+    """The removed context variables set in ``environ``, with the settings that replaced them."""
+    found = [variable for variable in LEGACY_CONTEXT_VARIABLES if variable in environ]
+    if not found:
+        return None
+    replaced = ", ".join(
+        f"{variable} by {LEGACY_CONTEXT_VARIABLES[variable]}" for variable in found
+    )
+    return (
+        f"Unset {', '.join(found)}: context settings replaced them ({replaced}); give them with "
+        "--context KEY=VALUE or in an experiment file (--context-file)"
+    )
+
+
+def read_experiment_file(path) -> tuple[ExperimentFile, dict]:
+    """The experiment file at ``path``, a YAML mapping of context settings to values, and its
+    settings, which resolve_context checks as an experiment layer."""
+    path = Path(path).resolve()
+    if not path.is_file():
+        raise ValueError(f"The context file is missing: {path}")
+    data = path.read_bytes()
+    settings = yaml.safe_load(data)
+    if not isinstance(settings, dict):
+        raise ValueError(f"{path}: a context file is a mapping of context settings to values")  # noqa: TRY004
+    return ExperimentFile(path=str(path), sha256=hashlib.sha256(data).hexdigest()), settings
+
+
+@dataclass(frozen=True)
+class ContextLayers:
+    """The context settings a run gives beside its model's YAML: an experiment file's and its
+    command line's (the trial worker's --context-file and --context)."""
+
+    experiment: Mapping = MappingProxyType({})
+    experiment_file: ExperimentFile | None = None
+    run: Mapping = MappingProxyType({})
 
 
 def resolve_context(
-    api: str, model: str, *, model_layer: Mapping = MappingProxyType({}), run: Mapping | None = None
+    api: str,
+    model: str,
+    *,
+    experiment: Mapping = MappingProxyType({}),
+    experiment_file: ExperimentFile | None = None,
+    model_layer: Mapping = MappingProxyType({}),
+    run: Mapping = MappingProxyType({}),
 ) -> ContextSettings:
     """The context settings of model ``model`` of API ``api``: the defaults file's standard
-    values, then the model YAML's (``model_layer``), then the run's (``run``), each layer checked
-    for what it may set (layer_error). Each setting applies to the rows SETTINGS names; an
-    external driver takes the plain chat row's. Values that do not apply are kept, and take no
-    part in whether the run is on the standard context."""
-    if run is None:
-        run = _stream_retention()
-    layers = (("model", model_layer), ("run", run))
+    values, then an experiment file's (``experiment``, read from ``experiment_file``), then the
+    model YAML's (``model_layer``), then the run's command line (``run``), each layer checked for
+    what it may set (layer_error). Each setting applies to the rows SETTINGS names; an external
+    driver takes the plain chat row's. Values that do not apply are kept, and take no part in
+    whether the run is on the standard context."""
+    layers = (("experiment", experiment), ("model", model_layer), ("run", run))
     for source, layer in layers:
         error = layer_error(source, api, layer)
         if error:
@@ -495,6 +548,7 @@ def resolve_context(
         api=api,
         model=model,
         items=tuple(items),
+        experiment_file=experiment_file,
         standard=all(item.category != "nonstandard" for item in items),
         deviations=tuple(deviations),
     )

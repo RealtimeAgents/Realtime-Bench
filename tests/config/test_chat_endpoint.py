@@ -145,49 +145,16 @@ def test_yaml_reasoning_replay(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "flags, preset", [((), None), (("--context-preset", "kimi_k3"), "kimi_k3")], ids=["none", "k3"]
+    "flags, replayed",
+    [((), False), (("--context", "reasoning_replay=true"), True)],
+    ids=["none", "k3"],
 )
-def test_trial_context_preset(capsys, flags, preset):
-    """An endpoint given on the command line has no YAML to name a preset in; the trial worker
-    takes it instead, and its inline endpoint (remote-vlm) applies it as a YAML's context would."""
+def test_trial_reasoning_replay(capsys, flags, replayed):
+    """An endpoint given on the command line has no YAML to set its context in; the trial
+    worker's --context sets it instead, for the model configuration the runner runs."""
     settings = trial(capsys, "--model", "m", "--base-url", ENDPOINT, *flags)
-    assert os.environ["BENCHMARK_CONTEXT_PRESET"] == (preset or "")
-    items = {item["key"]: item for item in settings["model_config"]["context"]["items"]}
-    assert items["reasoning_replay"]["value"] is (preset is not None)
-    # What the catalog builds from the environment the trial worker sets.
-    config = catalog.to_model_config("remote-vlm", fps=1.0)
-    assert replays_reasoning(config) is (preset is not None)
+    config = ModelConfig.model_validate(settings["model_config"])
+    item = config.context.item("reasoning_replay")
+    assert (item.value, item.source) == (replayed, "run" if replayed else "default")
+    assert replays_reasoning(config) is replayed
     check(config)
-
-
-def test_inline_endpoint_context_preset_must_be_a_model_preset(monkeypatch):
-    monkeypatch.setenv("BENCHMARK_CONTEXT_PRESET", "jev")
-    with pytest.raises(ValueError) as caught:
-        catalog.to_model_config("remote-vlm", fps=1.0)
-    assert str(caught.value) == "BENCHMARK_CONTEXT_PRESET must be one of ['kimi_k3']"
-
-
-def test_trial_context_preset_choices(capsys):
-    from realtime_framework.evaluation._trial import main
-
-    with pytest.raises(SystemExit) as caught:
-        main(["--task", WEB, "--model", "m", "--base-url", ENDPOINT, "--context-preset", "jev"])
-    assert caught.value.code == 2
-    assert "argument --context-preset: invalid choice: 'jev'" in capsys.readouterr().err
-
-
-def test_trial_context_preset_of_a_catalog_model(capsys):
-    usage_error(
-        capsys,
-        ["--catalog-model", "my-model", "--context-preset", "kimi_k3"],
-        "A catalog model's YAML sets its context; omit --context-preset",
-    )
-
-
-def test_trial_context_preset_of_a_litellm_model(capsys):
-    usage_error(
-        capsys,
-        ["--model", "openai/m", "--context-preset", "kimi_k3"],
-        "--context-preset applies to an endpoint (--model DEPLOYMENT_ID --base-url URL), not a "
-        "LiteLLM model",
-    )
