@@ -52,7 +52,7 @@ def test_wall_hold_is_released_by_a_timer_on_the_clock():
     env = _wall(clock)
     with clock.participant():
         clock.sleep(0.25)
-        assert env.execute(Action.hold_key("arrowleft", 1.5)) == "applied"
+        assert env.execute(Action.hold_key("arrowleft", 1.5)).status == "applied"
         clock.sleep(5.0)
     assert [entry for entry in env.g.commands if "xdotool" in entry[1]] == [
         (0.25, "xdotool keydown -- Left"),

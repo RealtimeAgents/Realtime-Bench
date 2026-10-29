@@ -235,16 +235,16 @@ def test_a_wall_action_does_not_wait_for_a_key_release_in_flight(budgets, action
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        assert env.execute(Action.hold_key("a", 0.2)).status == "applied"
         guest.command_delay = 2 * SLACK
         _until_the_release_is_in_flight(guest)
         started = time.monotonic()
-        status = env.execute(action)
+        execution = env.execute(action)
         elapsed = time.monotonic() - started
-        holds = env._last_execution_result["active_holds"]
+        holds = execution.result["active_holds"]
         guest.command_delay = 0.0
         env.release_inputs()
-    assert status == "applied"
+    assert execution.status == "applied"
     assert getattr(env, "_invalid_run", None) is None
     assert elapsed < BUDGET
     assert len(guest.actions) == 1
@@ -270,12 +270,12 @@ def test_a_wall_key_command_waits_for_a_key_release_in_flight_only_while_its_bud
     with FakeGuest() as guest:
         env = _wall_environment(guest)
         if held is not None:
-            assert env.execute(Action.hold_key(held, MAX_ACTION_DURATION)) == "applied"
-        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+            assert env.execute(Action.hold_key(held, MAX_ACTION_DURATION)).status == "applied"
+        assert env.execute(Action.hold_key("a", 0.2)).status == "applied"
         guest.command_delay = 2 * SLACK
         _until_the_release_is_in_flight(guest)
         started = time.monotonic()
-        status = env.execute(action)
+        status = env.execute(action).status
         elapsed = time.monotonic() - started
         guest.command_delay = 0.0
         env.release_inputs()
@@ -293,20 +293,19 @@ def test_a_wall_shortcut_is_refused_at_once_while_a_key_release_is_in_flight(bud
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 0.2)) == "applied"
+        assert env.execute(Action.hold_key("a", 0.2)).status == "applied"
         guest.command_delay = 2 * SLACK
         _until_the_release_is_in_flight(guest)
         started = time.monotonic()
-        status = env.execute(Action(ActionType.KEY, {"key": "ctrl+l"}))
+        execution = env.execute(Action(ActionType.KEY, {"key": "ctrl+l"}))
         elapsed = time.monotonic() - started
         guest.command_delay = 0.0
         env.release_inputs()
-    assert status == "failed"
+    assert (execution.status, execution.error) == ("failed", None)
     assert elapsed < BUDGET
-    assert env._last_rejected_by_guest is True
     assert getattr(env, "_invalid_run", None) is None
-    assert env._last_exec_error.startswith("browser shortcut 'ctrl+l' is disabled")
-    assert env._last_execution_result["error"] == env._last_exec_error
+    assert execution.rejection.startswith("browser shortcut 'ctrl+l' is disabled")
+    assert execution.result["error"] == execution.rejection
 
 
 def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(budgets):
@@ -316,11 +315,11 @@ def test_a_failed_wall_tap_counts_its_keys_as_held_only_while_its_budget_lasts(b
     budgets(action_s=1.0)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", 0.4)) == "applied"
+        assert env.execute(Action.hold_key("a", 0.4)).status == "applied"
         guest.command_delay = 3.0
         guest.action_delay = 5.0
         started = time.monotonic()
-        status = env.execute(Action(ActionType.KEY, {"key": "b"}))
+        status = env.execute(Action(ActionType.KEY, {"key": "b"})).status
         elapsed = time.monotonic() - started
         recorded = "b" in env._wall_holds
         env.release_inputs()
@@ -336,10 +335,10 @@ def test_a_wall_xdotool_command_gets_what_is_left_of_the_action_s_budget(budgets
     budgets(action_s=BUDGET)
     with FakeGuest() as guest:
         env = _wall_environment(guest)
-        assert env.execute(Action.hold_key("a", MAX_ACTION_DURATION)) == "applied"
+        assert env.execute(Action.hold_key("a", MAX_ACTION_DURATION)).status == "applied"
         guest.command_delay = 5.0
         started = time.monotonic()
-        status = env.execute(Action(ActionType.KEY, {"key": "a"}))
+        status = env.execute(Action(ActionType.KEY, {"key": "a"})).status
         elapsed = time.monotonic() - started
         guest.command_delay = 0.0
         env.release_inputs()
@@ -560,7 +559,7 @@ def test_an_action_and_its_page_barrier_share_one_budget():
     env, _ = _timed(clock, guest, _BarrierTask(clock, 3600.0))
     drag = Action(ActionType.DRAG, {**DRAG_PATH, "duration": MAX_ACTION_DURATION})
     with clock.participant():
-        assert env.execute(drag) == "failed"
+        assert env.execute(drag).status == "failed"
         assert clock.monotonic() == 20.0
     _invalid(env._invalid_run, "action_execution_failed", "drag action", 20.0)
     assert guest.actions == [ActionType.DRAG]
@@ -644,7 +643,7 @@ def test_text_input_has_its_extended_budget():
     clock = FakeClock()
     env, _ = _timed(clock, _ClockGuest(clock, 100.0))
     with clock.participant():
-        assert env.execute(Action(ActionType.TYPE, {"text": "Ada"})) == "applied"
+        assert env.execute(Action(ActionType.TYPE, {"text": "Ada"})).status == "applied"
         assert clock.monotonic() == 100.0
     assert getattr(env, "_invalid_run", None) is None
 
@@ -681,10 +680,10 @@ def test_the_guest_s_refusal_reaches_the_environment_as_a_rejection():
         with pytest.raises(GuestRefused, match=re.escape(refusal)):
             client.execute_action(hyper)
         env = _environment(guest)
-        assert env.execute(hyper) == "failed"
-    assert env._last_rejected_by_guest is True
+        execution = env.execute(hyper)
+    assert (execution.status, execution.error) == ("failed", None)
     assert getattr(env, "_invalid_run", None) is None
-    assert env._last_exec_error == f"400 guest rejected the action: {refusal}"
+    assert execution.rejection == f"400 guest rejected the action: {refusal}"
 
 
 def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refusal():
@@ -702,13 +701,13 @@ def test_a_guest_refusal_that_arrives_after_the_action_s_budget_is_still_a_refus
 
     env, _ = _timed(clock, LateRefusal())
     with clock.participant():
-        assert env.execute(CLICK) == "failed"
+        execution = env.execute(CLICK)
         assert clock.monotonic() == 25.0
-    assert env._last_rejected_by_guest is True
+    assert (execution.status, execution.error) == ("failed", None)
     assert getattr(env, "_invalid_run", None) is None
     # The model is told the guest's words, not that the action took long; the record keeps both.
-    assert env._last_exec_error == "400 guest rejected the action"
-    assert env._last_execution_result["error"] == (
+    assert execution.rejection == "400 guest rejected the action"
+    assert execution.result["error"] == (
         "click action took longer than 20 s (GuestRefused: 400 guest rejected the action)"
     )
 
@@ -742,9 +741,10 @@ def test_a_4xx_from_the_guest_s_command_endpoint_is_an_environment_failure(secon
         clocks=Clocks(clock, clock),
     )
     with clock.participant():
-        assert env.execute(Action.hold_key("a", 1.0)) == "failed"
-    assert env._last_rejected_by_guest is False
+        execution = env.execute(Action.hold_key("a", 1.0))
+    assert (execution.status, execution.rejection) == ("failed", None)
     assert env._invalid_run["reason"] == "action_execution_failed"
+    assert execution.error == env._invalid_run["detail"]
 
 
 def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_10_s():
@@ -754,7 +754,7 @@ def test_an_action_s_guest_request_and_page_barrier_may_together_take_more_than_
     env, _ = _timed(clock, _ClockGuest(clock, 5.3), _BarrierTask(clock, 5.0))
     drag = Action(ActionType.DRAG, {**DRAG_PATH, "duration": 5})
     with clock.participant():
-        assert env.execute(drag) == "applied"
+        assert env.execute(drag).status == "applied"
         assert clock.monotonic() == pytest.approx(10.3)
     assert getattr(env, "_invalid_run", None) is None
 
@@ -798,7 +798,7 @@ def test_a_token_key_event_past_its_budget_fails_the_action(held, action, index,
     _slow_key_event(clock, task, index, 60.0)
     budget = actions.ENVIRONMENT_BUDGET.key_event_s
     with clock.participant():
-        assert env.execute(action) == "failed"
+        assert env.execute(action).status == "failed"
         assert clock.monotonic() == budget
     _invalid(env._invalid_run, "action_execution_failed", operation, budget)
 
@@ -817,7 +817,7 @@ def test_a_tap_s_frame_between_its_press_and_release_keeps_its_own_budgets():
     task.advance_clock = advance_clock
     assert actions.ENVIRONMENT_BUDGET.key_event_s < 15.0
     with clock.participant():
-        assert env.execute(TAP) == "applied"
+        assert env.execute(TAP).status == "applied"
         assert clock.monotonic() == 30.0
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
     assert getattr(env, "_invalid_run", None) is None
@@ -835,7 +835,8 @@ def test_each_key_event_of_a_repeated_tap_has_its_own_budget():
     task.clock_key_event = clock_key_event
     assert actions.ENVIRONMENT_BUDGET.key_event_s < 12.0
     with clock.participant():
-        assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})) == "applied"
+        execution = env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+        assert execution.status == "applied"
         assert clock.monotonic() == 36.0
 
 
@@ -844,12 +845,12 @@ def test_a_lease_s_release_past_its_budget_invalidates_the_run():
     step_clock, release_keys)."""
     clock = FakeClock()
     env, task = _timed(clock)
-    env.execute(Action.hold_key("a", 0.5))
+    held = env.execute(Action.hold_key("a", 0.5)).held_keys
     env.step_clock(0.5)
     _slow_key_event(clock, task, 0, 60.0)
     budget = actions.ENVIRONMENT_BUDGET.key_event_s
     with clock.participant(), pytest.raises(BudgetExceeded):
-        env.release_keys(env.last_held_keys)
+        env.release_keys(held)
     assert clock.monotonic() == budget
     _invalid(env._invalid_run, "clock_key_release_failed", "key release", budget)
 
@@ -863,12 +864,12 @@ def test_a_key_whose_release_failed_stays_held_and_the_cleanup_releases_it_again
     first one did arrive."""
     clock = FakeClock()
     env, task = _timed(clock)
-    env.execute(Action.hold_key("a", 0.5))
+    held = env.execute(Action.hold_key("a", 0.5)).held_keys
     env.step_clock(0.5)
     _slow_key_event(clock, task, 0, 60.0, delivered=delivered)
     with clock.participant():
         with pytest.raises(BudgetExceeded):
-            env.release_keys(env.last_held_keys)
+            env.release_keys(held)
         assert list(env._held_keys) == ["a"]
         env.release_inputs()
     assert [event["key"] for event in task.events if event["event"] == "keyUp"] == keyups
@@ -884,7 +885,7 @@ def test_the_cleanup_releases_the_keys_of_a_hold_whose_press_failed(delivered):
     env, task = _timed(clock)
     _slow_key_event(clock, task, 0, 60.0, delivered=delivered)
     with clock.participant():
-        assert env.execute(Action.hold_key("shift+a", 1.0)) == "failed"
+        assert env.execute(Action.hold_key("shift+a", 1.0)).status == "failed"
         env.release_inputs()
     pressed = [("keyDown", "shift+a")] if delivered else []
     assert [(event["event"], event["key"]) for event in task.events] == [
@@ -925,7 +926,7 @@ def test_the_cleanup_releases_the_keys_of_a_wall_hold_whose_keydown_request_fail
     guest = _DesktopCommands(clock)
     env = _wall_on(clock, guest)
     with clock.participant():
-        assert env.execute(Action.hold_key("a", 1.0)) == "failed"
+        assert env.execute(Action.hold_key("a", 1.0)).status == "failed"
         env.release_inputs()
     assert [command for command in guest.commands if command.startswith("xdotool")] == [
         "xdotool keydown -- a",
@@ -955,7 +956,7 @@ def test_the_cleanup_releases_the_keys_of_a_tap_or_a_0_s_hold_that_failed(action
     else:
         _slow_key_event(clock, task, 0 if failing == "press" else 1, 60.0)
     with clock.participant():
-        assert env.execute(action) == "failed"
+        assert env.execute(action).status == "failed"
         env.release_inputs()
     assert [event["key"] for event in task.events if event["event"] == "keyUp"] == ["space"]
     assert env._held_keys == {}
@@ -967,11 +968,25 @@ def test_the_cleanup_releases_the_key_of_a_repeated_tap_whose_second_press_faile
     env, task = _timed(clock)
     _slow_key_event(clock, task, 2, 60.0, delivered=True)
     with clock.participant():
-        assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})) == "failed"
+        assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})).status == "failed"
         env.release_inputs()
     keys = [(event["event"], event["key"]) for event in task.events if event["event"] != "advance"]
     assert keys == [("keyDown", "space"), ("keyUp", "space")] * 2
     assert env._held_keys == {}
+
+
+def test_a_tap_that_fails_after_its_frame_reports_the_read_it_made():
+    """The kernel counts a tap's reads whether or not the tap failed (kernel/turns.py
+    _executed): the failed execution carries the read after the frame the key was down for."""
+    clock = FakeClock()
+    env, _ = _timed(clock, stop_check=lambda: False)
+    _slow_key_event(clock, env.task, 1, 60.0)
+    with clock.participant():
+        execution = env.execute(TAP)
+    assert (execution.status, execution.rejection) == ("failed", None)
+    assert execution.error.startswith("key release took longer than")
+    assert execution.end_checks == ((False, None, None),)
+    assert execution.result == {"error": execution.error}
 
 
 def test_a_failed_tap_of_a_held_key_leaves_its_lease_as_it_was():
@@ -980,7 +995,7 @@ def test_a_failed_tap_of_a_held_key_leaves_its_lease_as_it_was():
     env.execute(Action.hold_key("space", 5.0))
     _slow_key_event(clock, task, 1, 60.0)
     with clock.participant():
-        assert env.execute(TAP) == "failed"
+        assert env.execute(TAP).status == "failed"
     assert env._held_keys["space"]["expires_at_tick"] == 5.0
 
 
@@ -1031,7 +1046,7 @@ def test_the_cleanup_releases_the_keys_of_a_wall_tap_whose_guest_request_failed(
     guest = _FailingGuest(clock, error)
     env = _wall_on(clock, guest)
     with clock.participant():
-        assert env.execute(action) == "failed"
+        assert env.execute(action).status == "failed"
         env.release_inputs()
     assert [command for command in guest.commands if "keyup" in command] == keyups
 
@@ -1043,8 +1058,8 @@ def test_a_failed_wall_hold_keeps_a_held_key_s_lease_and_skips_keys_xdotool_cann
     guest = _FailingGuest(clock, requests.ReadTimeout("read timed out"))
     env = _wall_on(clock, guest)
     with clock.participant():
-        assert env.execute(Action.hold_key("a", 5.0)) == "applied"
-        assert env.execute(Action.hold_key("a+é", 1.0)) == "failed"
+        assert env.execute(Action.hold_key("a", 5.0)).status == "applied"
+        assert env.execute(Action.hold_key("a+é", 1.0)).status == "failed"
         held = {identity: item["expires_at"] for identity, item in env._wall_holds.items()}
         env.release_inputs()
     assert held == {"a": 1_005.0}
@@ -1095,7 +1110,7 @@ def test_the_cleanup_releases_every_held_mouse_button_when_one_fails():
     guest = FirstReleaseFails()
     env, _ = _timed(FakeClock(), guest)
     for button in ("left", "right", "middle"):
-        assert env.execute(Action(ActionType.MOUSE_DOWN, {"button": button})) == "applied"
+        assert env.execute(Action(ActionType.MOUSE_DOWN, {"button": button})).status == "applied"
     with pytest.raises(ExceptionGroup) as raised:
         env.release_inputs()
     assert [str(error) for error in raised.value.exceptions] == ["the guest is gone"]

@@ -459,11 +459,10 @@ def _run_stream_legacy(
             tau_k = max(float(tau_k), tau_prev)
         tau_prev = tau_k
         clock_target = min(tau_k, max_ticks)
-        setattr(env, "_last_execution_result", None)
-        setattr(env, "_last_coordinate_trace", None)
+        execution = None
 
         def _land_action():
-            nonlocal action, terminal_after_action
+            nonlocal action, terminal_after_action, execution
             if getattr(env, "_invalid_run", None):
                 return "invalid_run"
             if action is None:
@@ -476,21 +475,19 @@ def _run_stream_legacy(
                 return "not_applied_terminal"
             if env.tick_index() >= max_ticks:
                 return "not_applied_tick_limit"
-            status = env.execute(action)
-            if status == "failed":
-                if getattr(env, "_last_rejected_by_guest", False):
+            execution = env.execute(action)
+            if execution.status == "failed":
+                if execution.rejection is not None:
                     # The guest refused a malformed action (HTTP 4xx, e.g. an unsupported key
                     # name). That is the model's action failing, not the environment.
                     return "rejected"
-                _invalidate(
-                    "environment", "action_execution_failed", getattr(env, "_last_exec_error", None)
-                )
+                _invalidate("environment", "action_execution_failed", execution.error)
                 return "invalid_run"
             # An applied action can decide the task immediately. Check while the environment is
             # still frozen at the action timestamp, before any action-to-observation remainder is
             # advanced. Keep the lifecycle status as "applied": the action did execute.
             terminal_after_action = _episode_over()
-            return status
+            return execution.status
 
         # Token time has not advanced physically while the model generated, so advance it to the
         # token-derived action timestamp. Wall time already advanced while generation streamed: the
@@ -526,8 +523,8 @@ def _run_stream_legacy(
             action_clock_position=round(tau_k, 9),
             action_resolved_unix_s=action_resolved_at,
             environment_tick=env.tick_index(),
-            execution_result=getattr(env, "_last_execution_result", None),
-            coordinate_trace=getattr(env, "_last_coordinate_trace", None),
+            execution_result=None if execution is None else execution.result,
+            coordinate_trace=None if execution is None else execution.coordinate_trace,
         )
         _emit(TraceEvent.ACTION_RESOLVED, action_result)
         if action is not None and status in {"applied", "wait", "terminal", "terminal_ignored"}:
@@ -614,7 +611,7 @@ def _run_stream_legacy(
 
         # A guest rejection carries the guest's reason (e.g. the unsupported key name) so the
         # model can correct the action instead of repeating it.
-        _commit(status, getattr(env, "_last_exec_error", "") or "" if status == "rejected" else "")
+        _commit(status, execution.rejection if status == "rejected" else "")
         recorder = getattr(env, "record_lifecycle", None)
         if recorder is not None:
             try:
@@ -635,8 +632,8 @@ def _run_stream_legacy(
                         status=status,
                         terminal_after_action=terminal_after_action,
                         action=action,
-                        execution_result=getattr(env, "_last_execution_result", None),
-                        coordinate_trace=getattr(env, "_last_coordinate_trace", None),
+                        execution_result=None if execution is None else execution.result,
+                        coordinate_trace=None if execution is None else execution.coordinate_trace,
                         clock_advance=(
                             getattr(getattr(env, "task", None), "_last_clock_advance", None)
                             if clock_mode == "token"

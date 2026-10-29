@@ -23,6 +23,7 @@ import types
 from dataclasses import dataclass
 
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.sandbox.actions import Execution
 
 from .baseline import action_record
 from .frames import FrameSource
@@ -91,11 +92,8 @@ class FakeEnvironment:
         self.decision = -1  # run_stream captures once per decision
         self.finalizing = False
         self.executions: list[dict] = []
-        # What the kernel's shell reads and sets (evaluation/shell.py). On the wall clock an
-        # execution leases no token-clock key and makes no end check, and here no key-release
-        # timer runs that could invalidate the run.
-        self.last_held_keys: tuple[str, ...] = ()
-        self.last_end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
+        # What the kernel's shell sets (evaluation/shell.py). Here no key-release timer runs that
+        # could invalidate the run.
         self.on_invalid = None
         # The streaming lanes point a browser task's page capture at a CDP session of its own
         # (evaluation/env_lanes.py). Here the frames come from frames.py, with no page capture, as
@@ -218,37 +216,39 @@ class FakeEnvironment:
             if duration > 0:
                 self.clock.sleep(min(duration, max(0.0, self.deadline - self.clock.time())))
             elapsed = round(max(0.0, (self.clock_position() - started_at) * self.d), 9)
-            self._last_execution_result = {
-                "duration_simulated_seconds": elapsed,
-                "requested_duration_simulated_seconds": duration,
-            }
-            status = "wait"
+            executed = Execution(
+                "wait",
+                {
+                    "duration_simulated_seconds": elapsed,
+                    "requested_duration_simulated_seconds": duration,
+                },
+            )
         elif self.decision in self.rejections:
-            status = self._execution_failed(self.rejections[self.decision], by_guest=True)
+            executed = self._execution_failed(self.rejections[self.decision], by_guest=True)
         elif self.decision in self.failures:
-            status = self._execution_failed(self.failures[self.decision], by_guest=False)
+            executed = self._execution_failed(self.failures[self.decision], by_guest=False)
         else:
-            self._last_execution_result = {"execution": len(self.executions) - 1}
-            status = "applied"
-        execution["status"] = status
-        self.executions[-1]["status"] = status
+            executed = Execution("applied", {"execution": len(self.executions) - 1})
+        execution["status"] = executed.status
+        self.executions[-1]["status"] = executed.status
         self.log("env.execute", **execution)
-        return status
+        return executed
 
-    def _execution_failed(self, message: str, *, by_guest: bool) -> str:
+    def _execution_failed(self, message: str, *, by_guest: bool) -> Execution:
         """As GuestEnvironment's: a guest refusal is the model's action failing; any other fault
         latches the run invalid in the environment itself."""
-        self._last_exec_error = message
-        self._last_rejected_by_guest = by_guest
         if not by_guest and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",
                 "reason": "action_execution_failed",
                 "detail": message,
             }
-        self._last_execution_result = {"error": message}
-        self._last_coordinate_trace = None
-        return "failed"
+        return Execution(
+            "failed",
+            {"error": message},
+            rejection=message if by_guest else None,
+            error=None if by_guest else message,
+        )
 
     def record_lifecycle(self, record: dict) -> None:
         self.log("env.record_lifecycle", record=record)

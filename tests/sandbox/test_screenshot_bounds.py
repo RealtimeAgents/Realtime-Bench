@@ -93,9 +93,9 @@ def _outside(name: str, x, y) -> str:
 )
 def test_a_point_outside_the_screenshot_is_refused_and_sends_nothing(guest, action, refusal):
     env = _environment(guest)
-    assert env.execute(action) == "failed"
-    assert env._last_rejected_by_guest is True
-    assert env._last_exec_error == refusal
+    execution = env.execute(action)
+    assert (execution.status, execution.error) == ("failed", None)
+    assert execution.rejection == refusal
     assert getattr(env, "_invalid_run", None) is None
     assert guest.actions == []
 
@@ -120,7 +120,7 @@ def test_a_point_outside_the_screenshot_is_refused_and_sends_nothing(guest, acti
 )
 def test_a_point_on_the_screenshot_runs(guest, action, desktop):
     env = _environment(guest)
-    assert env.execute(action) == "applied"
+    assert env.execute(action).status == "applied"
     assert guest.actions == [{"action_type": action.action_type.value, "parameters": desktop}]
 
 
@@ -180,5 +180,5 @@ def test_a_mark_at_the_screen_s_edge_resolves_on_the_screenshot_and_runs(
     action, resolution = resolve_action_references(Action(ActionType(name), parameters), marks)
     assert resolution["valid"] is True
     env = _environment(guest)
-    assert env.execute(bind_action(action, geometry)) == "applied"
+    assert env.execute(bind_action(action, geometry)).status == "applied"
     assert guest.actions == [{"action_type": name, "parameters": desktop}]

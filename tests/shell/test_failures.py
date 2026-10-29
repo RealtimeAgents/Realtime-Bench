@@ -801,8 +801,8 @@ def test_a_generation_that_raises_any_exception_comes_back_failed():
 
 def test_the_environment_keeps_its_reason_for_a_tap_whose_advance_failed():
     """GuestEnvironment latches clock_advance_failed when a token key tap cannot advance, and its
-    execute() returns "failed" (sandbox/actions.py). Without the bridge the kernel would read
-    the failure as action_execution_failed."""
+    execute() returns a failed Execution (sandbox/actions.py). Without the bridge the kernel would
+    read the failure as action_execution_failed."""
     latched = {"category": "environment", "reason": "clock_advance_failed", "detail": "no tick"}
     episode = run("token", 3.0, [Reply(0.0, TAP)], World(latches={0: latched}))
     _finalized(episode, 0.0)
@@ -945,7 +945,7 @@ def test_the_reads_a_tap_makes_count_toward_three_failed_reads_in_a_row(tap_chec
 
 
 class _ExecuteRaises(Environment):
-    """Breaks the protocol: execute() raises instead of returning "failed"."""
+    """Breaks the protocol: execute() raises instead of returning a failed Execution."""
 
     def execute(self, action, *, release_at=None):
         raise RuntimeError("execute broke")

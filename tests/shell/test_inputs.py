@@ -11,6 +11,7 @@ import io
 import json
 import pathlib
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -163,9 +164,8 @@ class _LockedResult(Environment):
     """An execution record that cannot be copied."""
 
     def execute(self, action, *, release_at=None):
-        status = super().execute(action, release_at=release_at)
-        self._last_execution_result = {"lock": threading.Lock()}
-        return status
+        execution = super().execute(action, release_at=release_at)
+        return replace(execution, result={"lock": threading.Lock()})
 
 
 def test_an_input_the_log_cannot_hold_leaves_the_episode_to_finish(tmp_path):

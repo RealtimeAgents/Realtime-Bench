@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.evaluation.kernel.streaming import ActionArrived
+from realtime_framework.sandbox.actions import Execution
 
 # The operations that hold the gate alone (evaluation/env_lanes.py).
 ALONE = {"check_end", "snapshot"}
@@ -57,12 +58,6 @@ class FakeEnv:
         self.released_at: float | None = None
         self.on_invalid = None
         self._invalid_run = None
-        self._last_exec_error = None
-        self._last_rejected_by_guest = False
-        self._last_execution_result = None
-        self._last_coordinate_trace = None
-        self.last_held_keys = ()
-        self.last_end_checks = ()
 
     def _operate(self, name: str) -> None:
         if self.running:
@@ -87,11 +82,11 @@ class FakeEnv:
         self.captures += 1
         return Observation(b"", self.clock.time(), 0, {"observation_id": f"obs-{self.captures}"})
 
-    def execute(self, action, *, release_at=None) -> str:
+    def execute(self, action, *, release_at=None) -> Execution:
         self._operate("execute")
-        self._last_coordinate_trace = {"x": action.parameters.get("x")}
-        self._last_execution_result = {"executed": action.action_type.value}
-        return "applied"
+        return Execution(
+            "applied", {"executed": action.action_type.value}, {"x": action.parameters.get("x")}
+        )
 
     def check_end(self) -> tuple[bool, str | None]:
         asked = self.clock.monotonic()

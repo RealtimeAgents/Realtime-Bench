@@ -29,6 +29,7 @@ from realtime_framework.evaluation.kernel.events import (
     FrameCaptured,
     Invalidated,
 )
+from realtime_framework.sandbox.actions import Execution
 from tests.fake_clock import FakeClock
 
 from .fakes import FakeEnv, Inbox
@@ -89,30 +90,61 @@ def test_each_command_is_answered_once_the_gate_lets_it_run():
 
 
 @pytest.mark.parametrize(
-    ("by_guest", "answer"),
+    ("execution", "answer", "trace"),
     [
-        (True, ActionExecuted(3, {"error": "HTTP 400"}, rejection="HTTP 400")),
-        (False, ActionExecuted(3, {"error": "HTTP 400"}, error="HTTP 400")),
+        pytest.param(
+            Execution("applied", {"executed": "tap"}, {"x": 1}, ("a",), ((False, None, None),)),
+            ActionExecuted(3, {"executed": "tap"}, ("a",), end_checks=((False, None, None),)),
+            {"x": 1},
+            id="applied",
+        ),
+        pytest.param(
+            Execution("failed", {"error": "HTTP 400"}, rejection="HTTP 400"),
+            ActionExecuted(3, {"error": "HTTP 400"}, rejection="HTTP 400"),
+            None,
+            id="refused",
+        ),
+        pytest.param(
+            Execution("failed", {"error": "HTTP 503"}, error="HTTP 503"),
+            ActionExecuted(3, {"error": "HTTP 503"}, error="HTTP 503"),
+            None,
+            id="failed",
+        ),
+        pytest.param(
+            Execution("failed", {"error": ""}, rejection=""),
+            ActionExecuted(3, {"error": ""}, rejection=""),
+            None,
+            id="refused-with-no-words",
+        ),
+        pytest.param(
+            Execution("failed", {"error": ""}, error=""),
+            ActionExecuted(3, {"error": ""}, error=""),
+            None,
+            id="failed-with-no-words",
+        ),
     ],
 )
-def test_a_guest_refusal_is_a_rejection_and_any_other_failure_an_error(by_guest, answer):
-    """A refusal is the model's action failing and the run stays valid; any other failure is the
-    environment's, and the kernel invalidates the run for it (kernel/streaming.py _executed)."""
+def test_the_answer_and_the_record_carry_the_execution_the_environment_returned(
+    execution, answer, trace
+):
+    """The environment says what the action did (sandbox/actions.py Execution): a refusal is the
+    model's action failing and the run stays valid, any other failure the environment's, which
+    the kernel invalidates the run for (kernel/streaming.py _executed), also with no words."""
     clock, env, inbox, lanes = _lanes()
+    executed: list[Executed] = []
 
-    def failed(action, *, release_at=None):
+    def execute(action, *, release_at=None):
         env._operate("execute")
-        env._last_exec_error, env._last_rejected_by_guest = "HTTP 400", by_guest
-        env._last_execution_result = {"error": "HTTP 400"}
-        return "failed"
+        return execution
 
-    env.execute = failed
+    env.execute = execute
     with clock.participant():
-        lanes.execute(Execute(3, CLICK), lambda record: None)
+        lanes.execute(Execute(3, CLICK), executed.append)
         (event,) = [event for _, event in inbox.wait_for(1)]
     lanes.close()
     # The answer also says when the action held the gate and when it returned.
     assert event == replace(answer, started_at=0.0, finished_at=2.0)
+    assert executed == [Executed(3, trace, 0.0, 2.0)]
 
 
 def test_an_invalid_run_the_environment_latched_is_posted_once_before_the_answer():
@@ -366,15 +398,15 @@ def test_a_lane_is_free_by_the_time_its_answer_is_posted():
 
 
 def test_an_action_never_reports_what_the_one_before_left():
-    """The turn-based shell clears the execution record before each action (shell.py _execute);
-    the token clock's key path sets a result but no coordinate trace (sandbox/actions.py)."""
+    """An action with neither a result nor a coordinate trace after one with both, as the token
+    clock's key tap after a click (sandbox/actions.py): its answer and its record are its own."""
     clock, env, inbox, lanes = _lanes()
     executed: list[Executed] = []
     plain = env.execute
 
     def without_a_trace(action, *, release_at=None):
         env._operate("execute")
-        return "applied"
+        return Execution("applied")
 
     with clock.participant():
         lanes.execute(Execute(0, CLICK), executed.append)
@@ -433,7 +465,7 @@ def test_an_invalid_run_the_release_timer_claims_reaches_the_kernel_before_the_a
         env._invalid_run = INVALID
         threading.Thread(target=lambda: lanes.gate.latched(INVALID), daemon=True).start()
         assert claimed.wait(2.0)
-        return "applied"
+        return Execution("applied")
 
     env.execute = execute
     with clock.participant():

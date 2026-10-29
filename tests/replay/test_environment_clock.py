@@ -21,7 +21,7 @@ def test_tap_holds_the_key_for_one_sixtieth_of_a_second(fps):
     (sandbox/actions.py TAP_HOLD_S), whatever the environment rate. At 2 fps 1/60 tick would be
     1/120 s, which can hold no rendered frame (sandbox/browser/clock.py:428)."""
     env, task = token_environment(fps)
-    assert env.execute(Action(ActionType.KEY, {"key": "space"})) == "applied"
+    assert env.execute(Action(ActionType.KEY, {"key": "space"})).status == "applied"
     down, advance, up = task.events
     assert (down["event"], down["key"], down["at_s"]) == ("keyDown", "space", 0.0)
     assert advance["event"] == "advance"

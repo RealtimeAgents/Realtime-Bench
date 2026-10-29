@@ -105,9 +105,9 @@ def _key_events(fake):
 )
 def test_a_token_game_refuses_a_reload_or_browser_shortcut_and_sends_no_key(action, refusal):
     env, task = _token()
-    assert env.execute(action) == "failed"
-    assert env._last_rejected_by_guest is True
-    assert env._last_exec_error.startswith(refusal)
+    execution = env.execute(action)
+    assert (execution.status, execution.error) == ("failed", None)
+    assert execution.rejection.startswith(refusal)
     assert task.events == []
     assert getattr(env, "_invalid_run", None) is None
 
@@ -217,7 +217,7 @@ def test_a_held_key_keeps_repeating_until_another_non_modifier_key_is_pressed(ac
     env.execute(Action.hold_key("left", 10.0))
     env.step_clock(1.0)
     for action in actions:
-        assert env.execute(action) == "applied"
+        assert env.execute(action).status == "applied"
     env.step_clock(1.0)
     assert _trace(task) == [("keyDown", "left", ()), (1.0, _every_50_ms(0.5, 0.95)), *trace]
 
@@ -252,8 +252,7 @@ def test_the_holds_a_token_execution_reports_count_down_in_simulated_seconds(fps
     env, _ = _token(fps)
     env.execute(Action.hold_key("left", 2.0))
     env.step_clock(0.5 * fps)
-    env.execute(Action.hold_key("shift", 1.0))
-    assert env._last_execution_result["active_holds"] == [
+    assert env.execute(Action.hold_key("shift", 1.0)).result["active_holds"] == [
         {"key": "left", "remaining_simulated_seconds": 1.5},
         {"key": "shift", "remaining_simulated_seconds": 1.0},
     ]
@@ -280,7 +279,7 @@ def test_a_game_at_2_fps_asks_cdp_for_simulated_seconds_and_key_offsets_in_secon
     task.configure_clock("token", 2.0)
     task._clock_config["active"] = True
     env = GuestEnvironment(None, task, clock_mode="token")
-    assert env.execute(Action.hold_key("left", 0.72)) == "applied"
+    assert env.execute(Action.hold_key("left", 0.72)).status == "applied"
     env.wait_until_tick(2)
     assert advances == [(0.5, []), (0.22, [0.0, 0.05, 0.1, 0.15, 0.2]), (0.28, [])]
     assert _key_events(cdp) == [

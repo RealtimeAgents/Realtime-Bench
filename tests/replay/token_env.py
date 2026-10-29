@@ -98,16 +98,16 @@ class TokenEnvironment(GuestEnvironment):
 
     def execute(self, action, *, release_at=None):
         before = self._logical_tick
-        status = super().execute(action, release_at=release_at)
+        execution = super().execute(action, release_at=release_at)
         self.log(
             "env.execute",
             action=action_record(action),
             from_tick=before,
             to_tick=self._logical_tick,
-            status=status,
-            execution_result=self._last_execution_result,
+            status=execution.status,
+            execution_result=execution.result,
         )
-        return status
+        return execution
 
     def check_end(self) -> tuple[bool, str | None]:
         """Only an end is logged."""

@@ -243,10 +243,10 @@ class WallEnvironment(_Latched, FakeEnvironment):
         refused = self.decision in self.rejections or self.decision in self.failures
         if action.action_type is ActionType.HOLD_KEY and not refused:
             self._hold(action, release_at)
-        status = super().execute(action, release_at=release_at)
-        self._after_action = status in ("applied", "wait")
+        execution = super().execute(action, release_at=release_at)
+        self._after_action = execution.status in ("applied", "wait")
         if action.action_type is ActionType.WAIT:
-            self._last_execution_result.update(
+            execution.result.update(
                 {
                     "truncated_by_episode_horizon": False,
                     "truncated_by_terminal_condition": False,
@@ -254,7 +254,7 @@ class WallEnvironment(_Latched, FakeEnvironment):
                     "active_mouse_buttons": [],
                 }
             )
-        return status
+        return execution
 
     def model_request(self, index: int) -> bool:
         self.log("diff.request", request=index, at=self.now())
@@ -496,12 +496,12 @@ class TokenWorld(_Latched, TokenEnvironment, LegacyStateReads, GuestEnvironment)
         self._in_tap = action.action_type is ActionType.KEY
         self._tap_saw_end = False
         try:
-            status = super().execute(action, release_at=release_at)
+            execution = super().execute(action, release_at=release_at)
         finally:
             self._in_tap = False
-        self._applied += status == "applied"
-        self._after_action = status in ("applied", "wait")
-        return status
+        self._applied += execution.status == "applied"
+        self._after_action = execution.status in ("applied", "wait")
+        return execution
 
     def release_keys(self, keys) -> None:
         """The kernel's release of keys whose lease ended. Inside a tap the environment releases

@@ -28,12 +28,23 @@ from realtime_framework.evaluation.episode_end import EpisodeResult
 from realtime_framework.evaluation.kernel.turns import TurnConfig
 from realtime_framework.evaluation.reporting import summarize_spend
 from realtime_framework.evaluation.shell import run_episode
-from realtime_framework.sandbox.actions import TAP_HOLD_S
+from realtime_framework.sandbox.actions import TAP_HOLD_S, Execution
 
 from ..fake_clock import FakeClock
 
 ORIGIN = 1_048_576.0  # the fake clock's Unix time at monotonic 0; a power of two keeps sums exact
 CLICK = Action.click(10, 20)
+
+
+def _failed(message: str, end_checks: tuple, *, by_guest: bool) -> Execution:
+    """As GuestEnvironment's failed execution: a guest refusal is the model's action failing."""
+    return Execution(
+        "failed",
+        {"error": message},
+        end_checks=end_checks,
+        rejection=message if by_guest else None,
+        error=None if by_guest else message,
+    )
 
 
 def _snap(tick: float) -> float:
@@ -60,7 +71,7 @@ class World:
     failures: dict[int, str] = field(default_factory=dict)  # decision -> environment fault
     # decision -> the invalid run the environment latches itself while executing, then fails
     latches: dict[int, dict] = field(default_factory=dict)
-    tap_checks: dict[int, tuple] = field(default_factory=dict)  # decision -> last_end_checks
+    tap_checks: dict[int, tuple] = field(default_factory=dict)  # decision -> its end checks
     advance_errors: dict[int, str] = field(default_factory=dict)  # step_clock call -> fault
     release_errors: dict[int, str] = field(default_factory=dict)  # release_keys call -> fault
     render_errors: dict[int, str] = field(default_factory=dict)  # render call -> fault
@@ -88,8 +99,6 @@ class Environment:
             else SimpleNamespace()
         )
         self.observations: list = []  # weak references to every frame captured
-        self.last_held_keys: tuple[str, ...] = ()
-        self.last_end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
         self.on_invalid = None
         self.frame_ages: list[float] = []
         self.lifecycle: list[dict] = []
@@ -102,10 +111,6 @@ class Environment:
         self.renders = 0
         self.horizon = None
         self._frozen = None
-        self._last_exec_error = None
-        self._last_rejected_by_guest = False
-        self._last_execution_result = None
-        self._last_coordinate_trace = None
 
     def semantic(self) -> float:
         return self.clocks.semantic.frame if self.token else self.clock.time() - self.t0
@@ -159,37 +164,31 @@ class Environment:
         )
         return ended, self.world.end_reason if ended else None
 
-    def execute(self, action: Action, *, release_at: float | None = None) -> str:
+    def execute(self, action: Action, *, release_at: float | None = None) -> Execution:
         world, decision = self.world, self.decision
-        self.last_held_keys, self.last_end_checks = (), world.tap_checks.get(decision, ())
+        end_checks = world.tap_checks.get(decision, ())
         self.log("execute", action=action.action_type.value, release_at=release_at)
         self.clock.sleep(world.execute_s)
         if decision in world.latches:
             self._invalid_run = world.latches[decision]
-            return self._failed(world.latches[decision]["detail"], by_guest=False)
+            return _failed(world.latches[decision]["detail"], end_checks, by_guest=False)
         if decision in world.rejections:
-            return self._failed(world.rejections[decision], by_guest=True)
+            return _failed(world.rejections[decision], end_checks, by_guest=True)
         if decision in world.failures:
-            return self._failed(world.failures[decision], by_guest=False)
+            return _failed(world.failures[decision], end_checks, by_guest=False)
+        held_keys = ()
         if self.token and action.action_type is ActionType.KEY:
             self.clocks.semantic.frame = _snap(self.clocks.semantic.frame + TAP_HOLD_S / self.d)
         if self.token and action.action_type is ActionType.HOLD_KEY:
-            self.last_held_keys = (str(action.parameters["key"]).lower(),)
+            held_keys = (str(action.parameters["key"]).lower(),)
         if release_at is not None:
             self.clock.timer(
                 self.t0 + release_at - self.clock.time(), lambda: self._wall_release(decision)
             )
-        self._last_execution_result = {"executed": decision}
-        self._last_coordinate_trace = {"decision": decision}
         self.applied += 1
-        return "applied"
-
-    def _failed(self, message: str, *, by_guest: bool) -> str:
-        self._last_exec_error = message
-        self._last_rejected_by_guest = by_guest
-        self._last_execution_result = {"error": message}
-        self._last_coordinate_trace = None
-        return "failed"
+        return Execution(
+            "applied", {"executed": decision}, {"decision": decision}, held_keys, end_checks
+        )
 
     def _wall_release(self, decision: int) -> None:
         """The wall clock's key-release timer, on its own thread."""

@@ -67,9 +67,10 @@ def test_wall_wait_short_of_the_deadline_takes_the_time_it_asks_for():
     env = _legacy(clock, 10.0)
     with clock.participant():
         clock.sleep(1.25)
-        assert env.execute(Action.wait(5.0)) == "wait"
+        execution = env.execute(Action.wait(5.0))
+        assert execution.status == "wait"
         assert clock.monotonic() == 6.25
-        assert env._last_execution_result["duration_simulated_seconds"] == 5.0
+        assert execution.result["duration_simulated_seconds"] == 5.0
 
 
 def test_wall_wait_is_cut_at_the_deadline():
@@ -77,9 +78,10 @@ def test_wall_wait_is_cut_at_the_deadline():
     env = _legacy(clock, 3.0)
     with clock.participant():
         clock.sleep(1.25)
-        assert env.execute(Action.wait(5.0)) == "wait"
+        execution = env.execute(Action.wait(5.0))
+        assert execution.status == "wait"
         assert clock.monotonic() == 3.0
-        assert env._last_execution_result["duration_simulated_seconds"] == 1.75
+        assert execution.result["duration_simulated_seconds"] == 1.75
         assert env.time_remaining() == 0.0 and env.past_deadline() and env.done()
 
 
@@ -198,8 +200,9 @@ def test_a_task_failure_past_the_budget_keeps_its_traceback():
 def test_the_legacy_loop_s_tap_invalidates_the_run_at_its_first_failed_read():
     env, _ = _legacy_token(120.0, stop_check=_answers(RuntimeError("no state")))
     assert env.kernel_counts_reads is False
-    assert env.execute(TAP) == "applied"
-    assert env.last_end_checks == ()
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
+    assert execution.end_checks == ()
     assert env.tick_index() == 1
     assert env._invalid_run["reason"] == "terminal_state_check_failed"
 
@@ -207,8 +210,9 @@ def test_the_legacy_loop_s_tap_invalidates_the_run_at_its_first_failed_read():
 def test_a_tap_s_failed_reads_go_to_the_kernel_once_it_counts_them():
     env, _ = _legacy_token(120.0, stop_check=_answers(RuntimeError("no state"), False))
     env.kernel_counts_reads = True
-    assert env.execute(TAP) == "applied"
-    (failed, _, error), answered = env.last_end_checks
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
+    (failed, _, error), answered = execution.end_checks
     assert not failed and error.rstrip().endswith("RuntimeError: no state")
     assert answered == (False, None, None)
     assert getattr(env, "_invalid_run", None) is None
@@ -228,10 +232,11 @@ def test_the_legacy_loop_s_tap_reads_the_game_and_samples_its_score(monkeypatch)
     monkeypatch.setattr(task, "clock_key_event", lambda *args, **kwargs: None)
     task.configure_clock("token", 1.0)
     env = LegacyGuestEnvironment(None, None, task, clock_mode="token", stop_check=task.episode_over)
-    assert env.execute(TAP) == "applied"
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
     assert len(reads) == 1
     assert task._score_start == task._score_best == 3.0
-    assert env.last_end_checks == ()
+    assert execution.end_checks == ()
 
 
 # ---- the token clock's WAIT ---------------------------------------------------------------------
@@ -241,11 +246,11 @@ def test_a_token_wait_steps_under_done_and_stops_at_the_end_a_step_sees():
     """One tick at most per step, done() after each (sandbox/actions.py wait_until_tick): the read
     at tick 2 sees the end, and the record says the terminal condition cut the wait."""
     env, _ = _legacy_token(stop_check=_answers(False, "task_success"))
-    env.last_held_keys = ("a",)
-    assert env.execute(Action.wait(3.0)) == "wait"
-    assert env.last_held_keys == env.last_end_checks == ()
+    execution = env.execute(Action.wait(3.0))
+    assert execution.status == "wait"
+    assert execution.held_keys == execution.end_checks == ()
     assert env.tick_index() == 2
-    assert env._last_execution_result == {
+    assert execution.result == {
         "duration_simulated_seconds": 2.0,
         "requested_duration_simulated_seconds": 3.0,
         "truncated_by_episode_horizon": False,
@@ -259,9 +264,34 @@ def test_a_token_wait_steps_under_done_and_stops_at_the_end_a_step_sees():
 def test_a_token_wait_across_the_horizon_ends_there_and_says_so():
     env, _ = _legacy_token()
     env.set_episode_horizon(1.5)
-    assert env.execute(Action.wait(3.0)) == "wait"
+    execution = env.execute(Action.wait(3.0))
+    assert execution.status == "wait"
     assert env.tick_index() == 1.5
-    result = env._last_execution_result
+    result = execution.result
     assert result["duration_simulated_seconds"] == 1.5
     assert result["truncated_by_episode_horizon"] is True
     assert result["truncated_by_terminal_condition"] is False
+
+
+def test_a_token_wait_reports_its_own_reads_and_a_failed_one_none_of_the_action_s_before():
+    """WAIT runs past GuestEnvironment's own execute but starts the action's facts over as it
+    does: a wait reports the reads its steps made, and one that fails reports neither the keys
+    the hold before it leased nor the reads of the tap before that."""
+    env, task = _legacy_token(stop_check=lambda: False)
+    env.kernel_counts_reads = True
+    assert env.execute(TAP).end_checks == ((False, None, None),)
+    assert env.execute(Action.hold_key("a", 1.0)).held_keys == ("a",)
+    waited = env.execute(Action.wait(2.0))
+    assert (waited.status, waited.held_keys) == ("wait", ())
+    assert waited.end_checks == ((False, None, None),) * 2
+    assert env.execute(Action.hold_key("b", 1.0)).held_keys == ("b",)
+    task.advance_fails = (0.0, "frame lost")
+    failed = env.execute(Action.wait(1.0))
+    assert (failed.status, failed.error, failed.rejection) == ("failed", "frame lost", None)
+    assert (failed.held_keys, failed.end_checks) == ((), ())
+    task.advance_fails = None
+    assert env.execute(TAP).end_checks == ((False, None, None),)
+    task.advance_fails = (0.0, "frame lost")
+    failed = env.execute(Action.wait(1.0))
+    assert (failed.status, failed.error) == ("failed", "frame lost")
+    assert (failed.held_keys, failed.end_checks) == ((), ())

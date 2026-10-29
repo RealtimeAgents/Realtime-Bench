@@ -21,9 +21,11 @@ from realtime_framework.sandbox.actions import (
     TAP_HOLD_S,
     WALL_RELEASE_MAX_ATTEMPTS,
     WALL_RELEASE_RETRY_S,
+    Execution,
     GuestEnvironment,
 )
 from realtime_framework.sandbox.budget import BudgetExceeded
+from realtime_framework.sandbox.guest import GuestRefused
 
 from ..fake_clock import FakeClock
 from ..replay.clock_task import ClockTask
@@ -165,7 +167,7 @@ def _of(task, *kinds):
 def test_a_clock_step_neither_ends_at_a_lease_nor_releases_nor_checks_the_end():
     checks = []
     env, task = _token(stop_check=lambda: checks.append(env.tick_index()))
-    assert env.execute(Action.hold_key("a", 0.5)) == "applied"
+    assert env.execute(Action.hold_key("a", 0.5)).status == "applied"
     env.step_clock(1.0)
     assert _advances(task) == [(1.0, 0)]
     assert env.tick_index() == 1 and "a" in env._held_keys
@@ -185,7 +187,7 @@ def test_clock_steps_deliver_the_auto_repeat_of_a_held_key_as_the_legacy_wait_do
     legacy, legacy_task = _token()
     shell, shell_task = _token()
     for env in (legacy, shell):
-        assert env.execute(Action.hold_key("left", 5.0)) == "applied"
+        assert env.execute(Action.hold_key("left", 5.0)).status == "applied"
     legacy.wait_until_tick(3)
     for _ in range(3):
         shell.step_clock(1.0)
@@ -206,22 +208,24 @@ def test_a_failed_clock_step_raises_and_latches_the_advance_failure():
     assert env.tick_index() == 0
 
 
-# ---- last_held_keys -------------------------------------------------------------------------
+# ---- Execution.held_keys -------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("key", ["left", "arrowleft"])
 def test_a_token_hold_reports_the_identities_of_its_keys(key):
     """The kernel ends a lease by these identities, so they carry the environment's aliases."""
     env, _ = _token()
-    assert env.execute(Action.hold_key(f"shift+{key}", 1.0)) == "applied"
-    assert env.last_held_keys == ("shift", "arrowleft")
+    execution = env.execute(Action.hold_key(f"shift+{key}", 1.0))
+    assert execution.status == "applied"
+    assert execution.held_keys == ("shift", "arrowleft")
 
 
 def test_a_token_hold_that_extends_a_held_key_reports_it_too():
     env, task = _token()
     env.execute(Action.hold_key("a", 2.0))
-    assert env.execute(Action.hold_key("a+b", 1.0)) == "applied"
-    assert env.last_held_keys == ("a", "b")
+    execution = env.execute(Action.hold_key("a+b", 1.0))
+    assert execution.status == "applied"
+    assert execution.held_keys == ("a", "b")
     assert [event["key"] for event in _of(task, "keyDown")] == ["a", "b"]
 
 
@@ -229,16 +233,18 @@ def test_only_a_token_hold_that_lasts_reports_held_keys():
     env, _ = _token()
     env.execute(Action.hold_key("a", 1.0))
     for action in (Action.hold_key("b", 0.0), Action(ActionType.KEY, {"key": "c"})):
-        assert env.execute(action) == "applied"
-        assert env.last_held_keys == ()
+        execution = env.execute(action)
+        assert execution.status == "applied"
+        assert execution.held_keys == ()
 
 
 def test_a_wall_hold_reports_no_held_keys():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", 1.0)) == "applied"
-    assert env.last_held_keys == ()
+        execution = env.execute(Action.hold_key("arrowleft", 1.0))
+    assert execution.status == "applied"
+    assert execution.held_keys == ()
 
 
 # ---- release_keys ---------------------------------------------------------------------------
@@ -247,8 +253,7 @@ def test_a_wall_hold_reports_no_held_keys():
 @pytest.mark.parametrize("key", ["left", "arrowleft"])
 def test_a_release_finds_the_keys_by_the_identities_their_hold_reported(key):
     env, task = _token()
-    env.execute(Action.hold_key(f"shift+{key}", 1.0))
-    env.release_keys(env.last_held_keys)
+    env.release_keys(env.execute(Action.hold_key(f"shift+{key}", 1.0)).held_keys)
     (up,) = _of(task, "keyUp")
     assert up["key"] == f"shift+{key}"
     assert env._held_keys == {} and env._repeat_key is None
@@ -281,12 +286,13 @@ def test_clock_steps_and_releases_in_the_kernel_s_order_give_the_task_the_legacy
     (evaluation/kernel/turns.py _advance); wait_until_tick does both in one call."""
     legacy, legacy_task = _token()
     shell, shell_task = _token()
-    for env in (legacy, shell):
-        assert env.execute(Action.hold_key("left", 1.5)) == "applied"
+    assert legacy.execute(Action.hold_key("left", 1.5)).status == "applied"
+    held = shell.execute(Action.hold_key("left", 1.5))
+    assert held.status == "applied"
     legacy.wait_until_tick(3)
     shell.step_clock(1.0)
     shell.step_clock(0.5)
-    shell.release_keys(shell.last_held_keys)
+    shell.release_keys(held.held_keys)
     shell.step_clock(1.0)
     shell.step_clock(0.5)
     assert shell_task.events == legacy_task.events
@@ -327,7 +333,7 @@ def test_a_wall_hold_is_released_at_the_kernel_s_time_not_a_duration_after_the_p
     env = _wall(clock)
     with clock.participant():
         clock.sleep(0.25)
-        assert env.execute(Action.hold_key("arrowleft", 1.5), release_at=1.5) == "applied"
+        assert env.execute(Action.hold_key("arrowleft", 1.5), release_at=1.5).status == "applied"
         clock.sleep(5.0)
     assert _xdotool(env) == [(0.25, "xdotool keydown -- Left"), (1.5, "xdotool keyup -- Left")]
 
@@ -363,11 +369,10 @@ def test_a_wall_hold_lasts_to_the_kernel_s_release_time_or_a_short_while_more(
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", duration), release_at=release_at) == (
-            "applied"
-        )
+        execution = env.execute(Action.hold_key("arrowleft", duration), release_at=release_at)
+        assert execution.status == "applied"
         clock.sleep(5.0)
-    result = env._last_execution_result
+    result = execution.result
     assert result["duration_seconds"] == duration
     assert result["lease_seconds"] == round(held_s, 3)
     times, commands = zip(*_xdotool(env))
@@ -396,12 +401,13 @@ def test_a_delayed_wall_hold_counts_its_short_while_from_the_press():
     env = _wall(clock, scene_capture=_SlowFocus(clock, 0.5))
     env.g = _SlowKeydownGuest(clock, 0.05)
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", 0.2), release_at=0.2) == "applied"
+        execution = env.execute(Action.hold_key("arrowleft", 0.2), release_at=0.2)
+        assert execution.status == "applied"
         clock.sleep(5.0)
     times, commands = zip(*_xdotool(env))
     assert commands == ("xdotool keydown -- Left", "xdotool keyup -- Left")
     assert times == pytest.approx((0.55, 0.55 + TAP_HOLD_S))
-    assert env._last_execution_result["lease_seconds"] == round(0.05 + TAP_HOLD_S, 3)
+    assert execution.result["lease_seconds"] == round(0.05 + TAP_HOLD_S, 3)
 
 
 def test_a_wall_hold_on_time_records_its_lease_from_its_keydown_request():
@@ -410,20 +416,22 @@ def test_a_wall_hold_on_time_records_its_lease_from_its_keydown_request():
     env = _wall(clock)
     env.g = _SlowKeydownGuest(clock, 0.03)
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0) == "applied"
+        execution = env.execute(Action.hold_key("arrowleft", 1.0), release_at=1.0)
+        assert execution.status == "applied"
         clock.sleep(5.0)
     times, _ = zip(*_xdotool(env))
     assert times == pytest.approx((0.03, 1.0))
-    assert env._last_execution_result["lease_seconds"] == 1.0
+    assert execution.result["lease_seconds"] == 1.0
 
 
 def test_a_legacy_wall_hold_records_no_lease():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     with clock.participant():
-        assert env.execute(Action.hold_key("arrowleft", 1.0)) == "applied"
+        execution = env.execute(Action.hold_key("arrowleft", 1.0))
+        assert execution.status == "applied"
         clock.sleep(5.0)
-    assert "lease_seconds" not in env._last_execution_result
+    assert "lease_seconds" not in execution.result
 
 
 def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
@@ -433,7 +441,7 @@ def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
     with clock.participant():
         env.execute(Action.hold_key("arrowleft", 3.0), release_at=3.0)
         clock.sleep(1.0)
-        env.execute(Action.hold_key("arrowleft+a", 1.0), release_at=2.0)
+        execution = env.execute(Action.hold_key("arrowleft+a", 1.0), release_at=2.0)
         clock.sleep(5.0)
     assert _xdotool(env) == [
         (0.0, "xdotool keydown -- Left"),
@@ -441,7 +449,7 @@ def test_a_wall_hold_keeps_the_later_release_of_a_key_held_already():
         (2.0, "xdotool keyup -- a"),
         (3.0, "xdotool keyup -- Left"),
     ]
-    assert env._last_execution_result["lease_seconds"] == 1.0
+    assert execution.result["lease_seconds"] == 1.0
 
 
 # ---- the wall's key commands ----------------------------------------------------------------
@@ -471,7 +479,7 @@ def test_a_wall_hold_of_a_digit_goes_through_xdotool():
     clock = FakeClock(wall_origin=ORIGIN)
     env = _wall(clock)
     with clock.participant():
-        assert env.execute(Action.hold_key("1", 1.0), release_at=1.0) == "applied"
+        assert env.execute(Action.hold_key("1", 1.0), release_at=1.0).status == "applied"
         clock.sleep(5.0)
     assert _xdotool(env) == [(0.0, "xdotool keydown -- 1"), (1.0, "xdotool keyup -- 1")]
 
@@ -484,9 +492,10 @@ def test_a_tap_of_a_wall_held_key_presses_it_again_by_its_x_keysym():
     with clock.participant():
         env.execute(Action.hold_key("left", 3.0), release_at=3.0)
         clock.sleep(1.0)
-        assert env.execute(Action(ActionType.KEY, {"key": "left"})) == "applied"
+        execution = env.execute(Action(ActionType.KEY, {"key": "left"}))
+        assert execution.status == "applied"
         clock.sleep(5.0)
-    assert env._last_execution_result["restored_wall_holds"] == ["left"]
+    assert execution.result["restored_wall_holds"] == ["left"]
     assert [entry for entry in env.g.commands if not entry[1].startswith("xset")] == [
         (0.0, "xdotool keydown -- Left"),
         (1.0, "tap left"),
@@ -675,8 +684,9 @@ def test_a_tap_s_failed_reads_go_to_the_kernel_and_the_tap_goes_on():
     """At 120 fps a tap holds its key two ticks, with an end check after each (sandbox/actions.py
     TAP_HOLD_S); while the kernel counts, no failed read stops the tap or invalidates the run."""
     env, task = _token(120.0, stop_check=_answers(RuntimeError("no state"), False))
-    assert env.execute(TAP) == "applied"
-    (failed, _, error), answered = env.last_end_checks
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
+    (failed, _, error), answered = execution.end_checks
     assert not failed and error.rstrip().endswith("RuntimeError: no state")
     assert answered == (False, None, None)
     assert env.tick_index() == 2
@@ -694,9 +704,10 @@ def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
 
     env, _ = _token(120.0, stop_check=stop_check, clocks=Clocks(FrameClock(120.0), clock))
     with clock.participant():
-        assert env.execute(TAP) == "applied"
-    assert len(env.last_end_checks) == 2
-    for ended, reason, error in env.last_end_checks:
+        execution = env.execute(TAP)
+    assert execution.status == "applied"
+    assert len(execution.end_checks) == 2
+    for ended, reason, error in execution.end_checks:
         assert (ended, reason) == (False, None)
         assert error.rstrip().endswith("BudgetExceeded: state read took longer than 120 s")
     assert getattr(env, "_invalid_run", None) is None
@@ -705,8 +716,8 @@ def test_a_tap_s_reads_that_run_past_their_budget_go_to_the_kernel_too():
 def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
     no_state = RuntimeError("no state")
     env, _ = _token(stop_check=_answers(no_state, False, no_state))
-    env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
-    first, second, third = env.last_end_checks
+    execution = env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
+    first, second, third = execution.end_checks
     assert first[:2] == (False, None) and first[2].rstrip().endswith("RuntimeError: no state")
     assert second == (False, None, None)
     assert third[:2] == (False, None) and third[2].rstrip().endswith("RuntimeError: no state")
@@ -715,8 +726,9 @@ def test_the_end_checks_of_a_repeated_tap_are_kept_in_order():
 
 def test_a_tap_whose_read_sees_the_end_stops_there():
     env, task = _token(120.0, stop_check=_answers("task_success"))
-    assert env.execute(TAP) == "applied"
-    assert env.last_end_checks == ((True, "task_success", None),)
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
+    assert execution.end_checks == ((True, "task_success", None),)
     assert env.tick_index() == 1
     assert [event["event"] for event in task.events] == ["keyDown", "advance", "keyUp"]
     assert env._episode_over and env._terminal_reason == "task_success"
@@ -725,8 +737,7 @@ def test_a_tap_whose_read_sees_the_end_stops_there():
 def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
     """The reads after it, in the tap's other repeats, find the episode still going."""
     env, _ = _token(stop_check=_answers("task_success", False, False))
-    env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3}))
-    assert env.last_end_checks == (
+    assert env.execute(Action(ActionType.KEY, {"key": "space", "repeat": 3})).end_checks == (
         (True, "task_success", None),
         (False, None, None),
         (False, None, None),
@@ -736,13 +747,10 @@ def test_a_repeated_tap_whose_first_read_sees_the_end_keeps_it():
 
 def test_each_execution_starts_its_end_checks_over():
     env, _ = _token(stop_check=_answers(RuntimeError("no state"), False))
-    env.execute(TAP)
-    ((_, _, error),) = env.last_end_checks
+    ((_, _, error),) = env.execute(TAP).end_checks
     assert error is not None
-    env.execute(TAP)
-    assert env.last_end_checks == ((False, None, None),)
-    env.execute(Action.hold_key("a", 1.0))
-    assert env.last_end_checks == ()
+    assert env.execute(TAP).end_checks == ((False, None, None),)
+    assert env.execute(Action.hold_key("a", 1.0)).end_checks == ()
 
 
 def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(monkeypatch):
@@ -759,8 +767,121 @@ def test_a_tap_s_end_check_reads_the_game_and_samples_its_score(monkeypatch):
     monkeypatch.setattr(task, "clock_key_event", lambda *args, **kwargs: None)
     task.configure_clock("token", 1.0)
     env = GuestEnvironment(None, task, clock_mode="token", stop_check=task.episode_over)
-    assert env.execute(TAP) == "applied"
+    execution = env.execute(TAP)
+    assert execution.status == "applied"
     assert len(reads) == 1
     assert task._score_start == task._score_best == 3.0
-    assert env.last_end_checks == ((False, None, None),)
+    assert execution.end_checks == ((False, None, None),)
     assert getattr(env, "_invalid_run", None) is None
+
+
+# ---- one execution's facts ----------------------------------------------------------------
+
+
+class _AnsweringGuest(_Guest):
+    """Answers each action with the next of ``answers``: a reply, or an exception it raises."""
+
+    def __init__(self, clock, *answers):
+        super().__init__(clock)
+        self.answers = list(answers)
+
+    def execute_action(self, action):
+        answer = self.answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+
+def _no_holds(reply: dict) -> dict:
+    """The execution record of a reply on an environment that holds no input."""
+    return {**reply, "active_holds": [], "active_mouse_buttons": []}
+
+
+def test_each_wall_execution_reports_only_its_own_facts():
+    """A trace, a refusal or a failure of one action never shows in the next one's execution;
+    the run's own refusal, the guest's and the environment's failure each say which they are."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    first, last = {"from": [10, 20]}, {"from": [30, 40]}
+    env = _wall(clock)
+    env.g = _AnsweringGuest(
+        clock,
+        {"status": "ok", "coordinate_trace": first},
+        {"status": "ok"},
+        GuestRefused("400 guest rejected the action: bad"),
+        RuntimeError("guest down"),
+        {"status": "ok", "coordinate_trace": last},
+    )
+    with clock.participant():
+        executions = [
+            env.execute(Action.click(10, 20)),
+            env.execute(Action(ActionType.KEY, {"key": "a"})),
+            env.execute(Action(ActionType.KEY, {"key": "ctrl+l"})),
+            env.execute(Action.click(1, 2)),
+            env.execute(Action.click(5, 6)),
+            env.execute(Action.click(30, 40)),
+        ]
+    shortcut = executions[2].rejection
+    assert shortcut.startswith("browser shortcut 'ctrl+l' is disabled")
+    assert executions == [
+        Execution("applied", _no_holds({"status": "ok", "coordinate_trace": first}), first),
+        Execution("applied", _no_holds({"status": "ok"})),
+        Execution("failed", {"error": shortcut}, rejection=shortcut),
+        Execution(
+            "failed",
+            {"error": "400 guest rejected the action: bad"},
+            rejection="400 guest rejected the action: bad",
+        ),
+        Execution("failed", {"error": "guest down"}, error="guest down"),
+        Execution("applied", _no_holds({"status": "ok", "coordinate_trace": last}), last),
+    ]
+    assert env._invalid_run == {
+        "category": "environment",
+        "reason": "action_execution_failed",
+        "detail": "guest down",
+    }
+
+
+def test_each_token_execution_reports_only_its_own_facts():
+    """A key tap goes to the task clock, past the guest, and makes no coordinate trace: after a
+    click it reports none, and neither the keys a hold before it leased nor its reads go on to
+    the next action."""
+    clock = FakeClock()
+    trace = {"from": [10, 20]}
+    env, _ = _token(clocks=Clocks(FrameClock(1.0), clock), stop_check=lambda: False)
+    env.g = _AnsweringGuest(clock, {"status": "ok", "coordinate_trace": trace})
+    with clock.participant():
+        hold = env.execute(Action.hold_key("a", 2.0))
+        click = env.execute(Action.click(10, 20))
+        tap = env.execute(TAP)
+        other = env.execute(Action.hold_key("b", 1.0))
+    facts = [
+        (e.status, e.coordinate_trace, e.held_keys, e.end_checks, e.rejection, e.error)
+        for e in (hold, click, tap, other)
+    ]
+    assert facts == [
+        ("applied", None, ("a",), (), None, None),
+        ("applied", trace, (), (), None, None),
+        ("applied", None, (), ((False, None, None),), None, None),
+        ("applied", None, ("b",), (), None, None),
+    ]
+    assert click.result["coordinate_trace"] == trace
+    assert tap.result["logical_key"] == "space"
+
+
+@pytest.mark.parametrize(
+    ("failure", "execution", "invalid"),
+    [
+        pytest.param(GuestRefused(""), Execution("failed", {"error": ""}, rejection=""), False),
+        pytest.param(RuntimeError(""), Execution("failed", {"error": ""}, error=""), True),
+    ],
+    ids=["a-refusal", "a-failure"],
+)
+def test_a_failure_with_no_words_still_says_which_it_is(failure, execution, invalid):
+    """The kernel tells a refusal from a failure by which is not None (kernel/turns.py
+    _executed), so an empty reason stays the empty string."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _AnsweringGuest(clock, failure)
+    with clock.participant():
+        assert env.execute(Action.click(1, 2)) == execution
+    assert (getattr(env, "_invalid_run", None) is not None) is invalid
