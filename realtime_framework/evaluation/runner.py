@@ -118,7 +118,8 @@ from realtime_framework.sandbox.guest import GuestClient
 from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.evaluation._trial import read_launch
 from realtime_framework.evaluation.reporting import capture_generation_artifact
-from realtime_framework.evaluation.reporting import invalid_evaluation
+from realtime_framework.evaluation.reporting import conclude
+from realtime_framework.evaluation.reporting import evaluator_failure
 from realtime_framework.evaluation.reporting import resolve_run_identity
 from realtime_framework.evaluation.reporting import save_evaluation
 from realtime_framework.evaluation.reporting import summarize_cost
@@ -147,17 +148,6 @@ def _model_identity(model, config):
     """Separate the stable catalog key ``model`` from the actual backend model and adapter of the
     model configuration ``config`` it runs."""
     return {"adapter": config.adapter_type, "model": model, "backend_model": config.model_name}
-
-
-def _distinct(failures: list[dict]) -> list[dict]:
-    """The failures a run found, each once: a failed snapshot read is found by the kernel and
-    again by main(), with the same category and reason."""
-    found, distinct = set(), []
-    for failure in failures:
-        if (failure["category"], failure["reason"]) not in found:
-            found.add((failure["category"], failure["reason"]))
-            distinct.append(failure)
-    return distinct
 
 
 def task_clock_tokens_per_frame(tokens_per_frame, env_fps, model_input_fps):
@@ -328,7 +318,6 @@ def main():
     result = None  # how the episode came out, as its shell hands it back
     timeline = []
     verification = None
-    solved = None
     error = None
     generation_artifact = None
     artifact_error = None
@@ -635,25 +624,17 @@ def main():
             try:
                 # score the FROZEN snapshot (== the artifact), not a fresh post-cleanup live read
                 verification = ctask.evaluate_snapshot(frozen_snapshot)
-                evaluation_invalid_reason = invalid_evaluation(verification)
-                if evaluation_invalid_reason:
-                    invalid_runs.append(
-                        {
-                            "category": "evaluator",
-                            "reason": evaluation_invalid_reason,
-                            "detail": json.dumps(verification, default=str)[:2000],
-                        }
-                    )
-                    solved = None
-                else:
-                    solved = verification["resolved"]
+                unscorable = evaluator_failure(verification)
+                if unscorable is not None:
+                    invalid_runs.append(unscorable)
                 evaluation_path = str(save_evaluation(run_dir, verification))
                 episode_trace.emit(
                     TraceEvent.SCORE_PRODUCED,
                     {
-                        "valid": evaluation_invalid_reason is None,
-                        "invalid_reason": evaluation_invalid_reason,
-                        "resolved": solved,
+                        "valid": unscorable is None,
+                        "invalid_reason": None if unscorable is None else unscorable["reason"],
+                        # This evaluation's, which no failure found before it changes.
+                        "resolved": None if unscorable is not None else verification["resolved"],
                         "verification": verification,
                         "artifact": "evaluation.json",
                     },
@@ -807,25 +788,13 @@ def main():
         model_timing = summarize_model_timing(settlements, interaction_mode=spec.interaction_mode)
         cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
         cost_known_usd = cost_accounting.get("known_cost_usd")
-        invalid_run = invalid_runs[0] if invalid_runs else None
-        if invalid_run is not None:
-            solved = None
-        run_status = (
-            "invalid"
-            if invalid_run is not None
-            else ("scored" if benchmark_cell_eligible else "experimental")
-        )
         # The stop reason and the end time are LATCHED by the shell at loop exit (EpisodeResult
         # stop_reason, termination_record), so cleanup that crosses the deadline rewrites
         # neither a real environment terminal state into time_limit nor the episode's length.
         # Any invalid run reports "invalid_run"; "setup_error" if we never reached the loop.
         latched = result.stop_reason if result is not None else None
         termination = result.termination_record if result is not None else None
-        stop_reason = (
-            "invalid_run"
-            if invalid_run is not None
-            else (latched or ("setup_error" if env is None else "unknown"))
-        )
+        stopped = latched or ("setup_error" if env is None else "unknown")
         world_time_s = termination["end_s"] if termination is not None else None
         # The trace holds every record the episode wrote, checkpointed above. A section read from
         # it, a streaming run's streaming section or a turn-based run's reasoning replay, that
@@ -852,15 +821,18 @@ def main():
                     "detail": traceback.format_exc(),
                 }
             )
-            invalid_run = invalid_runs[0]
-            solved = None
-            run_status = "invalid"
-            stop_reason = "invalid_run"
+        # How the run concludes from what it found so far, which its run metrics count.
+        conclusion = conclude(
+            invalid_runs,
+            verification,
+            benchmark_eligible=benchmark_cell_eligible,
+            stop_reason=stopped,
+        )
         try:
             run_metrics = summarize_run_metrics(
                 run_dir / "action_lifecycle.jsonl",
                 total_decisions=len(timeline),
-                solved=solved,
+                solved=conclusion.solved,
                 clock_mode=spec.clock_mode,
                 tokens_per_frame=tokens_per_frame,
                 fps=model_input_fps,
@@ -876,10 +848,12 @@ def main():
                     "detail": metrics_error,
                 }
             )
-            invalid_run = invalid_runs[0]
-            solved = None
-            run_status = "invalid"
-            stop_reason = "invalid_run"
+            conclusion = conclude(
+                invalid_runs,
+                verification,
+                benchmark_eligible=benchmark_cell_eligible,
+                stop_reason=stopped,
+            )
             run_metrics = summarize_run_metrics(
                 run_dir / "missing-action-lifecycle.jsonl",
                 total_decisions=len(timeline),
@@ -905,7 +879,6 @@ def main():
             interaction_mode=spec.interaction_mode,
             runtime_config_hash=runtime_config_hash,
         )
-        failures = _distinct(invalid_runs)
         summ = {
             **run_identity,
             "instance_id": launch.task,
@@ -921,12 +894,10 @@ def main():
                 INTERACTABLES_REPRESENTATION if tool_runtime is not None else None
             ),
             "interactables_artifact": ("tool_calls.jsonl" if tool_runtime is not None else None),
-            "run_status": run_status,
-            "invalid_run": invalid_run,
-            # Each failure after the run's too, which a re-evaluation keeps
-            # (reporting.reevaluate_main).
-            **({"invalid_runs": failures} if len(failures) > 1 else {}),
-            "solved": solved,
+            "run_status": conclusion.run_status,
+            "invalid_run": conclusion.invalid_run,
+            **conclusion.listed(),
+            "solved": conclusion.solved,
             "decisions": len(timeline),
             "actions_executed": getattr(env, "actions", 0) if env is not None else 0,
             "actions_failed": getattr(env, "failed", 0) if env is not None else 0,
@@ -952,13 +923,9 @@ def main():
                 if token_accounting is not None
                 else None
             ),
-            "stop_reason": stop_reason,
-            "failure_attribution": ((invalid_run or {}).get("category") if invalid_run else None),
-            "environment_valid": (
-                False
-                if (invalid_run or {}).get("category") == "environment" or environment_invalid
-                else None
-            ),
+            "stop_reason": conclusion.stop_reason,
+            "failure_attribution": conclusion.failure_attribution,
+            "environment_valid": conclusion.environment_valid(environment_invalid),
             "loop_stop_reason": latched,
             "termination": termination,
             "max_minutes": spec.duration_minutes,
@@ -1009,19 +976,18 @@ def main():
             ),
             "artifact_error": artifact_error,
             "evaluation_artifact": ("evaluation.json" if evaluation_path is not None else None),
-            # Partial-credit progress headline (None for games without partial credit).
-            "progress": (verification or {}).get("progress"),
+            "progress": conclusion.progress,
             **run_metrics,
         }
-        if invalid_run is not None:
-            episode_trace.emit(TraceEvent.RUN_INVALIDATED, invalid_run)
+        if conclusion.invalid_run is not None:
+            episode_trace.emit(TraceEvent.RUN_INVALIDATED, conclusion.invalid_run)
         episode_trace.emit(
             TraceEvent.EPISODE_FINISHED,
             {
-                "run_status": run_status,
+                "run_status": conclusion.run_status,
                 **episode_outcome(summ),
-                "stop_reason": stop_reason,
-                "resolved": solved,
+                "stop_reason": conclusion.stop_reason,
+                "resolved": conclusion.solved,
                 "decisions": len(timeline),
                 "actions_executed": getattr(env, "actions", 0) if env is not None else 0,
                 "world_time_s": world_time_s,
@@ -1043,7 +1009,7 @@ def main():
         print("[invalid-run] run summary failed:\n" + detail, flush=True)
         _write_emergency_summary(
             detail,
-            _distinct(invalid_runs),
+            invalid_runs,
             "invalid_run",
             decisions=len(timeline),
             actions_executed=getattr(env, "actions", 0) if env is not None else 0,
@@ -1076,10 +1042,13 @@ def main():
     )
     # Infrastructure-invalid runs are never successful process results and are never resumable as
     # scored cells. The final tasks suite additionally requires a Boolean score for every valid run.
-    accepted = run_status == "scored" or (
-        run_status == "experimental" and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") == "1"
+    accepted = conclusion.run_status == "scored" or (
+        conclusion.run_status == "experimental"
+        and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") == "1"
     )
-    if not accepted or (custom_tasks.suite_id() == "tasks" and not isinstance(solved, bool)):
+    if not accepted or (
+        custom_tasks.suite_id() == "tasks" and not isinstance(conclusion.solved, bool)
+    ):
         raise SystemExit(1)
 
 
@@ -1224,7 +1193,8 @@ def _write_emergency_summary(
 ):
     """The summary of an invalid run main() wrote none for, from the arguments main() parsed and
     the launch file they name: a failure to set up, or one building the summary after the episode
-    (main). The run is invalid for the first of ``failures``, each a different one."""
+    (main). The run is invalid for the first of ``failures`` (reporting.conclude).
+    ``stop_reason`` is setup_error for a failure to set up, invalid_run otherwise."""
     a = _parser().parse_args()
     if not a.run_id:
         return
@@ -1246,12 +1216,13 @@ def _write_emergency_summary(
         model_input_fps=spec.model_input_fps,
         interaction_mode=spec.interaction_mode,
     )
+    conclusion = conclude(failures)
     # No decision lifecycle: a run that failed to set up wrote none, one in a run directory used
     # before is an earlier run's, and one main() could not summarize may be what failed.
     run_metrics = summarize_run_metrics(
         run_dir / "missing-action-lifecycle.jsonl",
         total_decisions=decisions,
-        solved=None,
+        solved=conclusion.solved,
         clock_mode=spec.clock_mode,
         tokens_per_frame=spec.tokens_per_frame,
         fps=spec.model_input_fps,
@@ -1261,7 +1232,6 @@ def _write_emergency_summary(
     )
     cost_accounting = summarize_cost(None)
     spend_accounting = summarize_spend(None)
-    invalid_run = failures[0]
     _atomic_write_json(
         path,
         {
@@ -1272,14 +1242,13 @@ def _write_emergency_summary(
             "clock_mode": spec.clock_mode,
             "tokens_per_frame": spec.tokens_per_frame,
             "world_time_s": None,
-            "run_status": "invalid",
-            "invalid_run": invalid_run,
-            **({"invalid_runs": failures} if len(failures) > 1 else {}),
-            "outcome": "error",
-            "error_category": invalid_run["category"],
-            "error_reason": invalid_run["reason"],
-            "failure_attribution": invalid_run["category"],
-            "solved": None,
+            "run_status": conclusion.run_status,
+            "invalid_run": conclusion.invalid_run,
+            **conclusion.listed(),
+            # An invalid run's outcome is read off its invalid run alone.
+            **episode_outcome({"invalid_run": conclusion.invalid_run}),
+            "failure_attribution": conclusion.failure_attribution,
+            "solved": conclusion.solved,
             "decisions": decisions,
             "actions_executed": actions_executed,
             "stop_reason": stop_reason,

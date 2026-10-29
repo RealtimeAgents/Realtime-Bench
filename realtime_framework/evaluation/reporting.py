@@ -780,6 +780,93 @@ def invalid_evaluation(result):
     return None
 
 
+from dataclasses import dataclass as dataclass
+
+
+@dataclass(frozen=True)
+class Conclusion:
+    """How a finished run concludes: whether it counts and, when not, the failure it is invalid
+    for (conclude). main() (runner.py), its emergency summary and a re-evaluation
+    (reevaluate_main) each write it into their own summary's layout, from the same values."""
+
+    invalid_run: dict | None  # the failure the run is invalid for; None when it counts
+    failures: tuple[dict, ...]  # each different failure the run found, in the order found
+    run_status: str  # invalid; scored, or experimental for a model outside maintained results
+    solved: bool | None  # the evaluation's resolved when the run counts, None otherwise
+    stop_reason: str | None  # invalid_run, or how the episode stopped when the run counts
+    evaluation: object = None  # the evaluator's result of the frozen snapshot, if there is one
+
+    @property
+    def failure_attribution(self) -> str | None:
+        return (self.invalid_run or {}).get("category") if self.invalid_run else None
+
+    @property
+    def progress(self):
+        """Partial-credit progress, the evaluation's whether the run counts or not (None for
+        games without partial credit)."""
+        return (self.evaluation or {}).get("progress")
+
+    def listed(self) -> dict:
+        """The summary's invalid_runs: each failure after the run's too, which a re-evaluation
+        keeps (reevaluate_main), only when there was more than one."""
+        return {"invalid_runs": list(self.failures)} if len(self.failures) > 1 else {}
+
+    def environment_valid(self, environment_invalid: bool) -> bool | None:
+        """False when the run is invalid for its environment, or a check found the environment
+        invalid as the run set up (``environment_invalid``); None otherwise, as nothing checks
+        an environment valid."""
+        return (
+            False
+            if (self.invalid_run or {}).get("category") == "environment" or environment_invalid
+            else None
+        )
+
+
+def _distinct(failures: list[dict]) -> list[dict]:
+    """The failures a run found, each once: a failed snapshot read is found by the kernel and
+    again by main(), with the same category and reason."""
+    found, distinct = set(), []
+    for failure in failures:
+        if (failure["category"], failure["reason"]) not in found:
+            found.add((failure["category"], failure["reason"]))
+            distinct.append(failure)
+    return distinct
+
+
+def evaluator_failure(evaluation) -> dict | None:
+    """The evaluator's failure, when its result is not safe to score (invalid_evaluation), with
+    the result as its detail; None when it is safe."""
+    reason = invalid_evaluation(evaluation)
+    if reason is None:
+        return None
+    return {
+        "category": "evaluator",
+        "reason": reason,
+        "detail": json.dumps(evaluation, default=str)[:2000],
+    }
+
+
+def conclude(failures, evaluation=None, *, benchmark_eligible=None, stop_reason=None):
+    """How a run concludes from what it found: ``failures`` in the order found, a failure the
+    environment latched while the episode ran before those main() found after it (runner.py
+    main), an evaluation not safe to score among them as the evaluator's (evaluator_failure).
+    The run is invalid for the first. Without a failure it counts: scored, or experimental for a
+    model outside maintained results (``benchmark_eligible``), solved as ``evaluation`` resolved
+    and stopped as its episode stopped (``stop_reason``); those three are read only then, so a
+    run known to be invalid is concluded from its failures alone."""
+    failures = _distinct(failures)
+    if failures:
+        return Conclusion(failures[0], tuple(failures), "invalid", None, "invalid_run", evaluation)
+    return Conclusion(
+        None,
+        (),
+        "scored" if benchmark_eligible else "experimental",
+        evaluation["resolved"],
+        stop_reason,
+        evaluation,
+    )
+
+
 def _episode_trace_ok(summary_path, summary) -> bool:
     declared = summary.get("episode_trace")
     if not isinstance(declared, dict) or declared.get("schema") != EPISODE_TRACE_SCHEMA:

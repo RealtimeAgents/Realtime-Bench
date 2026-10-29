@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 import sys
 
+import pytest
+
 from realtime_framework.evaluation import reporting
 
 HEALTHY = {"resolved": True, "evaluation_version": 1}
@@ -118,3 +120,90 @@ def test_a_run_that_stays_invalid_needs_no_benchmark_eligibility(tmp_path, monke
     assert (replaced["run_status"], replaced["invalid_run"]["reason"]) == (
         "invalid", "cdp_close_failed",
     )  # fmt: skip
+
+
+ENVIRONMENT = {"category": "environment", "reason": "action_execution_failed", "detail": "down"}
+EVALUATOR = {"category": "evaluator", "reason": "evaluation_backend_unhealthy", "detail": "{}"}
+
+
+def test_a_run_without_a_failure_counts_as_its_evaluation_resolved():
+    """A run that found no failure is scored, solved as its evaluation resolved and stopped as
+    its episode stopped; one of a model outside maintained results is experimental."""
+    evaluation = {"resolved": False, "evaluation_version": 1, "progress": 0.5}
+    conclusion = reporting.conclude(
+        [], evaluation, benchmark_eligible=True, stop_reason="time_limit"
+    )
+    assert (conclusion.run_status, conclusion.solved, conclusion.stop_reason) == (
+        "scored", False, "time_limit",
+    )  # fmt: skip
+    assert (conclusion.invalid_run, conclusion.failure_attribution) == (None, None)
+    assert (conclusion.progress, conclusion.listed()) == (0.5, {})
+    experimental = reporting.conclude(
+        [], evaluation, benchmark_eligible=False, stop_reason="time_limit"
+    )
+    assert experimental.run_status == "experimental"
+
+
+def test_a_run_is_invalid_for_the_first_failure_it_found():
+    """The run is invalid for the first failure, whatever its evaluation resolved, and lists each
+    different failure once in the order found: a failure found twice, as a failed snapshot read
+    is by the kernel and by main(), is listed once. Its evaluation's progress still stands."""
+    again = {**ENVIRONMENT, "detail": "found again"}
+    evaluation = {"resolved": True, "evaluation_version": 1, "progress": 1.0}
+    conclusion = reporting.conclude(
+        [ENVIRONMENT, EVALUATOR, again], evaluation, benchmark_eligible=True, stop_reason="x"
+    )
+    assert conclusion.invalid_run is ENVIRONMENT
+    assert conclusion.listed() == {"invalid_runs": [ENVIRONMENT, EVALUATOR]}
+    assert (conclusion.run_status, conclusion.solved, conclusion.stop_reason) == (
+        "invalid", None, "invalid_run",
+    )  # fmt: skip
+    assert (conclusion.failure_attribution, conclusion.progress) == ("environment", 1.0)
+    alone = reporting.conclude([EVALUATOR], evaluation, benchmark_eligible=True, stop_reason="x")
+    assert (alone.invalid_run, alone.listed()) == (EVALUATOR, {})
+
+
+def test_a_run_main_could_not_summarize_is_concluded_from_its_failures_alone():
+    """The emergency summary has the failures and nothing else to conclude from."""
+    conclusion = reporting.conclude([ENVIRONMENT])
+    assert (conclusion.run_status, conclusion.invalid_run, conclusion.solved) == (
+        "invalid", ENVIRONMENT, None,
+    )  # fmt: skip
+    assert (conclusion.stop_reason, conclusion.progress) == ("invalid_run", None)
+
+
+@pytest.mark.parametrize(
+    ("found", "environment_invalid", "valid"),
+    [
+        ([ENVIRONMENT], False, False),
+        ([EVALUATOR], True, False),  # a check found the environment invalid as the run set up
+        ([EVALUATOR], False, None),
+        ([], False, None),  # nothing checks an environment valid
+    ],
+)
+def test_an_environment_is_invalid_when_a_failure_or_a_check_says_so(
+    found, environment_invalid, valid
+):
+    conclusion = reporting.conclude(
+        found, HEALTHY, benchmark_eligible=True, stop_reason="time_limit"
+    )
+    assert conclusion.environment_valid(environment_invalid) is valid
+
+
+def test_an_evaluation_not_safe_to_score_is_the_evaluator_s_failure():
+    """Its reason is invalid_evaluation's, its detail the evaluation as JSON, to 2000
+    characters."""
+    assert reporting.evaluator_failure(HEALTHY) is None
+    unhealthy = {**HEALTHY, "ok": False}
+    assert reporting.evaluator_failure(unhealthy) == {
+        "category": "evaluator",
+        "reason": "evaluation_backend_unhealthy",
+        "detail": json.dumps(unhealthy),
+    }
+    long = {**HEALTHY, "ok": False, "notes": "n" * 3000}
+    assert reporting.evaluator_failure(long)["detail"] == json.dumps(long)[:2000]
+    assert reporting.evaluator_failure("crashed") == {
+        "category": "evaluator",
+        "reason": "evaluation_not_an_object",
+        "detail": '"crashed"',
+    }
