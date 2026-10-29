@@ -993,8 +993,12 @@ class GeminiLiveDriver(SessionLifecycle):
             native_response_exact = True
             response_source = "response_tokens_details"
         else:
+            # Protobuf omits a zero count. The total cannot stand in for it: whether it counts
+            # the thoughts differs between models (Gemini 3.1 Flash Live and 3.8 Live leave them
+            # out, 3.8 Live extended thinking mostly counts them).
             native_response = 0
-            native_response_exact = False
+            native_response_exact = True
+            response_source = "omitted_zero"
         audio_response = sum(
             detail_tokens(detail) for detail in details if modality(detail) == "AUDIO"
         )
@@ -1009,28 +1013,6 @@ class GeminiLiveDriver(SessionLifecycle):
         reasoning_value = member(usage, "thoughts_token_count", "thoughtsTokenCount")
         reasoning = int(reasoning_value or 0)
         tool_prompt = int(tool_prompt_value or 0)
-        if (
-            not native_response_exact
-            and native_total_value is not None
-            and prompt_value is not None
-        ):
-            residual = native_total - int(prompt_value)
-            # With non-negative usage components, a zero residual proves a zero response count,
-            # which protobuf omits, whether or not the total counts the thoughts: Gemini 3.1
-            # Flash Live's leaves them out, so a turn that thinks and then speaks instead of
-            # calling has a total equal to its prompt. For a positive residual, derive only when
-            # both other components were explicitly reported so the response count remains exact.
-            if residual == 0:
-                native_response = 0
-                native_response_exact = True
-                response_source = "total_minus_prompt"
-            elif residual > 0 and tool_prompt_value is not None and reasoning_value is not None:
-                native_response = residual - tool_prompt - reasoning
-                native_response_exact = native_response >= 0
-                if native_response_exact:
-                    response_source = "total_minus_prompt_tool_use_and_thoughts"
-        if native_response < 0:
-            raise RuntimeError("Gemini response token count is negative")
         if audio_response > native_response:
             raise RuntimeError("Gemini response AUDIO token detail exceeds response token count")
         chargeable_response = native_response - audio_response
