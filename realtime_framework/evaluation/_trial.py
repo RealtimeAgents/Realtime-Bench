@@ -10,6 +10,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NoReturn
 
 from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
@@ -136,6 +137,13 @@ def main(argv=None):
         "--dry-run", action="store_true", help="Validate and print the plan; no API calls or files"
     )
     args = parser.parse_args(argv)
+
+    def refuse(message: str) -> NoReturn:
+        """Refuse a request the command line parsed into, with the reason alone: argparse's usage
+        text fits only a malformed command line, and a Harbor trial reports this stderr
+        (harbor.py resolve), where the usage would bury the reason."""
+        parser.exit(2, f"{parser.prog}: error: {message}\n")
+
     try:
         spec = run_spec(
             "trial",
@@ -148,13 +156,13 @@ def main(argv=None):
             seed=args.seed,
         )
     except ValueError as exc:
-        parser.error(str(exc))
+        refuse(str(exc))
     from realtime_framework.providers.registry import load_project_secrets
 
     load_project_secrets()
     os.environ.setdefault("REALTIMEBENCH_PYTHON", sys.executable)
     if args.lane < 0 or 9292 + args.lane * 1000 > 65535:
-        parser.error("--lane must be between 0 and 56")
+        refuse("--lane must be between 0 and 56")
     if args.catalog_model:
         if (
             args.base_url
@@ -162,28 +170,28 @@ def main(argv=None):
             or args.include_usage is not None
             or args.api_key_env is not None
         ):
-            parser.error(
+            refuse(
                 "Endpoint options apply to --model; catalog models use their own transport configuration"
             )
         if args.context_preset is not None:
-            parser.error("A catalog model's YAML names its context_preset; omit --context-preset")
+            refuse("A catalog model's YAML names its context_preset; omit --context-preset")
         key = args.catalog_model
     elif args.model and "/" in args.model:
         from realtime_framework.providers.litellm import validate_endpoint
 
         if any(c.isspace() for c in args.model) or not all(args.model.split("/", 1)):
-            parser.error("Use a LiteLLM model name in provider/model-id format")
+            refuse("Use a LiteLLM model name in provider/model-id format")
         if args.include_usage is not None:
-            parser.error("LiteLLM collects response usage automatically; omit --include-usage")
+            refuse("LiteLLM collects response usage automatically; omit --include-usage")
         if args.context_preset is not None:
-            parser.error(
+            refuse(
                 "--context-preset applies to an endpoint (--model DEPLOYMENT_ID --base-url URL), "
                 "not a LiteLLM model"
             )
         try:
             base_url = validate_endpoint(args.base_url) if args.base_url else ""
         except ValueError as exc:
-            parser.error(str(exc))
+            refuse(str(exc))
         os.environ.update(
             BENCHMARK_LITELLM_MODEL=args.model,
             BENCHMARK_LITELLM_API_BASE=base_url,
@@ -196,11 +204,11 @@ def main(argv=None):
 
         deployment = args.model or os.environ.get("BENCHMARK_MODEL")
         if not deployment or any(c in deployment for c in "\r\n\t"):
-            parser.error("Supply --model DEPLOYMENT_ID or BENCHMARK_MODEL")
+            refuse("Supply --model DEPLOYMENT_ID or BENCHMARK_MODEL")
         try:
             base_url = validate_endpoint(args.base_url or os.environ.get("BENCHMARK_BASE_URL"))
         except ValueError as exc:
-            parser.error(str(exc))
+            refuse(str(exc))
         os.environ.update(
             BENCHMARK_MODEL=deployment,
             BENCHMARK_MODEL_REVISION=args.model_revision or "",
@@ -215,7 +223,7 @@ def main(argv=None):
             STREAM_CHAT_API_KEY_ENV=args.api_key_env or "OPENAI_API_KEY",
         )
         if args.api_key_env and not os.environ.get(args.api_key_env):
-            parser.error(f"Credential variable {args.api_key_env!r} is empty or unset")
+            refuse(f"Credential variable {args.api_key_env!r} is empty or unset")
         key = "remote-vlm"
 
     # Import after resolving environment-backed endpoint/model settings.
@@ -228,7 +236,7 @@ def main(argv=None):
     try:
         entry = catalog.get(key)
         if not entry.benchmark_eligible and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") != "1":
-            parser.error(f"{key} is not eligible for the maintained benchmark")
+            refuse(f"{key} is not eligible for the maintained benchmark")
         effort = args.reasoning_effort or entry.defaults["reasoning_effort"]
         catalog.validate_reasoning_effort(key, effort)
         validate_model_interaction(
@@ -243,21 +251,21 @@ def main(argv=None):
             entry.adapter_type, clock_mode=spec.clock_mode, tokens_per_frame=spec.tokens_per_frame
         )
     except (KeyError, ValueError) as exc:
-        parser.error(str(exc))
+        refuse(str(exc))
     import re
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.suite):
-        parser.error("Invalid suite identifier")
+        refuse("Invalid suite identifier")
     from realtime_tasks.registry import suite_path
 
     suite_path = suite_path(ROOT, args.suite)
     if not suite_path.is_file():
-        parser.error(f"Suite is not installed: {args.suite}")
+        refuse(f"Suite is not installed: {args.suite}")
     suite = _yaml.load_yaml(suite_path)
     all_tasks = [task for category in suite["categories"] for task in category["task_ids"]]
     selected = [args.task]
     if selected[0] not in all_tasks:
-        parser.error("Task ID must be a member of the selected suite")
+        refuse("Task ID must be a member of the selected suite")
     plan = {
         "benchmark_id": "harbor-trial",
         "suite": args.suite,
@@ -297,7 +305,7 @@ def main(argv=None):
             interaction_mode=spec.interaction_mode,
         )
     except (OSError, ValueError, ImportError) as exc:
-        parser.error(str(exc))
+        refuse(str(exc))
     settings = {
         "plan": plan,
         "model_config": resolved_model.model_dump(exclude={"api_key"}),
@@ -345,7 +353,7 @@ def main(argv=None):
             break
         except FileExistsError:
             if attempt == 4:
-                parser.error("Unable to allocate a unique run timestamp; retry shortly")
+                refuse("Unable to allocate a unique run timestamp; retry shortly")
             time.sleep(1)
     (result_root / LAUNCH_FILE).write_text(json.dumps(settings, indent=2) + "\n")
     if args.run_root_output:

@@ -801,14 +801,16 @@ def test_streaming_frame_rate_cap_of_openai_realtime():
 
 
 def test_streaming_frame_rate_cap_of_openai_realtime_trial(capsys):
+    """The trial worker refuses with the reason alone: a Harbor trial reports its stderr, where
+    argparse's usage text would bury the reason (harbor.py resolve)."""
     from realtime_framework.evaluation._trial import main
 
-    usage_error(
-        capsys,
-        lambda: main(["--catalog-model", "gpt-realtime-2", "--task", WEB, "--fps", "2",
-                      "--interaction-mode", "streaming", "--dry-run"]),
-        OPENAI_STREAMING_CAP,
-    )
+    with pytest.raises(SystemExit) as caught:
+        main(["--catalog-model", "gpt-realtime-2", "--task", WEB, "--fps", "2",
+              "--interaction-mode", "streaming", "--dry-run"])
+    assert caught.value.code == 2
+    (line,) = capsys.readouterr().err.strip().splitlines()
+    assert line.endswith("error: " + OPENAI_STREAMING_CAP)
 
 
 # The turn-based deliberation caps, which a streaming episode has no turns for (N41).
