@@ -74,127 +74,10 @@ def runtime(root, python, suite):
 
 
 # Verifier
-"""Grade a harness-produced local report.
+"""Grading, which each trial runs as its verifier and the host runs again (aggregate)."""
 
-Only a verified, solved episode earns reward 1. Every other outcome, including any error, earns 0;
-the recorded outcome and error reason keep errors distinguishable from model failures.
-"""
-
-
-def verify(report, expected, request):
-    if request.get("task") != expected:
-        raise ValueError("Trial identity mismatch")
-    integration = report.get("integration", {})
-    if any(
-        integration.get(key) != request[key] for key in ("model", "model_revision", "mode")
-    ) or not integration.get("configuration_sha256"):
-        raise ValueError("Report integration identity mismatch")
-    if (request.get("catalog_model") or request.get("configuration_sha256")) and (
-        not request.get("configuration_sha256")
-        or integration["configuration_sha256"] != request["configuration_sha256"]
-    ):
-        raise ValueError("Model configuration changed after resolution")
-    groups = report.get("groups", [])
-    rows = [row for group in groups for row in group.get("tasks", [])]
-    if (
-        len(groups) != 1
-        or len(rows) != 1
-        or rows[0].get("status") != "scored"
-        or rows[0].get("task_id", "").split("__", 1)[-1] != expected["task_id"]
-        or type(rows[0].get("solved")) is not bool
-        or rows[0].get("outcome") not in ("pass", "fail", "timeout")
-        or (rows[0]["outcome"] == "pass") is not rows[0]["solved"]
-    ):
-        raise ValueError("Missing, duplicate, invalid or unscored task")
-    group = groups[0]
-    for field in (
-        "suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "model_input_fps",
-        "interaction_mode", "seed",
-    ):
-        if group.get(field) != expected.get(field):
-            raise ValueError(f"Report {field} mismatch")
-    if (
-        group.get("public_category") != expected["category"]
-        or group.get("mode") != request["mode"]
-        or group.get("protocol")
-        != ("time-aware-token-v1" if request.get("clock", "wall") == "token"
-            else "wall-clock")
-        or group.get("clock_mode", "wall") != request.get("clock", "wall")
-        or group.get("tokens_per_frame") != (
-            request.get("tokens_per_frame")
-            if request.get("clock") == "token" and request.get("tokens_per_frame") != "unlimited"
-            else None
-        )
-        or group.get("cap") != (request.get("duration_minutes") or expected["duration_minutes"])
-        or group.get("expected") != 1
-        or group.get("scored") != 1
-        or group.get("invalid") != 0
-        or group.get("missing") != 0
-        or group.get("partial") is not False
-        or not group.get("runtime_config_hash")
-    ):
-        raise ValueError("Report runtime or completeness mismatch")
-    return {"reward": float(rows[0]["solved"])}
-
-
-def verifier_source():
-    import inspect
-
-    return (
-        "import json\nfrom pathlib import Path\n\n"
-        + inspect.getsource(verify)
-        + "\n"
-        + inspect.getsource(verifier_main)
-        + "\nif __name__ == '__main__':\n    verifier_main()\n"
-    )
-
-
-def verifier_main():
-    output = Path("/logs/verifier/reward.json")
-    details = output.with_name("evaluation.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.unlink(missing_ok=True)
-    details.unlink(missing_ok=True)
-    # Scoring details live with the verifier output; the reward alone stays authoritative.
-    # outcome is pass, fail, timeout or error; only a verified pass earns reward 1.
-    record = {
-        "reward": None,
-        "outcome": "error",
-        "error_category": "infrastructure",
-        "error_reason": "missing_report",
-        "error": None,
-        "evaluation": None,
-    }
-    try:
-        record["evaluation"] = json.loads(
-            Path("/logs/agent/benchmark/evaluation.json").read_text()
-        ).get("evaluation")
-    except (OSError, ValueError, AttributeError):
-        pass
-    try:
-        report = json.loads(Path("/workspace/report.json").read_text())
-        rows = [row for group in report.get("groups", []) for row in group.get("tasks", [])]
-        if len(rows) == 1:
-            for key in ("outcome", "error_category", "error_reason"):
-                record[key] = rows[0].get(key)
-        expected = json.loads(Path("/tests/task.json").read_text())
-        request = json.loads(Path("/workspace/request.json").read_text())
-        reward = verify(report, expected, request)
-    except Exception as exc:
-        # An error is scored as a failure.
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        if record["outcome"] != "error":
-            record.update(
-                outcome="error",
-                error_category="evaluator",
-                error_reason="report_verification_failed",
-            )
-        reward = {"reward": 0.0}
-    record["reward"] = reward["reward"]
-    details.write_text(json.dumps(record, indent=2) + "\n")
-    output.write_text(json.dumps(reward) + "\n")
-    reason = f" ({record['error_reason']})" if record["outcome"] == "error" else ""
-    print(f"{record['outcome']}{reason}: reward={reward['reward']} (details: evaluation.json)")
+from realtime_framework.evaluation import harbor_verifier as harbor_verifier
+from realtime_framework.evaluation.harbor_verifier import verify as verify
 
 # Agent
 """Harbor bridge to the local runner for registered model endpoints."""
@@ -594,7 +477,8 @@ class ApptainerEnvironment(BaseEnvironment):
             raise ValueError("Resolve the request in this environment before running it")
         # The verifier compares the report with the identity fixed by this environment.
         (self._path("/tests") / "task.json").write_text(json.dumps(self.task, indent=2) + "\n")
-        (self._path("/tests") / "verify.py").write_text(verifier_source())
+        # The whole module the host grades with, not a copy of its functions (harbor_verifier.py).
+        shutil.copyfile(harbor_verifier.__file__, self._path("/tests") / "verify.py")
         workspace = self._path("/workspace")
         if (workspace / "request.json").exists():
             raise ValueError("A Harbor trial may run exactly one episode")
