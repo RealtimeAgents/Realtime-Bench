@@ -288,8 +288,16 @@ def run_arguments(arguments: list[str]) -> list[str]:
                     k: v for k, v in base_agents[0]["kwargs"].items() if k != "reasoning_effort"
                 }}
             ]
+        # -m names the model: the preset a saved job's agent resolved to (describe_agent's
+        # catalog_model) does not carry over to it.
         base_agents = [
-            {**agent, "kwargs": dict(agent.get("kwargs") or {}), "model_name": model}
+            {
+                **agent,
+                "kwargs": {
+                    k: v for k, v in (agent.get("kwargs") or {}).items() if k != "catalog_model"
+                },
+                "model_name": model,
+            }
             for agent in base_agents
             for model in models
         ]
