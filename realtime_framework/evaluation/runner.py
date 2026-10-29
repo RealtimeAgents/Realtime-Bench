@@ -412,6 +412,9 @@ def main():
                 "harness_version": harness_version(harness_hash),
                 "harness_hash": harness_hash,
                 "runtime_config_hash": runtime_config_hash,
+                # The context settings as resolved: where each value came from, what it replaced
+                # and how it stands. The hash takes their values alone (model_config.context).
+                "context_settings": cfg.context.model_dump(),
             },
         )
 

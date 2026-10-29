@@ -230,6 +230,15 @@ def test_the_runner_runs_the_context_settings_its_launch_file_holds(tmp_path, mo
     config = record["runtime_config"]
     assert (config["active_visual_budget"], config["visual_fold_block_size"]) == (8, 3)
     assert record["expected_runtime_config_hash"] == record["runtime_config_hash"]
+    # run_config.json records the settings whole, beside the hash, which takes their values.
+    recorded = record["context_settings"]
+    assert recorded["items"][0] == {
+        "key": "screenshots_kept", "value": 8, "source": "default", "overridden": [],
+        "applies": True, "category": "standard",
+    }  # fmt: skip
+    assert {item["key"]: item["value"] for item in recorded["items"]} == (
+        config["model_config"]["context"]
+    )
 
 
 def test_a_streaming_runner_runs_the_streaming_settings_its_launch_file_holds(tmp_path):

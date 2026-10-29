@@ -389,6 +389,7 @@ def _probe_runner(request: dict) -> dict:
             config = json.loads(run_config.read_text())
             for key in ("harness_version", "harness_hash"):
                 config.pop(key)  # source identity, not configuration
+            record["context_settings"] = config.pop("context_settings")  # beside the hash
             record["runtime_config_hash"] = config.pop("runtime_config_hash")
             record["runtime_config"] = config
             record["recorded_vs_used"] = _recorded_vs_used(
