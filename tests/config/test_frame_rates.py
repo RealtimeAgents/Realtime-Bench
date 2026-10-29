@@ -126,6 +126,19 @@ def test_model_input_rate_above_the_cap_is_refused(runner_cells):
     assert cell["error"] == f"_Rejected: {CAP_MESSAGE}"
 
 
+def test_trial_probe_records_the_reason_of_a_refusal(tmp_path):
+    """The export's trial probe takes a refusal's reason from parser.error, which the trial worker
+    keeps as its way out past parsing, where it prints no usage (evaluation/_trial.py)."""
+    from realtime_framework.evaluation.effective_config import _probe
+
+    environ = {"HOME": os.environ.get("HOME", "/"), "PATH": "/usr/bin:/bin"}
+    environ["GEMINI_API_KEY"] = "probe-dummy-key"
+    argv = ["--catalog-model", GEMINI, "--task", CAPPED, "--fps", "2"]
+    request = {"runs": [(GEMINI, CAPPED, argv)], "env_file": None, "attribution": {}}
+    trial = _probe("trial", environ, request, scratch=tmp_path)
+    assert trial["models"][GEMINI][CAPPED]["error"] == f"_Rejected: {CAP_MESSAGE}"
+
+
 WALL_2_1 = ["--clock", "wall", "--fps", "2", "--model-input-fps", "1"]
 TOKEN_60_1 = ["--clock", "token", "--tokens-per-frame", "100", "--protocol", "time-aware-token-v1"]
 TOKEN_60_1 += ["--fps", "60", "--model-input-fps", "1"]
