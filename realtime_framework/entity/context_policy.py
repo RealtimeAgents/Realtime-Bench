@@ -333,6 +333,58 @@ def context_defaults() -> dict:
     return load_context_defaults(DEFAULTS_FILE)
 
 
+def _shown(value) -> str:
+    """A setting's value as a YAML file writes it."""
+    return ("true" if value else "false") if isinstance(value, bool) else str(value)
+
+
+_KINDS = {
+    "condition": "evaluation condition",
+    "protocol": "what a model's protocol may need",
+    "capability": "what an API's channel can render",
+}
+
+
+def settings_table() -> str:
+    """The guide's tables (docs/model_configuration.md, Context settings): every setting, from
+    SETTINGS and the defaults file's standard values, and the approved deviations."""
+    standard = context_defaults()["standard"]
+    lines = [
+        "| Setting | Standard | Values | Applies to | Kind | Model YAML | What it is |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for key, setting in SETTINGS.items():
+        values = (
+            "a positive count"
+            if setting.values is int
+            else "`true`, `false`"
+            if setting.values is bool
+            else ", ".join(f"`{value}`" for value in setting.values)
+        )
+        applies = (
+            ", ".join(f"`{api}`" for api in setting.applies) if setting.applies else "every API"
+        )
+        lines.append(
+            f"| `{key}` | `{_shown(standard[key])}` | {values} | {applies} | "
+            f"{_KINDS[setting.kind]} | {'yes' if setting.model else 'no'} | {setting.about} |"
+        )
+    lines += [
+        "",
+        "| API | Model | Settings | Required | Reason |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for deviation in context_defaults()["approved_deviations"].values():
+        settings = ", ".join(
+            f"`{key}: {_shown(value)}`" for key, value in deviation.settings.items()
+        )
+        required = "yes" if deviation.required else "no"
+        lines.append(
+            f"| `{deviation.api}` | `{deviation.model}` | {settings} | {required} | "
+            f"{deviation.reason} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 # The resolved context settings
 Source = Literal["default", "experiment", "model", "run"]
 # A setting's value as its definition takes it (setting_error), never coerced from another type.

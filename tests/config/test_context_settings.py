@@ -32,6 +32,7 @@ from realtime_framework.entity.context_policy import (
     path_policy,
     read_experiment_file,
     resolve_context,
+    settings_table,
 )
 from realtime_framework.providers.registry import CONTEXT_PRESET_REMOVED
 
@@ -807,3 +808,15 @@ def test_a_required_deviation_is_true_or_false(tmp_path):
         "context_defaults.yaml: the approved deviation of moonshot kimi-k3: required must be true "
         "or false, got 'yes'",
     )
+
+
+TABLE_START = "<!-- Generated from SETTINGS and the defaults file by settings_table(). -->\n"
+TABLE_END = "<!-- End of the generated tables. -->\n"
+
+
+def test_the_guide_keeps_the_tables_of_the_settings():
+    """docs/model_configuration.md holds the tables settings_table() makes from the setting
+    definitions and the defaults file, between its markers."""
+    guide = (catalog.PROJECT_ROOT / "docs" / "model_configuration.md").read_text()
+    assert guide.count(TABLE_START) == guide.count(TABLE_END) == 1
+    assert guide.split(TABLE_START)[1].split(TABLE_END)[0] == "\n" + settings_table() + "\n"

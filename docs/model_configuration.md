@@ -94,12 +94,40 @@ optional) sets the few a model needs instead: `reasoning_replay`, `tool_call_his
 model's API. `configs/models/kimi-k3.yaml` sets `reasoning_replay: true`, which sends K3's past
 reasoning back, as Kimi requires for K3; other moonshot models leave it out and send none. The
 defaults file marks it required for K3, on `moonshot` and as LiteLLM's `moonshot/kimi-k3`: K3
-without it is refused before the run. K3
-behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) sets it too. An
-endpoint given on the trial worker's command line has no YAML (`python -m
-realtime_framework.evaluation._trial --model DEPLOYMENT_ID --base-url URL`) and sets it with
-`--context reasoning_replay=true`. The defaults file also lists the deviations some models are
-approved to take (`approved_deviations`).
+without it is refused before the run. K3 behind your own endpoint (`api: chat_completions`,
+served by vLLM or SGLang) sets it too. An endpoint given on the trial worker's command line has
+no YAML (`python -m realtime_framework.evaluation._trial --model DEPLOYMENT_ID --base-url URL`)
+and sets it with `--context reasoning_replay=true`. The defaults file also lists the deviations
+some models are approved to take (`approved_deviations`).
+
+The settings, and the deviations the defaults file approves:
+
+<!-- Generated from SETTINGS and the defaults file by settings_table(). -->
+
+| Setting | Standard | Values | Applies to | Kind | Model YAML | What it is |
+| --- | --- | --- | --- | --- | --- | --- |
+| `screenshots_kept` | `20` | a positive count | every API | evaluation condition | no | Screenshots kept in the history; one more folds the oldest screenshot_fold_block |
+| `screenshot_fold_block` | `10` | a positive count | every API | evaluation condition | no | Screenshots folded together into a fixed text |
+| `turns_kept` | `50` | a positive count | every API | evaluation condition | no | Turns kept verbatim; one more archives the oldest turn_archive_block into the ledger |
+| `turn_archive_block` | `10` | a positive count | every API | evaluation condition | no | Turns archived together, also under context pressure, and archived actions left out together from a request that still does not fit |
+| `execution_feedback` | `separate_message` | `separate_message`, `digest` | every API | what an API's channel can render | yes | Where each action's execution feedback goes: its own message, or the action digest |
+| `observation` | `som_screenshot` | `som_screenshot`, `observation_json_screenshot`, `observation_json_text` | every API | what an API's channel can render | yes | What one observation carries: the SoM screenshot, or the observation JSON with or without the screenshot |
+| `reasoning_replay` | `false` | `true`, `false` | every API | what a model's protocol may need | yes | Send the model's past reasoning back in later requests |
+| `archive_over_window` | `true` | `true`, `false` | every API | evaluation condition | no | Archive the oldest turns while a request exceeds the declared context window |
+| `tool_call_history` | `native_tools` | `native_tools`, `tool_transcript` | `gemini_live` | what a model's protocol may need | yes | How a rebuilt live session replays past tool calls: as native calls or as a transcript |
+| `decision_history` | `turns` | `turns`, `action_digest` | `openai_decisions`, `jev_decisions` | what an API's channel can render | yes | How a Decision request replays history: as turns or as an action digest |
+
+| API | Model | Settings | Required | Reason |
+| --- | --- | --- | --- | --- |
+| `moonshot` | `kimi-k3` | `reasoning_replay: true` | yes | Kimi's thinking-model guide requires K3's past reasoning_content back in multi-turn conversations and tool-call loops. |
+| `litellm` | `moonshot/kimi-k3` | `reasoning_replay: true` | yes | Kimi's thinking-model guide requires K3's past reasoning_content back in multi-turn conversations and tool-call loops. |
+| `gemini_live` | `gemini-3.1-flash-live-preview` | `tool_call_history: tool_transcript` | no | Past calls replayed as native tool calls can stall the next interaction of a rebuilt session (providers/gemini/session.py SessionCore._tool_contents). |
+| `gemini_live` | `gemini-3.8-live` | `tool_call_history: tool_transcript` | no | Past calls replayed as native tool calls can stall the next interaction of a rebuilt session (providers/gemini/session.py SessionCore._tool_contents). |
+| `gemini_live` | `gemini-3.8-live-extended-thinking` | `tool_call_history: tool_transcript` | no | Past calls replayed as native tool calls can stall the next interaction of a rebuilt session (providers/gemini/session.py SessionCore._tool_contents). |
+| `openai_decisions` | `openai/gpt-6-luna-decisions` | `observation: observation_json_screenshot` | no | Luna chooses among the candidates the harness lists in the observation JSON, which it keeps beside the screenshot; it is not compared with the chat models. |
+| `jev_decisions` | `typesafe/jev-1.13` | `observation: observation_json_text`, `execution_feedback: digest`, `decision_history: action_digest` | no | JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and the observation JSON without a screenshot; it is not compared with the chat models. |
+
+<!-- End of the generated tables. -->
 
 A run may set any setting for every model, from an experiment file (the trial worker's
 `--context-file PATH`, Harbor's `--ak context_file=PATH`: a YAML mapping of settings to values),
