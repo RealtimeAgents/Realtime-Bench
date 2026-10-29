@@ -1162,6 +1162,31 @@ def test_the_agent_lets_go_of_a_frames_screenshot_once_it_folds(monkeypatch, clo
     agent.close()
 
 
+def test_a_push_that_fails_once_the_view_is_full_folds_no_frame(monkeypatch, clock):
+    """The view the push hands its driver folds the oldest frame kept, but the frame stays out:
+    the agent keeps that frame's screenshot and records no fold until a frame goes in."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    for n in (1, 2):
+        agent.push(observation(clock, n))
+    agent.driver.failing.add("obs-3")
+    with pytest.raises(RuntimeError, match="push failed"):
+        agent.push(observation(clock, 3))
+    handed = [(item.block.id, item.block.folded) for item in agent.driver.views[-1].items[1:]]
+    assert handed == [("f1.frame", True), ("f2.frame", False), ("f3.frame", False)]
+
+    def folds():
+        changes = trace.of(TraceEvent.HISTORY_CHANGED)
+        return [change["frames"] for change in changes if change["kind"] == "visual_fold"]
+
+    assert [block.image is not None for block in agent._blocks] == [True, True]
+    assert folds() == []
+    agent.push(observation(clock, 4))
+    assert [block.image is not None for block in agent._blocks] == [False, True, True]
+    assert folds() == [[{"block": "f1.frame", "observation_id": "obs-1"}]]
+    agent.close()
+
+
 def test_a_frames_inspection_is_finished_once_with_every_reply_on_it(monkeypatch, clock):
     """Two replies start on frame 1; once frames 2 and 3 are pushed no reply can start on it
     again, and its inspection is finished with both replies' outputs. The frames left are

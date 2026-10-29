@@ -17,8 +17,8 @@ arrived, after the frames pushed while the action ran.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, replace
 
 from realtime_framework.entity.context_policy import PathPolicy
 from realtime_framework.entity.model import ProviderObservation
@@ -113,3 +113,126 @@ def history_view(
     return CanonicalRequest(
         policy=policy, history_form="turns", items=tuple(items), answer=answer, call=call
     )
+
+
+@dataclass
+class _Unplaced:
+    """A reply whose output may still join the blocks: from its start until it is accepted, or,
+    given up, until an action of it ran, which an action still executing as its reply was given
+    up reports later."""
+
+    # The kernel's number of it: of outputs that began at one place, the first asked for goes first.
+    generation: int
+    # Where in the blocks its output began, which its output goes to: before the feedback on its
+    # actions and the frames pushed since. The output of an earlier reply going in before it moves
+    # it on.
+    position: int | None = None
+    ran: bool = False  # an action of it ran (feedback.RAN)
+    kept: list[ContentBlock] | None = None  # its output, as it was given up
+
+
+class StreamingHistory:
+    """The blocks a native-streaming session should hold, in order, and the session they make
+    (history_view). The agent tells it each frame that went into the session, and each reply's
+    start, the start of its output, its acceptance or giving up, and each outcome committed; the
+    history places each reply's output and lets go of each screenshot the view folds.
+
+    It holds no lock: the agent calls it holding its own, which guards what the agent keeps beside
+    it in the same step (harnesses/streaming/agent.py)."""
+
+    def __init__(
+        self,
+        *,
+        policy: PathPolicy,
+        system: ContentBlock,
+        retained_frames: int,
+        answer: AnswerRequirements,
+        call: CallParameters,
+    ):
+        self.retained_frames = retained_frames
+        self._policy, self._system, self._answer, self._call = policy, system, answer, call
+        self._blocks: list[ContentBlock] = []
+        self._unplaced: dict[int, _Unplaced] = {}  # by decision
+
+    @property
+    def blocks(self) -> tuple[ContentBlock, ...]:
+        return tuple(self._blocks)
+
+    def view(self, frame: ContentBlock | None = None) -> CanonicalRequest:
+        """The session the blocks make; with ``frame``, the one they make once that frame went in,
+        which a push hands its driver before it did."""
+        return history_view(
+            self._blocks if frame is None else [*self._blocks, frame],
+            policy=self._policy,
+            system=self._system,
+            retained_frames=self.retained_frames,
+            answer=self._answer,
+            call=self._call,
+        )
+
+    def frame_sent(self, frame: ContentBlock) -> ContentBlock | None:
+        """``frame`` went into the session: it joins the blocks, and the frame it folds lets go of
+        its screenshot, as a turn-based history folds one (CanonicalTurn.fold_visual): the view
+        folds it already. Returns the frame folded, None while none is."""
+        self._blocks.append(frame)
+        frames = [index for index, block in enumerate(self._blocks) if block.kind == "frame"]
+        if len(frames) <= self.retained_frames:
+            return None
+        index = frames[-self.retained_frames - 1]
+        self._blocks[index] = replace(self._blocks[index], image=None)
+        return self._blocks[index]
+
+    def reply_started(self, decision: int, generation: int) -> None:
+        """Reply ``decision`` started, the kernel's ``generation``: its output may join."""
+        self._unplaced[decision] = _Unplaced(generation)
+
+    def output_began(self, decision: int) -> None:
+        """The reply's output began: here is where it joins. Told once per reply; of a reply given
+        up that said nothing, which joins nothing, it may come after."""
+        reply = self._unplaced.get(decision)
+        if reply is not None:
+            reply.position = len(self._blocks)
+
+    def accepted(self, decision: int, blocks: list[ContentBlock]) -> None:
+        """The reply was accepted: ``blocks``, its output with its tool rounds after it, none for
+        a reply that failed, join where its output began."""
+        self._place(decision, blocks)
+
+    def given_up(self, decision: int, output: Callable[[], list[ContentBlock]]) -> None:
+        """The reply was given up, by its abort or its discard: what ``output()`` returns, read the
+        first time, as the reply is then, joins where the output began once an action of it ran,
+        at once if one did already, so that a session rebuilt from the view shows the model the
+        actions whose results it holds; one that said nothing joins nothing (decision 25)."""
+        reply = self._unplaced.get(decision)
+        if reply is None:
+            return
+        if reply.kept is None:
+            reply.kept = output()
+        if reply.ran or not reply.kept:
+            self._place(decision, reply.kept)
+
+    def committed(self, decision: int, ran: bool, feedback: Callable[[], ContentBlock]) -> None:
+        """An outcome of reply ``decision`` was committed, ``ran`` if its action ran: the output
+        of the reply given up joins first, then the block ``feedback()`` makes joins the end."""
+        reply = self._unplaced.get(decision)
+        if reply is not None and ran:
+            reply.ran = True
+            if reply.kept is not None:
+                self._place(decision, reply.kept)
+        self._blocks.append(feedback())
+
+    def _place(self, decision: int, blocks: list[ContentBlock]) -> None:
+        """The reply's ``blocks`` join where its output began, once, moving on where the output of
+        each reply still to join began, after that place or there and asked for later."""
+        reply = self._unplaced.pop(decision, None)
+        if reply is None or not blocks:
+            return
+        at = reply.position
+        for offset, block in enumerate(blocks):
+            self._blocks.insert(at + offset, block)
+        for other in self._unplaced.values():
+            if other.position is not None and (
+                other.position > at
+                or (other.position == at and other.generation > reply.generation)
+            ):
+                other.position += len(blocks)

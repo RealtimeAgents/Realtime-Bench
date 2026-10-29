@@ -1,6 +1,7 @@
-"""The native-streaming history view (harnesses/streaming/history.py): the newest frames keep their
-screenshots, older frames fold as turn-based frames do, and every frame, output and execution
-feedback stays in the order it was accepted, under its own id."""
+"""The native-streaming history (harnesses/streaming/history.py). Its view: the newest frames keep
+their screenshots, older frames fold as turn-based frames do, and every frame, output and execution
+feedback stays in the order it was accepted, under its own id. Its rules, on the history alone:
+where each reply's output joins, what a reply given up keeps, and which screenshots it lets go."""
 
 from __future__ import annotations
 
@@ -13,12 +14,15 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import (
     AnswerRequirements,
+    BlockTime,
     CallParameters,
+    ContentBlock,
     Intent,
 )
 from realtime_framework.harnesses.default.frames import FrameTable
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.harnesses.streaming.history import (
+    StreamingHistory,
     feedback_block,
     frame_block,
     history_view,
@@ -258,3 +262,255 @@ def test_each_longer_history_changes_the_view_only_by_retiring_frames(seed):
             after = now[block_id]
             assert after == before or (not before.folded and block_id in retired)
         previous = now
+
+
+# ---- the history's rules ----------------------------------------------------------------------
+
+
+def _history(retained: int = 20) -> StreamingHistory:
+    return StreamingHistory(
+        policy=POLICY, system=SYSTEM, retained_frames=retained, answer=ANSWER, call=CALL
+    )
+
+
+def _sent_frames(count: int) -> list:
+    """Frames 1 to ``count``, as the frame table numbers them."""
+    table = FrameTable()
+    frames = []
+    for n in range(1, count + 1):
+        observation = _observation(n)
+        record = table.register(observation.observation_id, 0.0, {}, None)
+        frames.append(frame_block(record, observation))
+    return frames
+
+
+def _with_frames(count: int, retained: int = 20) -> tuple[StreamingHistory, list]:
+    """A history holding frames 1 and 2 of ``count``; the rest are left to send."""
+    history, frames = _history(retained), _sent_frames(count)
+    for frame in frames[:2]:
+        history.frame_sent(frame)
+    return history, frames[2:]
+
+
+def _started(history: StreamingHistory, decision: int, generation: int) -> None:
+    """Reply ``decision`` started, and its output began at once."""
+    history.reply_started(decision, generation)
+    history.output_began(decision)
+
+
+def _output(decision: int, text: str = "click", wall_ns: int = 2_000) -> list:
+    """A reply's output with its tool rounds after it, as the agent makes them."""
+    tools = ContentBlock(
+        f"d{decision}.tools", "tool_exchange", "model", BlockTime(wall_ns=wall_ns), text=text
+    )
+    return [output_block(decision, text, "o2", wall_ns), tools]
+
+
+def _feedback(decision: int, call_id: str = "c1"):
+    return lambda: feedback_block(decision, call_id, f"applied {call_id}", 3_000)
+
+
+def _ids(history: StreamingHistory) -> list[str]:
+    return [item.block.id for item in history.view().items[1:]]
+
+
+@pytest.mark.parametrize("accepted_first", [3, 4])
+@pytest.mark.parametrize(
+    "generations", [(7, 8), (8, 7)], ids=["asked_in_decision_order", "asked_in_reverse"]
+)
+def test_outputs_that_began_at_one_place_go_there_in_the_order_their_replies_were_asked_for(
+    accepted_first, generations
+):
+    """By the generation the kernel asked each reply for, not by its decision, whichever is
+    accepted first."""
+    history, _ = _with_frames(2)
+    for decision, generation in zip((3, 4), generations):
+        _started(history, decision, generation)
+    for decision in (accepted_first, 7 - accepted_first):
+        history.accepted(decision, [output_block(decision, "click", "o2", 2_000)])
+    asked_first = 3 if generations[0] < generations[1] else 4
+    asked = (asked_first, 7 - asked_first)
+    assert _ids(history) == ["f1.frame", "f2.frame", *(f"d{d}.output" for d in asked)]
+
+
+@pytest.mark.parametrize(
+    ("began", "generations", "expected"),
+    [
+        # The second began after a frame pushed since the first began.
+        ("after", (7, 8), ["d3.output", "d3.tools", "f3.frame", "d4.output", "d4.tools"]),
+        # Both began at one place: the one asked for later goes after both blocks.
+        ("there", (7, 8), ["d3.output", "d3.tools", "d4.output", "d4.tools", "f3.frame"]),
+        # Both began at one place: the one asked for earlier stays before them.
+        ("there", (8, 7), ["d4.output", "d4.tools", "d3.output", "d3.tools", "f3.frame"]),
+    ],
+)
+def test_an_output_with_its_tool_rounds_going_in_moves_on_the_place_of_each_reply_after_it(
+    began, generations, expected
+):
+    """Reply 3 is given up, and its output and tool rounds go in once its click ran, while
+    reply 4 is on: the place reply 4's output began moves on by both blocks, if it is later or,
+    at the same place, if reply 4 was asked for later."""
+    history, (third,) = _with_frames(3)
+    _started(history, 3, generations[0])
+    history.given_up(3, lambda: _output(3))
+    if began == "after":
+        history.frame_sent(third)
+    _started(history, 4, generations[1])
+    if began == "there":
+        history.frame_sent(third)
+    history.committed(3, True, _feedback(3))
+    history.accepted(4, _output(4))
+    assert _ids(history) == ["f1.frame", "f2.frame", *expected, "d3.c1.feedback"]
+
+
+@pytest.mark.parametrize("ran_first", [False, True], ids=["given_up_first", "ran_first"])
+def test_a_reply_given_up_joins_once_however_many_of_its_actions_ran(ran_first):
+    history, (third,) = _with_frames(3)
+    _started(history, 3, 7)
+    if ran_first:
+        history.committed(3, True, _feedback(3, "c1"))
+    history.given_up(3, lambda: _output(3))
+    history.frame_sent(third)
+    if not ran_first:
+        history.committed(3, True, _feedback(3, "c1"))
+    history.committed(3, True, _feedback(3, "c2"))
+    history.given_up(3, lambda: _output(3))  # its discard, after its abort
+    feedback = ["d3.c1.feedback", "f3.frame"] if ran_first else ["f3.frame", "d3.c1.feedback"]
+    assert _ids(history) == [
+        "f1.frame",
+        "f2.frame",
+        "d3.output",
+        "d3.tools",
+        *feedback,
+        "d3.c2.feedback",
+    ]
+
+
+@pytest.mark.parametrize("ran", [False, True])
+def test_a_reply_given_up_keeps_its_output_once_an_action_of_it_ran_before_its_result(ran):
+    """Decision 25: the click still executes as its reply is given up, and a frame goes in
+    meanwhile. Once the click ran, the output stands where it began, before that frame and
+    before the click's result; a click that did not run brings nothing in."""
+    history, (third,) = _with_frames(3)
+    _started(history, 3, 7)
+    history.given_up(3, lambda: _output(3))
+    history.frame_sent(third)
+    assert _ids(history) == ["f1.frame", "f2.frame", "f3.frame"]
+    history.committed(3, ran, _feedback(3))
+    kept = ["d3.output", "d3.tools"] if ran else []
+    assert _ids(history) == ["f1.frame", "f2.frame", *kept, "f3.frame", "d3.c1.feedback"]
+
+
+def test_a_reply_given_up_after_an_action_of_it_ran_keeps_its_output_at_once():
+    history, _ = _with_frames(2)
+    _started(history, 3, 7)
+    history.committed(3, True, _feedback(3))
+    assert _ids(history) == ["f1.frame", "f2.frame", "d3.c1.feedback"]
+    history.given_up(3, lambda: _output(3))
+    assert _ids(history) == ["f1.frame", "f2.frame", "d3.output", "d3.tools", "d3.c1.feedback"]
+
+
+def test_a_reply_given_up_keeps_its_output_as_it_was_the_first_time():
+    """Its abort freezes its output; what comes of the reply later, more text, another tool
+    round, a later time, changes nothing of what joins once its click ran, and its discard does
+    not read its output again."""
+    history, _ = _with_frames(2)
+    _started(history, 3, 7)
+    reply = {"text": "Clicking.", "wall_ns": 4_000}
+    reads = []
+
+    def output():
+        reads.append(dict(reply))
+        return _output(3, reply["text"], reply["wall_ns"])
+
+    history.given_up(3, output)  # its abort
+    first = _output(3, "Clicking.", 4_000)
+    reply.update(text="Clicking. And another tool round.", wall_ns=9_000)
+    history.given_up(3, output)  # its discard
+    history.committed(3, True, _feedback(3))
+    assert reads == [{"text": "Clicking.", "wall_ns": 4_000}]
+    assert [block for block in history.blocks if block.kind != "frame"][:2] == first
+    assert _ids(history) == ["f1.frame", "f2.frame", "d3.output", "d3.tools", "d3.c1.feedback"]
+
+
+def test_a_reply_that_said_nothing_or_failed_adds_no_output_whatever_ran():
+    history, _ = _with_frames(2)
+    history.reply_started(3, 7)
+    history.given_up(3, list)  # said nothing
+    _started(history, 4, 8)
+    history.accepted(4, [])  # failed, and accepted
+    for decision in (3, 4):
+        history.committed(decision, True, _feedback(decision))
+    assert _ids(history) == ["f1.frame", "f2.frame", "d3.c1.feedback", "d4.c1.feedback"]
+
+
+@pytest.mark.parametrize("committed_first", [True, False])
+def test_an_accepted_output_goes_where_it_began_before_the_feedback_and_frames_since(
+    committed_first,
+):
+    """A wait is settled, or a click runs, while its reply goes on, and a frame is pushed
+    meanwhile: the reply's output stands where it began, before both."""
+    history, (third,) = _with_frames(3)
+    _started(history, 0, 0)
+    if committed_first:
+        history.committed(0, True, _feedback(0))
+    history.frame_sent(third)
+    history.accepted(0, _output(0))
+    if not committed_first:
+        history.committed(0, True, _feedback(0))
+    tail = ["d0.c1.feedback", "f3.frame"] if committed_first else ["f3.frame", "d0.c1.feedback"]
+    assert _ids(history) == ["f1.frame", "f2.frame", "d0.output", "d0.tools", *tail]
+
+
+def test_the_history_lets_go_of_the_screenshot_of_each_frame_that_folds():
+    history, frames = _history(retained=2), _sent_frames(4)
+    assert [history.frame_sent(frame) for frame in frames[:2]] == [None, None]
+    folded = [history.frame_sent(frame) for frame in frames[2:]]
+    assert [(block.id, block.image) for block in folded] == [("f1.frame", None), ("f2.frame", None)]
+    assert [block.image is not None for block in history.blocks] == [False, False, True, True]
+
+
+def test_a_frame_previewed_but_not_sent_lets_go_of_no_screenshot():
+    """The view a push hands its driver folds the oldest frame kept; the push failed, so the
+    history keeps that frame's screenshot, and the view after does not fold it."""
+    history, (third,) = _with_frames(3, retained=2)
+    preview = history.view(third)
+    assert [(item.block.id, item.block.folded) for item in preview.items[1:]] == [
+        ("f1.frame", True),
+        ("f2.frame", False),
+        ("f3.frame", False),
+    ]
+    assert [block.image is not None for block in history.blocks] == [True, True]
+    assert [item.block.folded for item in history.view().items[1:]] == [False, False]
+
+
+def test_a_frame_that_folded_never_gets_its_screenshot_back():
+    """Outputs going in before folded frames, and a preview, leave them folded."""
+    history, frames = _history(retained=1), _sent_frames(5)
+    history.frame_sent(frames[0])
+    _started(history, 0, 0)
+    for frame in frames[1:3]:
+        history.frame_sent(frame)
+    _started(history, 1, 1)
+    history.accepted(0, _output(0))
+    history.frame_sent(frames[3])
+    history.accepted(1, _output(1))
+    views = [history.view(), history.view(frames[4])]
+    history.frame_sent(frames[4])
+    views.append(history.view())
+    stored = {block.id: block.image for block in history.blocks if block.kind == "frame"}
+    assert [frame for frame, image in stored.items() if image is not None] == ["f5.frame"]
+    for view in views:
+        older = [item.block for item in view.items if item.block.id in {"f1.frame", "f2.frame"}]
+        assert [(block.folded, block.image) for block in older] == [(True, None), (True, None)]
+    assert _ids(history) == [
+        "f1.frame",
+        "d0.output",
+        "d0.tools",
+        "f2.frame",
+        "f3.frame",
+        "d1.output",
+        "d1.tools",
+        "f4.frame",
+        "f5.frame",
+    ]
