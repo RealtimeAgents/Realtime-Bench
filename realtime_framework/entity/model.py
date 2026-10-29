@@ -278,9 +278,11 @@ class HistorySyncResult:
     history_state: ProviderHistoryState
     detail: str = ""
     provider_metadata: dict[str, Any] = field(default_factory=dict)
-    # The error that broke a broken sync, where the driver keeps it: a session operation that
-    # needs the sync exact raises its failure from it (providers/session_lifecycle.py).
+    # The error that broke a broken sync, and what it means as the driver classified it: a
+    # session operation that needs the sync exact raises its failure from that error, as that
+    # failure (providers/session_lifecycle.py).
     error: BaseException | None = None
+    failure: TransportFailure | None = None
 
 
 @dataclass(frozen=True)
@@ -501,12 +503,15 @@ class ChoiceClient(abc.ABC):
 """One retry policy for every model API, run by one executor.
 
 Drivers only classify a failed request; RequestRetry decides whether and when to send it again,
-per request unit: the harness's turn, a Decision question, a session connect. A request is
-retried only while no model output, usage, or call has been received, and always from canonical
-history, so a retry can never replay or duplicate a model action. SDK-level retries stay disabled
-so every attempt is recorded. Retry time is part of the decision: on the wall clock the world keeps
-running; on the token clock a request without output charges no tokens. Once the runner abandons
-a decision, none of its request units is sent again, and each records the attempt that stopped.
+per request unit: the harness's turn, a Decision question, a session connect. What a failure means
+is read once, by the driver, where it understands the provider's own error: a failure raised again
+across a seam (an error event, a broken sync) carries that meaning to RequestRetry (raised_as)
+instead of being classified anew from its text. A request is retried only while no model output,
+usage, or call has been received, and always from canonical history, so a retry can never replay
+or duplicate a model action. SDK-level retries stay disabled so every attempt is recorded. Retry
+time is part of the decision: on the wall clock the world keeps running; on the token clock a
+request without output charges no tokens. Once the runner abandons a decision, none of its request
+units is sent again, and each records the attempt that stopped.
 """
 
 import hashlib
@@ -584,6 +589,14 @@ class TransportFailureError(RuntimeError):
         super().__init__(f"{failure.kind} after {retries} transport retries: {cause!r}"[:500])
         self.failure = TransportFailure(failure.kind, failure.retry_after_s, exhausted=True)
         self.retries = retries
+
+
+def raised_as(error: Exception, failure: TransportFailure | None) -> Exception:
+    """``error``, marked with ``failure``, what its driver read it to mean: RequestRetry takes
+    that as it is instead of classifying ``error``. The error keeps its type and text, which the
+    records show. None leaves it to be classified."""
+    error.transport_failure = failure
+    return error
 
 
 def exception_chain(exc: BaseException):
@@ -665,15 +678,16 @@ class RequestRetry:
     connect.
 
     ``send(attempt)`` makes one 1-based attempt. A failed attempt is classified, recorded and, if
-    the policy allows, sent again after its delay. ``classify`` returns None for an exception that
-    is not a transport failure; it propagates unrecorded. ``replayable`` is False once the failed
-    attempt received model output. ``record(attempt, exc, failure, delay)`` sees every classified
-    failure before any wait; delay is None when the request is not sent again, and the exception
-    then propagates unless ``record`` raises its own. Once the context's retry_cancellation is
-    set, the backoff ends and no attempt starts. ``cancelled(attempt, exc)`` then sees the attempt
-    the cancellation stopped: the next one, the one under way when a nested unit raised
-    RetryCancelled, or the one that failed once it was set, as the abort's close fails the
-    attempt under way, which ``record`` then never sees. The RetryCancelled propagates, and
+    the policy allows, sent again after its delay. An exception marked with its failure
+    (raised_as) is taken as that failure; ``classify`` classifies any other, and returns None for
+    one that is not a transport failure, which propagates unrecorded. ``replayable`` is False once
+    the failed attempt received model output. ``record(attempt, exc, failure, delay)`` sees every
+    classified failure before any wait; delay is None when the request is not sent again, and the
+    exception then propagates unless ``record`` raises its own. Once the context's
+    retry_cancellation is set, the backoff ends and no attempt starts. ``cancelled(attempt, exc)``
+    then sees the attempt the cancellation stopped: the next one, the one under way when a nested
+    unit raised RetryCancelled, or the one that failed once it was set, as the abort's close fails
+    the attempt under way, which ``record`` then never sees. The RetryCancelled propagates, and
     enclosing units take it the same way, never as a failure. The backoff waits on ``clock``.
     """
 
@@ -721,7 +735,7 @@ class RequestRetry:
             raise
 
     def _failed(self, attempt: int, exc: Exception, cancel: threading.Event) -> float | None:
-        failure = self.classify(exc)
+        failure = getattr(exc, "transport_failure", None) or self.classify(exc)
         if failure is None:
             return None
         if cancel.is_set():

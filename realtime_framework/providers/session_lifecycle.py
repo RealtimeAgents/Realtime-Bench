@@ -32,6 +32,7 @@ from realtime_framework.entity.model import (
     SessionEncoder,
     SessionSeed,
     SyncDisposition,
+    raised_as,
     retry_cancel_event,
 )
 from realtime_framework.entity.records import TraceEvent
@@ -155,8 +156,8 @@ class SessionLifecycle(SessionEncoder):
     ``record(sync, result=None, error=None)`` sees what each did before it returns or raises: the
     sync's HistorySyncRequest with its result or the exception it raised, or None for a reopened
     session. ensure_ready, synchronize and renew raise when their sync leaves the session other
-    than exact, from the error that broke it where the driver keeps one (HistorySyncResult.error),
-    which the driver then classifies their failure as.
+    than exact, from the error that broke it, as the failure the driver read it as
+    (HistorySyncResult.error and failure, _failed_sync).
 
     Every timed wait the encoder takes on the clock is written to the trace before it starts
     (_record_wait), once: what it waits for, how long, and until which time on the operational
@@ -172,10 +173,11 @@ class SessionLifecycle(SessionEncoder):
     provider keeps beside them is not known: the capability server_context says so.
 
     The encoder provides the connection operations: ``_connect(request)``,
-    ``_sync_history(request)``, ``_close_current()``, which closes the open connection if there
-    is one, and ``interrupt(generation)``; ``capabilities``; ``connection_renewal_reason()``
-    where the provider asks for new connections; ``clock``, the operational clock; and
-    ``_trace``, which bind_trace sets. ``interrupt`` and
+    ``_sync_history(request)``, which hands a failure of its own to _failed_sync,
+    ``_close_current()``, which closes the open connection if there is one, and
+    ``interrupt(generation)``; ``classify_transport_error``; ``capabilities``;
+    ``connection_renewal_reason()`` where the provider asks for new connections; ``clock``, the
+    operational clock; and ``_trace``, which bind_trace sets. ``interrupt`` and
     ``_close_current`` must each end within a bound, whatever a write in progress on the
     connection does: the close fails a write stuck in it, and the interrupt, which the close
     follows, does not wait for one. That is what ends an abort's cleanup before ensure_ready and
@@ -262,8 +264,9 @@ class SessionLifecycle(SessionEncoder):
                     record,
                 )
                 if result.history_state != ProviderHistoryState.EXACT:
-                    raise RuntimeError(
-                        f"provider history recovery failed: {result.detail}"
+                    raise raised_as(
+                        RuntimeError(f"provider history recovery failed: {result.detail}"),
+                        result.failure,
                     ) from result.error
                 return result
             await self.connect(ConnectRequest(seed=seed, history=history))
@@ -279,7 +282,9 @@ class SessionLifecycle(SessionEncoder):
         async with self._session_lock():
             result = await self._sync(request, record)
         if result.history_state != ProviderHistoryState.EXACT:
-            raise RuntimeError(f"history synchronization failed: {result.detail}") from result.error
+            raise raised_as(
+                RuntimeError(f"history synchronization failed: {result.detail}"), result.failure
+            ) from result.error
         return result
 
     async def renew(
@@ -296,7 +301,9 @@ class SessionLifecycle(SessionEncoder):
         async with self._session_lock():
             result = await self._sync(HistorySyncRequest(seed, reason, history), record)
         if result.history_state != ProviderHistoryState.EXACT:
-            raise RuntimeError(f"connection renewal failed: {result.detail}") from result.error
+            raise raised_as(
+                RuntimeError(f"connection renewal failed: {result.detail}"), result.failure
+            ) from result.error
         return result
 
     async def repair(
@@ -347,6 +354,25 @@ class SessionLifecycle(SessionEncoder):
         record(request, result)
         await self._release_if_abandoned()
         return result
+
+    def _failed_sync(self, request: HistorySyncRequest, exc: Exception) -> HistorySyncResult:
+        """What a sync that failed with ``exc`` comes to, by the failure the encoder classifies
+        it as. Before a generation, one the retry around the sync may send again, or one whose
+        retries a nested request already spent, is raised as it is, for that retry to read its
+        kind and spent budget (decision 39). Otherwise the sync broke the session: the result
+        keeps the error and its failure, which a session operation that needs the sync exact
+        raises; a repair after a generation, the only sync with one, keeps the turn's result
+        (decision 35)."""
+        failure = self.classify_transport_error(exc)
+        if request.current_generation is None and (failure.retryable or failure.exhausted):
+            raise exc
+        return HistorySyncResult(
+            SyncDisposition.BROKEN,
+            ProviderHistoryState.UNKNOWN,
+            detail=repr(exc)[:500],
+            error=exc,
+            failure=failure,
+        )
 
     @staticmethod
     def _stop_if_abandoned(before: str) -> None:

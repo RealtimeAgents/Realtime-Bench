@@ -53,6 +53,7 @@ from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.model import TransportFailureError
+from realtime_framework.entity.model import raised_as
 from realtime_framework.entity.model import retry_cancellation
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.request import CanonicalRequest
@@ -392,8 +393,8 @@ class RealtimeRuntime:
             async for event in events:
                 if isinstance(event, ProviderError):
                     provider_metadata.setdefault("errors", []).append(event.detail)
-                    if event.fatal:
-                        raise RuntimeError(event.detail)
+                    if event.failure is not None:
+                        raise raised_as(RuntimeError(event.detail), event.failure)
                 if isinstance(event, GenerationBoundary):
                     provider_metadata.update(event.metadata)
                     reconnect_required = reconnect_required or bool(

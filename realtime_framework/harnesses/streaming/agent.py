@@ -81,6 +81,7 @@ from realtime_framework.entity.model import (
     RetryCancelled,
     SessionSeed,
     TransportFailureError,
+    raised_as,
     retry_cancellation,
 )
 from realtime_framework.entity.records import TraceEvent, trace_scope
@@ -780,9 +781,11 @@ class NativeStreamingAgent(VisionAgentBase):
                 reply.text_done = True
                 self._arrived(reply, reply.output, TEXT_CALL, event.received_at)
         elif isinstance(event, ProviderError):
-            # A provider fault, not the model's: the run cannot be scored, as a turn's.
-            if event.fatal:
-                raise RuntimeError(event.detail)
+            # A provider fault, not the model's: it fails the reply as the failure the driver read
+            # it as, as a turn's (_reply asks again after a transient one only before the model
+            # said anything).
+            if event.failure is not None:
+                raise raised_as(RuntimeError(event.detail), event.failure)
         elif isinstance(event, GenerationBoundary):
             if event.kind in _TERMINAL:
                 reply.terminal = event.history_state
