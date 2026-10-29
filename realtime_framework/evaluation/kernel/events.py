@@ -342,8 +342,7 @@ class AdvanceClock:
 
     step: float
     # Whether a failed step escapes the decision loop, as the legacy loop let one escape: all but
-    # a wait action's own steps, which ran inside execute() and failed the action
-    # (tests/differential/legacy_environment.py LegacyStateReads).
+    # a wait action's own steps, which ran inside execute() and failed the action.
     escapes: bool
 
 

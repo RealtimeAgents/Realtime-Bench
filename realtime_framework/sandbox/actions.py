@@ -76,7 +76,7 @@ class Execution:
     their Execute with it (evaluation/shell.py, env_lanes.py)."""
 
     # "applied", or "failed" with its rejection or its error; the legacy loop's environment also
-    # answers "wait" for the WAIT it runs (tests/differential/legacy_environment.py).
+    # answers "wait" for the WAIT it runs.
     status: str
     result: Any = None  # the execution record; {"error"} for a failed action
     coordinate_trace: Any = None  # the guest's, for an applied action the guest ran

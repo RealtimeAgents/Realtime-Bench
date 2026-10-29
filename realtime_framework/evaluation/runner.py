@@ -4,7 +4,7 @@ from __future__ import annotations
 """The decision loop main() runs: run_stream drives one episode on the event kernel's shell
 (evaluation/shell.py) with the run's frame rates, horizon and timing, or a native-streaming
 episode on the streaming shell (evaluation/streaming_shell.py). The turn loop it replaced is kept
-only for the side-by-side runs (tests/differential/legacy_loop.py)."""
+only in the tests, for the side-by-side runs."""
 import traceback as traceback
 
 from realtime_framework.clock import SystemClock

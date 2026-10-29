@@ -39,8 +39,7 @@ answers starts the count over. The kernel keeps the count (kernel/turns.py READ_
 over every read that decides whether the episode is over: ``check_end()``, which answers CheckEnd,
 and on the token clock the reads a key tap makes inside ``execute()``, which the shell passes on as
 ``ActionExecuted.end_checks``. The environment invalidates the run for a failed read on neither
-path; the legacy loop's environment (tests/differential/legacy_environment.py) invalidates the run
-at the first failed read.
+path; the legacy loop's environment invalidates the run at the first failed read.
 """
 
 from __future__ import annotations
@@ -612,7 +611,7 @@ class _Shell:
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
-        the summary's error (tests/differential/legacy_loop.py _run_stream_legacy, main)."""
+        the summary's error."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self.end.loop_error is None:
             self.end.loop_error = failure
@@ -1074,9 +1073,9 @@ class _Shell:
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
         longer holds, so the shell wraps the episode up without it, as the runner wrapped up a loop
-        that raised (tests/differential/legacy_loop.py _run_stream_legacy, _finalize): the
-        call running is interrupted, the snapshot frozen unless it was, the inputs released
-        and the termination record written. A failure on the way is only logged."""
+        that raised: the call running is interrupted, the snapshot frozen unless it was, the
+        inputs released and the termination record written. A failure on the way is only
+        logged."""
         self._escaped(failure)
         # What the environment latched by now came first; a failure during the wrap-up after.
         latched = self.end.latched(self.env)

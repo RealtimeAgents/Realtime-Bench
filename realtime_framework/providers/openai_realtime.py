@@ -271,7 +271,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         can_compact_history_in_place=True,
         interaction_modes=frozenset({"turn_based", "streaming"}),
         # The 1 fps native streaming is designed for, until a smoke test finds the rate the API
-        # keeps up with (docs/streaming_smoke_test.md).
+        # keeps up with.
         max_streaming_fps=1.0,
     )
     deployment = Deployment(
@@ -284,9 +284,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     model_defaults: ClassVar[dict[str, dict]] = {}
     # The API's native-streaming settings: a frame older than the newest retained_frames folds in
     # place, as a turn-based one does. A placeholder, the turn-based visual budget (20 s at
-    # 1 fps), until a smoke test measures what a frame costs against the model's context
-    # (docs/streaming_smoke_test.md). A model YAML's streaming settings replace those they name
-    # (ModelConfig.streaming); a driver holds the values it runs with.
+    # 1 fps), until a smoke test measures what a frame costs against the model's context. A model
+    # YAML's streaming settings replace those they name (ModelConfig.streaming); a driver holds the
+    # values it runs with.
     streaming_settings: ClassVar[dict] = {"retained_frames": 20}
 
     def __init__(self, config, *, clock=None, streaming: bool = False):

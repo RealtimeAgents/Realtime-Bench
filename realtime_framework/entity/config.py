@@ -72,8 +72,8 @@ class EnvironmentBudgetConfig:
     """Overall time budget in seconds of each environment operation (sandbox/budget.py).
 
     The loop's operations are in sandbox/actions.py; the snapshot read at the freeze is in the
-    shells (evaluation/shell.py, evaluation/streaming_shell.py) and the legacy loop
-    (tests/differential/legacy_loop.py). Running past a budget fails the operation and, as a rule,
+    shells (evaluation/shell.py, evaluation/streaming_shell.py) and the legacy loop the tests
+    keep. Running past a budget fails the operation and, as a rule,
     invalidates the run. The exceptions: the guest's refusal of the model's action that comes
     after the action's budget is still a refusal; a state read the kernel counts fails only that
     read, and three failed reads in a row invalidate the run; at the cleanup after the outcome is

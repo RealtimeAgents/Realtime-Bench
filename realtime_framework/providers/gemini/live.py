@@ -273,8 +273,8 @@ class GeminiLiveDriver(SessionLifecycle):
     # session reaches compression_trigger_tokens, the server shortens it to
     # compression_target_tokens, from the start of a user turn, and says nothing of what it
     # removed; the system instruction stays (google-genai SlidingWindow: target_tokens "Should be
-    # < trigger_tokens", which the catalog requires). Placeholders until a smoke test
-    # (docs/streaming_smoke_test.md): a trigger at half the 131,072-token input of these models in
+    # < trigger_tokens", which the catalog requires). Placeholders until a smoke test against the
+    # real API: a trigger at half the 131,072-token input of these models in
     # LiteLLM's model map, and a target at half the trigger, the server's default when none is
     # set. A model YAML's streaming settings replace those they name (ModelConfig.streaming); a
     # driver holds the values it runs with.
@@ -773,8 +773,7 @@ class GeminiLiveDriver(SessionLifecycle):
         trigger goes out, so that the reader takes the reply's first message for it. Client
         content interrupts what the model is generating, which NO_INTERRUPTION does not cover:
         nothing should be generating once the reply before ended and its calls were
-        acknowledged, which only a real session shows (docs/streaming_smoke_test.md, check 4). It
-        holds the session as push_frame does.
+        acknowledged, which only a real session shows. It holds the session as push_frame does.
 
         After a goAway it raises RenewalRequired, as push_frame does, before it writes or starts
         anything, also for a goAway read while it waited for the session: renew() resumes the
