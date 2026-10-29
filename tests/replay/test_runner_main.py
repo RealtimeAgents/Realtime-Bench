@@ -653,11 +653,13 @@ def test_the_failure_the_environment_latched_comes_before_those_main_finds_after
     assert (summary["failure_attribution"], summary["environment_valid"]) == ("environment", False)
 
 
-def test_a_re_evaluation_of_the_same_evaluation_names_the_evaluator(tmp_path, monkeypatch):
+def test_a_re_evaluation_of_the_same_evaluation_keeps_the_failure_found_first(
+    tmp_path, monkeypatch
+):
     """The environment latched the run invalid as the click failed, and the evaluator then said
     its backend was unhealthy: the run is invalid for the environment's failure, found first. A
-    re-evaluation with the very same evaluation makes it invalid for the evaluator's failure, which
-    the new evaluation decides, and keeps the run's list of failures."""
+    re-evaluation with the very same evaluation decides the evaluator's failure alone: the run
+    stays invalid for the environment's, and keeps the run's list of failures."""
     clock = FakeClock(1_000_000.0)
     guest = FailingActionGuest()
     summary = run_main(
@@ -672,13 +674,11 @@ def test_a_re_evaluation_of_the_same_evaluation_names_the_evaluator(tmp_path, mo
     )  # fmt: skip
     assert [(r["category"], r["reason"]) for r in summary["invalid_runs"]] == found
     replaced = _reevaluated(tmp_path / "run", summary["verification"], monkeypatch)
-    assert (replaced["run_status"], replaced["invalid_run"]["reason"]) == (
-        "invalid", "evaluation_backend_unhealthy",
+    assert replaced["invalid_run"] == summary["invalid_run"]
+    assert (replaced["run_status"], replaced["failure_attribution"]) == ("invalid", "environment")
+    assert (replaced["error_category"], replaced["error_reason"]) == (
+        "environment", "action_execution_failed",
     )  # fmt: skip
-    assert (replaced["failure_attribution"], replaced["error_category"]) == (
-        "evaluator",
-        "evaluator",
-    )
     assert (replaced["stop_reason"], replaced["solved"], replaced["environment_valid"]) == (
         "invalid_run", None, False,
     )  # fmt: skip

@@ -244,11 +244,72 @@ def test_a_re_evaluation_scores_a_run_invalid_for_its_evaluator_alone():
     assert (experimental.run_status, experimental.stop_reason) == ("experimental", "invalid_run")
 
 
-def test_a_re_evaluation_not_safe_to_score_invalidates_the_run_for_the_evaluator():
-    unhealthy = {**HEALTHY, "ok": False}
-    conclusion = reporting.conclude_reevaluation(_summary(invalid_run=ENVIRONMENT), unhealthy)
-    assert conclusion.invalid_run == reporting.evaluator_failure(unhealthy)
+UNHEALTHY = {**HEALTHY, "ok": False}
+
+
+@pytest.mark.parametrize(
+    "found",
+    [[EVALUATOR, ENVIRONMENT], [ENVIRONMENT, EVALUATOR]],
+    ids=["evaluator first", "environment first"],
+)
+def test_a_re_evaluation_not_safe_to_score_keeps_a_failure_not_the_evaluator_s(found):
+    """A re-evaluation not safe to score leaves the run invalid for the first failure that was
+    not the evaluator's, whichever the run found first: the new evaluation decides the
+    evaluator's failure alone."""
+    summary = _summary(invalid_run=found[0], invalid_runs=found)
+    conclusion = reporting.conclude_reevaluation(summary, UNHEALTHY)
+    assert (conclusion.invalid_run, conclusion.failure_attribution) == (ENVIRONMENT, "environment")
     assert (conclusion.run_status, conclusion.solved) == ("invalid", None)
+
+
+def test_a_re_evaluation_not_safe_to_score_invalidates_a_run_with_no_other_failure():
+    """Without a failure that was not the evaluator's, or with only an empty record, a
+    re-evaluation not safe to score invalidates the run for the evaluator."""
+    for summary in (_summary(invalid_run=EVALUATOR), _summary(), _summary(invalid_run={})):
+        conclusion = reporting.conclude_reevaluation(summary, UNHEALTHY)
+        assert conclusion.invalid_run == reporting.evaluator_failure(UNHEALTHY)
+        assert (conclusion.run_status, conclusion.solved) == ("invalid", None)
+
+
+def _reevaluated_again(run_dir, monkeypatch, capsys, evaluation: dict) -> dict:
+    """reevaluate --replace-summary once more, on the summary the last one wrote."""
+    monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (evaluation, {}))
+    monkeypatch.setattr(sys, "argv", ["reevaluate", str(run_dir), "--replace-summary"])
+    reporting.reevaluate_main()
+    capsys.readouterr()
+    return json.loads((run_dir / "run_summary.json").read_text())
+
+
+def test_re_evaluations_in_turn_keep_a_run_invalid_for_its_environment(
+    tmp_path, monkeypatch, capsys
+):
+    """A run invalid for its environment alone, re-evaluated in turn not safe to score, healthy,
+    and the same again: each keeps it invalid for its environment. None writes an evaluator's
+    failure over the environment's, which a later healthy one would then clear."""
+    replaced, _ = _reevaluated(
+        tmp_path, monkeypatch, capsys, _summary(invalid_run=ENVIRONMENT), UNHEALTHY
+    )
+    seen = [replaced["invalid_run"]]
+    for evaluation in (HEALTHY, UNHEALTHY, UNHEALTHY, HEALTHY):
+        replaced = _reevaluated_again(tmp_path / "run", monkeypatch, capsys, evaluation)
+        seen.append(replaced["invalid_run"])
+    assert seen == [ENVIRONMENT] * 5
+    assert (replaced["run_status"], replaced["failure_attribution"]) == ("invalid", "environment")
+
+
+def test_re_evaluations_in_turn_decide_a_run_invalid_for_its_evaluator_alone(
+    tmp_path, monkeypatch, capsys
+):
+    """A run invalid for its evaluator alone follows each new evaluation."""
+    replaced, _ = _reevaluated(
+        tmp_path, monkeypatch, capsys, _summary(invalid_run=EVALUATOR), UNHEALTHY
+    )
+    statuses = [replaced["run_status"]]
+    for evaluation in (HEALTHY, UNHEALTHY, HEALTHY):
+        statuses.append(
+            _reevaluated_again(tmp_path / "run", monkeypatch, capsys, evaluation)["run_status"]
+        )
+    assert statuses == ["invalid", "scored", "invalid", "scored"]
 
 
 def test_a_re_evaluation_reads_an_empty_or_missing_record_as_no_failure():

@@ -867,12 +867,12 @@ def conclude(failures, evaluation=None, *, benchmark_eligible=None, stop_reason=
 def conclude_reevaluation(summary: dict, evaluation) -> Conclusion:
     """How a finished run concludes once its saved state is evaluated again (reevaluate_main),
     from its run summary as written, by this runner or an earlier one. The new evaluation decides
-    the evaluator's failures alone: one not safe to score invalidates the run for the
-    evaluator, and otherwise the run stays invalid for the first failure that was not the
-    evaluator's, from the failures the summary lists or its invalid run when it found only one.
-    A record there that names no failure, such as an empty one, leaves the run counting and
-    stands as its invalid run. The summary says whether the run may count, read only when it
-    does, and how its loop stopped."""
+    the evaluator's failures alone: the run stays invalid for the first failure that was not the
+    evaluator's, from the failures the summary lists or its invalid run when it found only one,
+    whatever the new evaluation says, and is otherwise invalid for the evaluator when the new
+    evaluation is not safe to score. A record there that names no failure, such as an empty one,
+    leaves the run counting and stands as its invalid run. The summary says whether the run may
+    count, read only when it does, and how its loop stopped."""
     persistent = next(
         (
             prior
@@ -881,7 +881,7 @@ def conclude_reevaluation(summary: dict, evaluation) -> Conclusion:
         ),
         None,
     )
-    invalid_run = evaluator_failure(evaluation) or persistent
+    invalid_run = persistent if persistent else evaluator_failure(evaluation) or persistent
     return _concluded(
         invalid_run,
         (invalid_run,) if invalid_run else (),
