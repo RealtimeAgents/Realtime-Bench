@@ -495,20 +495,30 @@ def test_audio_without_an_audio_token_breakdown_fails_the_reply():
     assert asyncio.run(run()) == "Gemini returned audio without an AUDIO response token breakdown"
 
 
-def test_a_total_equal_to_the_prompt_is_a_zero_response_whatever_the_thoughts():
-    """The usage of a turn that thought and then spoke its action instead of calling a function
-    (Gemini 3.1 Flash Live, rt_room_move_maintenance decision 20, 10-28): the server's total leaves
-    the thoughts out and protobuf omits the zero response count. Subtracting the thoughts from the
-    zero residual made the response negative and voided the episode."""
-    usage = live.GeminiLiveDriver._usage_dict(
-        {"promptTokenCount": 29733, "totalTokenCount": 29733, "thoughtsTokenCount": 1101}
-    )
+@pytest.mark.parametrize(
+    "raw",
+    [
+        # Gemini 3.1 Flash Live, rt_room_move_maintenance decision 20 (10-28): a turn that
+        # thought and then spoke its action; the total leaves the thoughts out. Deriving the
+        # response as total - prompt - thoughts made it negative and voided the episode.
+        {"promptTokenCount": 29733, "totalTokenCount": 29733, "thoughtsTokenCount": 1101},
+        # Gemini 3.8 Live extended thinking (10-02, gh_doomsday_kitchen decision 2): its total
+        # counts the thoughts, 13046 + 45. With no tool-use count reported, the response was
+        # taken as not derivable and the episode voided.
+        {"promptTokenCount": 13046, "totalTokenCount": 13091, "thoughtsTokenCount": 45},
+    ],
+    ids=["total-without-thoughts", "total-with-thoughts"],
+)
+def test_an_omitted_response_count_is_zero(raw):
+    """Protobuf omits a zero count, so a usage with no response count reports a zero response,
+    whether or not the server's total counts the thoughts, which differs between models."""
+    usage = live.GeminiLiveDriver._usage_dict(raw)
     assert (
         usage["input_tokens"],
         usage["output_tokens"],
         usage["visible_output_tokens"],
         usage["native_response_tokens_source"],
-    ) == (29733, 1101, 0, "total_minus_prompt")
+    ) == (raw["promptTokenCount"], raw["thoughtsTokenCount"], 0, "omitted_zero")
 
 
 def realtime_input_with(key: str):

@@ -83,7 +83,7 @@ def interrupted_before_output(prompt_tokens: int) -> list[dict]:
     LiveServerContent.generation_complete). The turnComplete carries the usage of the prompt
     alone, the terminal usage the driver reads from that message (providers/gemini/live.py
     GeminiLiveDriver._events); protobuf JSON omits the zero response count, which the driver
-    derives from the total (live.py GeminiLiveDriver._usage_dict)."""
+    reads as zero (live.py GeminiLiveDriver._usage_dict)."""
     usage = {"promptTokenCount": prompt_tokens, "totalTokenCount": prompt_tokens}
     return [
         {"serverContent": {"interrupted": True}},
