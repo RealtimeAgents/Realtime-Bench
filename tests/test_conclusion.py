@@ -38,7 +38,7 @@ def _reevaluated(tmp_path, monkeypatch, capsys, summary: dict, evaluation: dict)
     evaluation stubbed: the summary it writes and the line it prints, which says what the
     summary says."""
     run_dir = tmp_path / "run"
-    run_dir.mkdir()
+    run_dir.mkdir(parents=True)
     (run_dir / "run_summary.json").write_text(json.dumps(summary))
     monkeypatch.setattr(reporting, "reeval", lambda run_dir, **options: (evaluation, {}))
     monkeypatch.setattr(sys, "argv", ["reevaluate", str(run_dir), "--replace-summary"])
@@ -373,3 +373,19 @@ def test_a_re_evaluation_of_a_summary_without_a_termination_record(tmp_path, mon
     replaced, _ = _reevaluated(tmp_path, monkeypatch, capsys, summary, HEALTHY)
     assert (replaced["solved"], replaced["task_success_rate"]) == (True, 1.0)
     assert replaced["normalized_time_to_success"] is None
+
+
+@pytest.mark.parametrize("evaluation", [HEALTHY, UNHEALTHY], ids=["healthy", "not safe to score"])
+def test_a_re_evaluation_keeps_the_failures_the_run_found(
+    tmp_path, monkeypatch, capsys, evaluation
+):
+    """invalid_runs is the run's own record of the failures it found, which a re-evaluation
+    keeps as written, though the failure it leaves the run invalid for is no longer the first;
+    a summary that listed none lists none."""
+    found = [EVALUATOR, ENVIRONMENT]
+    listed = _summary(invalid_run=EVALUATOR, invalid_runs=found)
+    replaced, _ = _reevaluated(tmp_path / "listed", monkeypatch, capsys, listed, evaluation)
+    assert (replaced["invalid_run"], replaced["invalid_runs"]) == (ENVIRONMENT, found)
+    alone = _summary(invalid_run=ENVIRONMENT)
+    replaced, _ = _reevaluated(tmp_path / "alone", monkeypatch, capsys, alone, evaluation)
+    assert "invalid_runs" not in replaced
