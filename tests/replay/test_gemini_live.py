@@ -37,7 +37,12 @@ import realtime_framework.entity.model as model_module
 import realtime_framework.providers.registry as catalog
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME, ModelConfig
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
+from realtime_framework.entity.model import (
+    ARCHIVED_ACTION_LEDGER_HEADER,
+    QUOTA_EXHAUSTED,
+    TransportFailureError,
+)
+from realtime_framework.evaluation.agent_trace import close_agent_trace
 from realtime_framework.providers.gemini.live import LIVE_OPTIONS
 
 from . import baseline
@@ -789,6 +794,51 @@ def test_a_repair_whose_rebuild_is_closed_transiently_keeps_the_generation(live_
     assert result["raw"] == scenario[0].reply
     assert result["action"].action_type.value == "click"
     assert result["realtime_runtime"]["history_sync"]["disposition"] == "broken"
+
+
+def test_a_first_connect_refused_for_the_quota_fails_as_an_exhausted_quota(live_env, tmp_path):
+    """The server closes the episode's first connection at its setup with 1011 for an exhausted
+    quota, as on the workstation (trace-review pbglive 4.1). The connect makes its one attempt,
+    and initialize() raises its failure as the driver classifies a turn's (live.py
+    GeminiLiveDriver.classify_transport_error), which the runner invalidates the run for, not as
+    the bare APIError it took for its own run_exception."""
+    preset = TOOL_TRANSCRIPT
+    quota = "You exceeded your current quota, please check your plan and billing details."
+    agents = []
+    with LiveStub(
+        [],
+        cert_dir=tmp_path / "tls",
+        api_key=API_KEY,
+        history_format=preset.history_format,
+        ack_options=preset.ack_options,
+        connection_closes={1: (1011, quota)},
+    ) as stub:
+        live_env.setenv("GOOGLE_GEMINI_BASE_URL", stub.base_url)
+        live_env.setenv("SSL_CERT_FILE", str(stub.cert_file))
+        try:
+            with pytest.raises(TransportFailureError) as raised:
+                build_episode(
+                    catalog_config(preset.model),
+                    tmp_path / "run",
+                    task=ReplayTask(),
+                    instruction=TASK_INSTRUCTION,
+                    model_key=preset.model,
+                    clock_mode="token",
+                    tokens_per_frame=TOKENS_PER_FRAME,
+                    max_ticks=MAX_TICKS,
+                    before_initialize=agents.append,
+                )
+        finally:
+            # What Episode.finish closes; build_episode raised before it made the episode.
+            for agent in agents:
+                agent.close()
+                close_agent_trace(agent._trace)
+                agent._trace.trace.close()
+    failure = raised.value.failure
+    assert (failure.kind, failure.invalid_reason) == (QUOTA_EXHAUSTED, "provider_quota_exhausted")
+    assert quota in str(raised.value.__cause__)
+    assert {event["conn"] for event in stub.events} == {1}
+    assert stub.violations == []
 
 
 def test_a_call_its_function_schema_rejects_executes_wait(live_env, tmp_path):
