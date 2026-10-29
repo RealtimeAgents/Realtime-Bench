@@ -616,31 +616,6 @@ def test_a_reevaluation_compares_the_model_input_rate(tmp_path, monkeypatch):
     assert json.loads(summary.read_text())["solved"] is True
 
 
-@pytest.mark.parametrize(
-    "rates", [["--fps", "2", "--model-input-fps", "1"], ["--fps", "1"]], ids=["2/1", "1"]
-)
-def test_identity_main_prints_the_hash_runner_main_records(tmp_path, monkeypatch, capsys, rates):
-    """identity_main prints the runtime-config hash runner.main() records in run_config.json for
-    the same arguments, with neither the protocol, the reasoning effort, the model-input rate
-    nor the desktop's graphics mode and recording encoder given: both take the runner's
-    defaults (config.apply_run_defaults)."""
-    from realtime_framework.evaluation import runner
-    from realtime_framework.evaluation.config import identity_main
-
-    argv = ["--model", GEMINI, "--task", WEB, "--clock", "wall", "--max-minutes", "5", *rates]
-    _main_in_process(
-        monkeypatch, tmp_path, argv, lambda adapter, env, **loop: EpisodeEnd().result(env, [])
-    )
-    for name in ("SANDBOX_GRAPHICS_MODE", "SCREEN_RECORDING_ENCODER"):
-        monkeypatch.delenv(name)
-    assert identity_main(argv) == 0
-    printed = capsys.readouterr().out.strip()
-    with pytest.raises(SystemExit):  # the stand-in task has no snapshot to score
-        runner.main()
-    recorded = json.loads((tmp_path / "run" / "run_config.json").read_text())
-    assert printed == recorded["runtime_config_hash"]
-
-
 def test_the_hash_a_local_report_expects_is_the_one_the_run_records(tmp_path, monkeypatch):
     """runner.main() with --report-root records the identity its report expects before the run
     (reporting.prepare_episode_report) from its arguments as it runs them: without --protocol

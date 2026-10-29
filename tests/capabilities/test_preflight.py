@@ -4,8 +4,8 @@ One test per condition, asserting the exact message each check produced before t
 collected in providers/preflight.py (recorded on 8319a10, unchanged on 9ada3b0); the context-policy
 checks came later and are pinned as written. The runner's own rules run in check_episode, which
 the runner (evaluation/runner.py main) and the Harbor trial worker apply with their argparse
-checks; those and the checks of identity_main are exercised through their main functions, which
-fail before any container or network is used.
+checks; those are exercised through their main functions, which fail before any container or
+network is used.
 """
 
 from __future__ import annotations
@@ -145,8 +145,8 @@ def test_wall_clock_only_trial(capsys):
     )
 
 
-# A model-input rate above the environment rate (runner, run plans, effective_run_config,
-# identity_main, Harbor agent options and trial worker)
+# A model-input rate above the environment rate (runner, run plans, effective_run_config, Harbor
+# agent options and trial worker)
 
 FASTER_MODEL_INPUT = "The model-input frame rate (2 fps) exceeds the environment frame rate (1 fps)"
 
@@ -170,17 +170,6 @@ def test_faster_model_input_run_config():
             model_config=preset("my-model", fps=2.0), fps=1.0, max_minutes=5.0,
             protocol="wall-clock", think_budget_s=None, per_move_cap_s=None,
         ),
-        FASTER_MODEL_INPUT,
-    )
-
-
-def test_faster_model_input_identity():
-    from realtime_framework.evaluation.config import identity_main
-
-    fails(
-        lambda: identity_main(["--model", "my-model", "--task", WEB, "--fps", "1",
-                               "--model-input-fps", "2", "--max-minutes", "5",
-                               "--protocol", "wall-clock", "--clock", "wall"]),
         FASTER_MODEL_INPUT,
     )
 
@@ -210,7 +199,7 @@ def test_faster_model_input_trial(capsys):
     )
 
 
-# Finite token clock (runner and identity_main argparse)
+# Finite token clock (runner argparse)
 
 FINITE_BUDGET = "adapter 'chat_completions' cannot report complete usage for a finite token clock"
 
@@ -220,18 +209,6 @@ def test_finite_budget_runner(capsys):
         capsys,
         runner_main("--model", "my-model", "--task", WEB, "--clock", "token",
                     "--tokens-per-frame", "64"),
-        FINITE_BUDGET,
-    )
-
-
-def test_finite_budget_identity(capsys):
-    from realtime_framework.evaluation.config import identity_main
-
-    usage_error(
-        capsys,
-        lambda: identity_main(["--model", "my-model", "--task", WEB, "--fps", "1",
-                               "--max-minutes", "5", "--protocol", "time-aware-token-v1",
-                               "--clock", "token", "--tokens-per-frame", "64"]),
         FINITE_BUDGET,
     )
 
@@ -701,19 +678,6 @@ def test_streaming_trial(monkeypatch, capsys):
     )
 
 
-def test_streaming_identity(monkeypatch):
-    from realtime_framework.evaluation.config import identity_main
-
-    undeclared(monkeypatch, "gemini_live")
-
-    fails(
-        lambda: identity_main(["--model", "gemini-live", "--task", WEB, "--fps", "1",
-                               "--max-minutes", "5", "--protocol", "wall-clock", "--clock",
-                               "wall", "--interaction-mode", "streaming"]),
-        "The gemini_live API does not support streaming",
-    )
-
-
 def test_the_live_apis_are_the_session_encoders():
     """The APIs the message names are the drivers that are session encoders."""
     drivers = {api: catalog.adapter_class(api) for api in catalog.APIS}
@@ -836,19 +800,6 @@ def test_streaming_refuses_deliberation_caps_runner(capsys, caps, message):
     )
 
 
-@pytest.mark.parametrize("caps, message", CAPS, ids=CAP_IDS)
-def test_streaming_refuses_deliberation_caps_identity(capsys, caps, message):
-    from realtime_framework.evaluation.config import identity_main
-
-    usage_error(
-        capsys,
-        lambda: identity_main(["--model", "gemini-live", "--task", WEB, "--fps", "1",
-                               "--max-minutes", "5", "--protocol", "wall-clock", "--clock",
-                               "wall", "--interaction-mode", "streaming", *caps]),
-        message,
-    )
-
-
 @pytest.mark.parametrize(
     "think_budget_s, per_move_cap_s, message",
     [(5.0, None, CAPS[0][1]), (None, 2.0, CAPS[1][1]), (5.0, 2.0, CAPS[2][1])],
@@ -919,31 +870,6 @@ def test_streaming_rules_trial(capsys, argv, message):
     usage_error(
         capsys,
         lambda: main([*argv, "--task", WEB, "--interaction-mode", "streaming", "--dry-run"]),
-        message,
-    )
-
-
-@pytest.mark.parametrize(
-    "argv, message",
-    [
-        (["--model", "my-model", "--fps", "1", "--clock", "wall"], NOT_LIVE),
-        (["--model", "gemini-live", "--fps", "1", "--clock", "token", "--tokens-per-frame", "64"],
-         STREAMING_CLOCK),
-        (["--model", "gemini-live", "--fps", "1", "--clock", "token", "--tokens-per-frame",
-          "unlimited"], STREAMING_CLOCK),
-        # The runner's default clock too (runner.py main).
-        (["--model", "gemini-live", "--fps", "1", "--tokens-per-frame", "unlimited"],
-         STREAMING_CLOCK),
-        (["--model", "gemini-live", "--fps", "2", "--clock", "wall"], STREAMING_CAP),
-    ],
-    ids=["not-live", "token-clock", "pause-clock", "default-clock", "frame-rate-cap"],
-)
-def test_streaming_rules_identity(argv, message):
-    from realtime_framework.evaluation.config import identity_main
-
-    fails(
-        lambda: identity_main([*argv, "--task", WEB, "--max-minutes", "5", "--protocol",
-                               "wall-clock", "--interaction-mode", "streaming"]),
         message,
     )
 

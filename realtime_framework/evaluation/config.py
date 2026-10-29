@@ -19,9 +19,7 @@ def load_yaml(path) -> dict:
 # Benchmark
 """Load and validate the maintained top-level benchmark configuration."""
 
-import argparse as argparse
 import re as re
-import sys as sys
 
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import run_spec
@@ -296,16 +294,6 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
     }
 
 
-def benchmark_main(argv=None) -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
-    args = parser.parse_args(argv)
-    import json
-
-    print(json.dumps(load_benchmark(args.config), indent=2))
-    return 0
-
-
 # Identity
 """Deterministic identities for the executable model harness and one effective run policy."""
 
@@ -320,8 +308,6 @@ from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.evaluation.run_spec import DEFAULT_MODE
-from realtime_framework.evaluation.run_spec import INTERACTION_MODES
-from realtime_framework.evaluation.run_spec import PROTOCOLS
 from realtime_framework.evaluation.run_spec import RunSpec
 from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
@@ -721,7 +707,7 @@ def run_spec_config(spec: RunSpec, model_config) -> dict:
 
 def runner_run_spec(args) -> RunSpec:
     """The run options of the runner's arguments ``args`` (runner.py _parser), with the runner's
-    defaults (run_spec.py ENTRY_DEFAULTS); identity_main takes the same options."""
+    defaults (run_spec.py ENTRY_DEFAULTS)."""
     return run_spec(
         "runner",
         clock_mode=args.clock,
@@ -742,8 +728,8 @@ def apply_run_defaults(args) -> None:
     (runner_run_spec), as runner.main() runs and records the run: the model's reasoning effort
     (its catalog default, "low" for a raw backend id) and, in the environment the runtime-config
     hash reads (_RUNTIME_ENV_KEYS), the desktop's graphics mode and recording encoder. The hash
-    the run's report expects (reporting.prepare_episode_report) and the one identity_main prints
-    are then the one the run records."""
+    the run's report expects (reporting.prepare_episode_report) is then the one the run
+    records."""
     import realtime_framework.providers.registry as catalog
 
     if catalog.has(args.model):
@@ -753,71 +739,3 @@ def apply_run_defaults(args) -> None:
         args.reasoning_effort = args.reasoning_effort or "low"
     os.environ["SANDBOX_GRAPHICS_MODE"] = args.graphics_mode
     os.environ["SCREEN_RECORDING_ENCODER"] = args.recording_encoder
-
-
-def identity_main(argv=None) -> int:
-    """Print the runtime-config hash runner.main() records for the same arguments."""
-    import argparse as argparse
-
-    parser = argparse.ArgumentParser(description=identity_main.__doc__)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--seed")
-    parser.add_argument("--fps", type=float, required=True)
-    parser.add_argument("--model-input-fps", type=float, help="default: --fps")
-    parser.add_argument("--interaction-mode", choices=INTERACTION_MODES)
-    parser.add_argument("--max-minutes", type=float, required=True)
-    parser.add_argument("--protocol")
-    parser.add_argument("--think-budget-s", type=float)
-    parser.add_argument("--per-move-cap-s", type=float)
-    parser.add_argument("--clock", choices=tuple(PROTOCOLS))
-    parser.add_argument("--reasoning-effort")
-    parser.add_argument("--tokens-per-frame")
-    parser.add_argument(
-        "--graphics-mode",
-        choices=("cpu", "gpu"),
-        default=os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
-    )
-    parser.add_argument(
-        "--recording-encoder",
-        choices=("cpu", "gpu"),
-        default=os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
-    )
-    args = parser.parse_args(argv)
-    apply_run_defaults(args)
-    try:
-        spec = runner_run_spec(args)
-    except ValueError as exc:
-        parser.error(str(exc))
-
-    import realtime_framework.providers.registry as catalog
-    import realtime_tasks.registry as registry
-
-    registry.get(args.task)  # validate membership; task-local deliberation caps are not inherited
-    entry = catalog.get(args.model)
-    try:
-        catalog.validate_reasoning_effort(args.model, args.reasoning_effort)
-    except ValueError as exc:
-        parser.error(str(exc))
-    from realtime_framework.providers.preflight import UnsupportedTokenBudget, check_token_budget
-
-    try:
-        check_token_budget(
-            entry.adapter_type, clock_mode=spec.clock_mode, tokens_per_frame=spec.tokens_per_frame
-        )
-    except UnsupportedTokenBudget as exc:
-        parser.error(str(exc))
-    config = catalog.to_model_config(
-        args.model, fps=spec.model_input_fps, reasoning_effort=args.reasoning_effort
-    )
-    print(config_fingerprint(run_spec_config(spec, config)))
-    return 0
-
-
-if __name__ == "__main__":
-    import sys
-
-    if "--model" in sys.argv and "--task" in sys.argv:
-        identity_main()
-    else:
-        raise SystemExit(benchmark_main())

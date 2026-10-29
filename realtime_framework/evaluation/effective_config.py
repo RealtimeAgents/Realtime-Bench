@@ -9,8 +9,6 @@ Entry points (each with its own defaults):
   loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
   job file). Harbor resolves the trial (evaluation/harbor.py) and starts ``_trial``.
-- ``identity``: ``python -m realtime_framework.evaluation.config`` with the runner's defaults; it
-  prints the hash the runner should record.
 
 Each process an entry point starts is reproduced in a fresh interpreter with the environment it
 would receive, so values read at import are the values that process would use. The runner process
@@ -586,32 +584,10 @@ def _probe_harbor(request: dict) -> dict:
     return {"models": results, "attribution": attribution}
 
 
-def _probe_identity(request: dict) -> dict:
-    """The hash identity_main prints (evaluation/config.py), with the runner's defaults."""
-    from realtime_framework.evaluation.config import identity_main
-
-    argparse.ArgumentParser.error = _reject
-    results = {}
-    for model, task, argv in request["runs"]:
-        _fresh_catalog()
-        record = {"error": None}
-        with _restored_environ():
-            output = io.StringIO()
-            try:
-                with contextlib.redirect_stdout(output):
-                    identity_main(argv)
-                record["runtime_config_hash"] = output.getvalue().strip()
-            except (_Rejected, SystemExit, Exception) as exc:
-                record["error"] = _error(exc)
-        results.setdefault(model, {})[task] = record
-    return {"models": results}
-
-
 _PROBES = {
     "runner": _probe_runner,
     "trial": _probe_trial,
     "harbor": _probe_harbor,
-    "identity": _probe_identity,
 }
 
 
@@ -658,7 +634,6 @@ def default_entries() -> list[str]:
         "trial",
         "harbor",
         *(f"harbor:{path.relative_to(ROOT).as_posix()}" for path in files),
-        "identity",
     ]
 
 
@@ -725,13 +700,6 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
 
 def _entry(entry: str, *, environ, env_file, models, tasks, scratch) -> dict:
     shell = {name: "shell" for name in environ}
-    if entry == "identity":
-        runs = [
-            (model, task, ["--model", model, "--task", task, "--fps", "1.0",
-                           "--max-minutes", "5.0", "--protocol", "time-aware-token-v1"])
-            for model, task in _cells(models, tasks)
-        ]
-        return _probe("identity", environ, {"runs": runs}, scratch=scratch)
     if entry == "runner":
         runs = [(model, task, ["--model", model, "--task", task])
                 for model, task in _cells(models, tasks)]

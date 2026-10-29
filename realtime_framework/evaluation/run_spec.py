@@ -1,12 +1,11 @@
 """The options one episode runs with, each declared, defaulted and checked here alone.
 
-Every entry point builds a RunSpec from what it is given: the runner's command line and
-identity_main's, which takes the same options (evaluation/runner.py, evaluation/config.py), the
-Harbor trial worker's (evaluation/_trial.py), Harbor's agent options (evaluation/harbor.py
-RealtimeBenchOptions) and a run plan's runtime (evaluation/config.py load_benchmark). An option an
-entry point is not given takes that entry point's default (ENTRY_DEFAULTS), else the field's. The
-rules that read the model's API, its driver's declarations, are the pre-run checks'
-(providers/preflight.py), and stay there.
+Every entry point builds a RunSpec from what it is given: the runner's command line
+(evaluation/runner.py), the Harbor trial worker's (evaluation/_trial.py), Harbor's agent options
+(evaluation/harbor.py RealtimeBenchOptions) and a run plan's runtime (evaluation/config.py
+load_benchmark). An option an entry point is not given takes that entry point's default
+(ENTRY_DEFAULTS), else the field's. The rules that read the model's API, its driver's
+declarations, are the pre-run checks' (providers/preflight.py), and stay there.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ INTERACTION_MODES = ("turn_based", "streaming")
 PROTOCOLS = {"wall": "wall-clock", "token": "time-aware-token-v1"}
 
 # The defaults that differ between entry points, on purpose. Run directly, the runner takes the
-# token clock at the default B, as identity_main does, which prints the hash the runner records.
+# token clock at the default B.
 # The trial worker, and Harbor's agent options and run plans, from which Harbor starts it, take the
 # wall clock, and an unlimited B where the token clock is asked for without one; a run plan on the
 # token clock names its B (load_benchmark).

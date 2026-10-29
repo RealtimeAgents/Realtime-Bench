@@ -5,8 +5,8 @@ compat flags, option tables, the optional methods it overrides), the configurati
 check_context_policy, the context policy the run resolves. Every entry point keeps the rules it
 applied before the checks were collected here:
 
-- runner argparse (evaluation/runner.py) and identity_main (evaluation/config.py):
-  check_token_budget and check_streaming_options, which effective_run_config applies too;
+- runner argparse (evaluation/runner.py): check_token_budget and check_streaming_options, which
+  effective_run_config applies too;
 - run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
   (check_frame_rates, check_wall_clock, check_interaction_mode);
 - Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions): check_frame_rates;
