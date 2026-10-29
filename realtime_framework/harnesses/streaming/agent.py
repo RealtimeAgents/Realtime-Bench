@@ -2,8 +2,10 @@
 StreamingKernelAgent) for a live session that frames go into as they are captured, and whose
 replies hand their actions over as they come off the wire (phase2.md, native streaming).
 
-The agent keeps the content blocks the session should hold, in the order they came to it, and
-gives every push and connection operation the view they make (history.py), so that a session
+The agent tells its history (history.py) what became of the session's content: each frame that
+went in, and each reply's start, the start of its output, its acceptance or giving up, and each
+outcome committed. The history keeps the blocks the session should hold, in the order they came
+to it, and the agent gives every push and connection operation the view they make, so that a session
 rebuilt from the view holds what the live one did. Every driver operation runs on the agent's one
 execution thread; the session's lifecycle is the driver's (providers/session_lifecycle.py). Each
 push and each reply readies the session first, and renews the connection the provider asked to
@@ -21,8 +23,8 @@ A push enters the frame in the frame table, which draws its number on the screen
 driver put it into the session records it as sent and confirmed when the driver's receipt says it
 was written and confirmed, or its confirmation unknown where the protocol confirms no frame
 (decision N43). A frame whose push failed keeps its number and stays out of the view (frames.py).
-As a turn-based history does, the agent holds a screenshot only while the view keeps it, and a
-frame only while a reply may start on it or is on it.
+As a turn-based history does, the history holds a screenshot only while the view keeps it, and
+the agent a frame only while a reply may start on it or is on it.
 
 A reply starts on the view. Each function call is parsed as its message is read, against the frame
 it names, and posted to the kernel with the time its message came off the wire, in semantic
@@ -37,9 +39,8 @@ before it is used again, and a function call reply must complete.
 
 An accepted reply's output joins the view where the output began, so that a rebuilt session shows
 the model its actions before their results; so does the output a reply had when it was given up,
-once an action of it ran, and a reply given up none of whose actions ran adds nothing (decision
-25). Each outcome the kernel commits joins it as its execution feedback (feedback.py), where the
-policy places it.
+once an action of it ran (decision 25): the history places it. Each outcome the kernel commits
+joins the view as its execution feedback (feedback.py), where the policy places it.
 """
 
 from __future__ import annotations
@@ -49,7 +50,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from functools import partial
 
 from realtime_framework.clock import SystemClock
@@ -115,9 +116,9 @@ from realtime_framework.harnesses.default.harness import (
 from realtime_framework.harnesses.default.request import system_block, tool_exchange_block
 from realtime_framework.harnesses.streaming.feedback import RAN, execution_feedback
 from realtime_framework.harnesses.streaming.history import (
+    StreamingHistory,
     feedback_block,
     frame_block,
-    history_view,
     output_block,
 )
 from realtime_framework.providers.registry import adapter_class
@@ -163,8 +164,7 @@ class _Pushed:
 
 @dataclass
 class _Reply:
-    """One reply, from its StartGeneration until the kernel accepts or discards it, and, given
-    up, until its output joins the view."""
+    """One reply, from its StartGeneration until the kernel accepts or discards it."""
 
     generation: int
     decision: int
@@ -188,12 +188,7 @@ class _Reply:
     # None where nothing was resolved against a frame.
     grounding: list[dict] = field(default_factory=list)
     based_on: str | None = None  # the observation id of the frame its first action names
-    # Where in the blocks its output began, which its output goes to once accepted, or once given
-    # up and an action of it ran (decision 25): before the feedback on its actions and the frames
-    # pushed since. The output of an earlier reply going in before it moves it on.
-    position: int | None = None
-    ran: bool = False  # an action of it ran (feedback.RAN)
-    kept: list[ContentBlock] | None = None  # its output, as it was given up
+    began: bool = False  # its output began, which the history was told (_take)
 
     @property
     def output(self) -> str:
@@ -227,13 +222,8 @@ class NativeStreamingAgent(VisionAgentBase):
         # then gives up, its backoff included, instead of holding the lock close() waits for,
         # and a push that fails then was given up, not failed.
         self._closing = self.clock.event()
-        self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
         self._replies: dict[int, _Reply] = {}  # by the kernel's generation number
-        # The replies whose output may still join the blocks, by decision: from generate() until
-        # accepted, or, given up, until an action of theirs ran, which an action still executing
-        # as its reply was given up reports later.
-        self._unplaced: dict[int, _Reply] = {}
         # The replies on the session: asked for, and not yet accepted, discarded or aborted.
         # Readying the session under one would close its connection, or rebuild the session
         # without its output. Each push waiting for them holds a gate, opened once none is.
@@ -306,14 +296,21 @@ class NativeStreamingAgent(VisionAgentBase):
         # keeps no frame count of its own, as Gemini Live leaves its context to the server, takes
         # the policy's.
         own = "retained_frames" in self.driver.streaming_settings
-        self._retained = self.driver.streaming_settings.get(
+        retained = self.driver.streaming_settings.get(
             "retained_frames", self._context_policy.screenshots_kept
         )
         # The policy item a fold is recorded under.
         self._fold_item = None if own else "screenshots_kept"
+        self._history = StreamingHistory(
+            policy=self._context_policy,
+            system=self._system,
+            retained_frames=retained,
+            answer=self._answer,
+            call=self._call,
+        )
         self._execution.start()
         with self._lock:
-            view = self._view()
+            view = self._history.view()
         with trace_scope(phase="initialize"):
             self._execution.run(self._open(view), timeout=_OPEN_TIMEOUT_S)
 
@@ -322,18 +319,6 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def transport_output_token_cap(self, provider_cap):
         return self.driver.transport_output_token_cap(provider_cap)
-
-    def _view(self, blocks: list[ContentBlock] | None = None) -> CanonicalRequest:
-        """The session ``blocks`` make, the accepted ones by default; the caller holds the
-        lock."""
-        return history_view(
-            self._blocks if blocks is None else blocks,
-            policy=self._context_policy,
-            system=self._system,
-            retained_frames=self._retained,
-            answer=self._answer,
-            call=self._call,
-        )
 
     def _record_session(self, sync, result=None, error=None) -> None:
         """The ``record`` of a session operation (SessionLifecycle), as a turn's: a
@@ -409,7 +394,7 @@ class NativeStreamingAgent(VisionAgentBase):
         async with self._readying:
             self._stop_if_closed()
             with self._lock:
-                view = self._view()
+                view = self._history.view()
                 on_session = bool(self._on_session)
                 if on_session and self._renewal_due():
                     gate = self.clock.event()
@@ -419,7 +404,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 await self._ready(view, renew=True, push=True)
         block = frame_block(pushed.record, pushed.value)
         with self._lock:
-            view = self._view([*self._blocks, block])
+            view = self._history.view(block)
         try:
             receipt = await self.driver.push_frame(pushed.value, view)
         except RenewalRequired:
@@ -442,9 +427,10 @@ class NativeStreamingAgent(VisionAgentBase):
                 self.frames.record_ack_unknown(frame)
             else:
                 self.frames.record_acked(frame, self._wall(receipt.confirmed_at))
-            self._blocks.append(block)
+            folded = self._history.frame_sent(block)
             self._pushed[key] = pushed
-            self._release_folded()
+            if folded is not None:
+                self._record_fold(folded)
         # The kernel's records name the frame by its observation id, the session's by its block:
         # this ties the two, with the row's capture, send and confirmation on one clock
         # (evaluation/reporting.py summarize_streaming).
@@ -470,22 +456,16 @@ class NativeStreamingAgent(VisionAgentBase):
     def _renewal_due(self) -> bool:
         return bool(self.driver.connection_renewal_reason())
 
-    def _release_folded(self) -> None:
-        """Let go of the screenshot of the frame the newest push folded, as a turn-based history
-        folds one (CanonicalTurn.fold_visual), and record the fold: the view folds it already.
-        The caller holds the lock."""
-        frames = [index for index, block in enumerate(self._blocks) if block.kind == "frame"]
-        if len(frames) > self._retained:
-            index = frames[-self._retained - 1]
-            block = self._blocks[index]
-            self._blocks[index] = replace(block, image=None)
-            self._history_changed(
-                "visual_fold",
-                "policy",
-                self._fold_item,
-                retained_frames=self._retained,
-                frames=[{"block": block.id, "observation_id": block.observation_id}],
-            )
+    def _record_fold(self, frame: ContentBlock) -> None:
+        """Record the fold of ``frame``, which the newest push folded and whose screenshot the
+        history let go, as a turn-based fold is recorded. The caller holds the lock."""
+        self._history_changed(
+            "visual_fold",
+            "policy",
+            self._fold_item,
+            retained_frames=self._history.retained_frames,
+            frames=[{"block": frame.id, "observation_id": frame.observation_id}],
+        )
 
     def _retire(self) -> None:
         """Finish the inspection of each frame no reply can start on any more, once the replies
@@ -523,7 +503,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._aborted_early.remove(generation)
                 reply.cancel.set()
             else:
-                self._unplaced[decision] = reply
+                self._history.reply_started(decision, generation)
         started = self.clock.monotonic()
         outcome = "completed"
         try:
@@ -716,7 +696,7 @@ class NativeStreamingAgent(VisionAgentBase):
             self._stop_if_closed()
             while reply.handle is None:
                 with self._lock:
-                    view = self._view()
+                    view = self._history.view()
                 await self._ready(view, renew=True)
                 # Given up while its session was readied, which ensure_ready looks at only as it
                 # reopens or rebuilds the session (SessionLifecycle): asked for then, it would
@@ -782,12 +762,13 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def _take(self, reply: _Reply, event) -> None:
         """One message of the reply, on the execution thread as it is read."""
-        if reply.position is None and (
+        if not reply.began and (
             isinstance(event, FunctionCall)
             or (isinstance(event, TextDelta) and event.channel == "visible")
         ):
+            reply.began = True
             with self._lock:
-                reply.position = len(self._blocks)
+                self._history.output_began(reply.decision)
         if isinstance(event, TextDelta):
             (reply.reasoning if event.channel == "reasoning" else reply.text).append(event.text)
         elif isinstance(event, UsageSnapshot):
@@ -938,7 +919,9 @@ class NativeStreamingAgent(VisionAgentBase):
         with self._lock:
             reply = self._replies.pop(generation)
             self._off(generation)
-            self._place(reply, [] if reply.failed else self._output_blocks(reply))
+            self._history.accepted(
+                reply.decision, [] if reply.failed else self._output_blocks(reply)
+            )
         if reply.failed:
             self._log_reply(reply, "reply_failed")
             return
@@ -971,47 +954,26 @@ class NativeStreamingAgent(VisionAgentBase):
         return [output, *(() if tools is None else (tools,))]
 
     def _give_up(self, reply: _Reply) -> None:
-        """The reply is given up, by its abort or its discard, whichever comes first: its output
-        as it is now joins the view once an action of it ran, and nothing else of it does, so
-        that a session rebuilt from the view shows the model the actions whose results it holds
-        (decision 25). The caller holds the lock."""
-        if reply.kept is None:
-            reply.kept = self._output_blocks(reply)
-        if reply.ran or not reply.kept:
-            self._place(reply, reply.kept)
-
-    def _place(self, reply: _Reply, blocks: list[ContentBlock]) -> None:
-        """The reply's ``blocks`` join the view where its output began, once, moving on where the
-        output of each reply still to join it began, after that place or there and later. The
+        """The reply is given up, by its abort or its discard: the history keeps its output as it
+        is the first time, and lets it join the view once an action of it ran (decision 25). The
         caller holds the lock."""
-        if self._unplaced.pop(reply.decision, None) is None or not blocks:
-            return
-        at = reply.position
-        for offset, block in enumerate(blocks):
-            self._blocks.insert(at + offset, block)
-        for other in self._unplaced.values():
-            if other.position is not None and (
-                other.position > at
-                or (other.position == at and other.generation > reply.generation)
-            ):
-                other.position += len(blocks)
+        self._history.given_up(reply.decision, partial(self._output_blocks, reply))
 
     def commit(self, outcome: Outcome) -> None:
         """Commit: the outcome's feedback joins the view, on the action its call handed over, or
         on the reply when it came to no action. An action of a reply given up that ran brings
         the reply's output in (_give_up)."""
-        with self._lock:
-            reply = self._unplaced.get(outcome.decision)
-            if reply is not None and outcome.status in RAN:
-                reply.ran = True
-                if reply.kept is not None:
-                    self._place(reply, reply.kept)
+        requested = None
+
+        def feedback() -> ContentBlock:
+            nonlocal requested
             key = (outcome.decision, outcome.call_id)
             requested, unknown_mark = self._requested.pop(key, ("none", None))
-            feedback = execution_feedback(outcome, requested, unknown_mark)
-            self._blocks.append(
-                feedback_block(outcome.decision, outcome.call_id, feedback, self.clock.time_ns())
-            )
+            text = execution_feedback(outcome, requested, unknown_mark)
+            return feedback_block(outcome.decision, outcome.call_id, text, self.clock.time_ns())
+
+        with self._lock:
+            self._history.committed(outcome.decision, outcome.status in RAN, feedback)
         self.action_history.append(
             {
                 "decision": outcome.decision,
