@@ -24,9 +24,9 @@ It is sent with this session's ids in place of the placeholders. What the client
 matched against the next client record: a message must equal it once normalized, and the client
 must do it when the clock reads the record's ``at``. A null ``at`` there is not compared.
 A connection whose recording ends without a close may be closed by the client any time after its
-last record: the episode trace, which recordings are converted from, has no closes. One the client
-leaves open is a problem; in a converted recording it is what a connection the server closed
-replays as.
+last record: a recording converted from an episode trace has no closes (from_trace). One the
+client leaves open is a problem; in a converted recording it is what a connection the server
+closed replays as.
 
 Cassettes come two ways (stream-plan 4.19). A hand-written script runs on the fake clock, where
 our side's times are as exact as the script's, so it gives every client record its time. A
@@ -122,14 +122,12 @@ def from_trace(run_dir: Path) -> list[dict]:
     is semantic time; the client's records have none, so only their order is compared. A retried
     run appends attempts; the last one with that record is taken.
 
-    The trace records no handshake (providers/capture.py, its docstring) and no close: the
-    recording connection captures handshake failures, sends and receives only (capture.py
-    async_ws_connection). So a
-    connection opens before its first message, and the cassette has no closes. A session whose
-    server closed a connection converts all the same, into one whose client waits on that
-    connection when it is replayed, which the replay reports as a connection left open; replaying
-    it right needs the trace to record closes. The failed handshakes and sends the trace does
-    record have no cassette form yet and raise.
+    The trace records no handshake (providers/capture.py, its docstring), so a connection opens
+    before its first message. It records each close (capture.py async_ws_connection), which the
+    cassette leaves out: a session whose server closed a connection converts into one whose client
+    waits on that connection when it is replayed, which the replay reports as a connection left
+    open; replaying it right needs the closes converted. The failed handshakes and sends the trace
+    records have no cassette form yet and raise.
     """
     events = [
         json.loads(line)
@@ -155,6 +153,8 @@ def from_trace(run_dir: Path) -> list[dict]:
     records = []
     for message in messages:
         if message["direction"] == "lifecycle":
+            if message["message_type"] == "closed":
+                continue
             raise ValueError(f"no cassette form for a {message['message_type']} record")
         conn = numbers.get(message["connection_id"])
         if conn is None:

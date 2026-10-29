@@ -235,8 +235,8 @@ def test_a_gemini_session_with_audio_in_a_reply_converts_and_its_cursor_follows(
 
 
 def test_a_session_the_server_closed_replays_as_a_connection_left_open(tmp_path):
-    """M3: the trace records no close (providers/capture.py async_ws_connection), so the stub's
-    close in the second reply is not in the cassette. The replayed driver waits for that reply on
+    """M3: the cassette leaves out the closes the trace records (ws_cassette.from_trace), so the
+    stub's close in the second reply is not in it. The replayed driver waits for that reply on
     the open connection until the fake clock's limit. Given up there, it closes the connection as
     its cleanup (openai_session.py run_on_fake_clock), after the connection's last record, which
     a recording without closes allows. A client that never closed it would be reported as having

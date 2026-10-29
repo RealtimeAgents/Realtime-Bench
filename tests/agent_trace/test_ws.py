@@ -164,6 +164,18 @@ def _by_type(messages, direction, message_type) -> list[dict]:
     ]
 
 
+def _closes(events) -> dict[str, dict]:
+    """The close record of each connection, by connection id, in the order they closed."""
+    return {
+        e["payload"]["connection_id"]: e["payload"]
+        for e in events
+        if e["event"] == "SessionMessage" and e["payload"]["message_type"] == "closed"
+    }
+
+
+NORMAL_CLOSE = {"code": 1000, "reason": ""}
+
+
 # ---- OpenAI Realtime -----------------------------------------------------------------------
 
 
@@ -326,6 +338,24 @@ def test_openai_realtime_session(tmp_path, monkeypatch):
     sessions = {s["connection_id"]: s for s in closed["sessions"]}
     assert sessions[first]["ack_errors"] == 1 and sessions[first]["client_acked"] > 0
 
+    # Each connection that opened records its close in the scope of the call that opened it: the
+    # rebuild closed the first and the runtime's close the second, each with 1000, before the
+    # server did. The refused upgrade has its handshake_failed record alone.
+    closes = _closes(events)
+    assert list(closes) == [first, rebuilt]
+    for close in closes.values():
+        assert close["direction"] == "lifecycle"
+        assert (close["sent"], close["received"], close["received_then_sent"]) == (
+            NORMAL_CLOSE,
+            NORMAL_CLOSE,
+            False,
+        )
+    assert closes[first]["scope"] == {"phase": "initialize", "connect_attempt": 2}
+    assert (closes[rebuilt]["scope"]["decision"], closes[rebuilt]["scope"]["connect_attempt"]) == (
+        2,
+        1,
+    )
+
 
 # ---- Gemini Live ---------------------------------------------------------------------------
 
@@ -429,8 +459,29 @@ def test_gemini_live_session(tmp_path, monkeypatch):
         ("unknown", "session_resumed"),
         ("exact", "sync:go_away"),
     ]
-    # The refused resumption sent its setup and was never acknowledged.
-    assert [m["message_type"] for m in _messages(events, refused)] == ["setup"]
+    # The refused resumption sent its setup, was never acknowledged, and the server closed it.
+    assert [m["message_type"] for m in _messages(events, refused)] == ["setup", "closed"]
+    # Each connection records its close in the scope of the call that opened it. The driver
+    # closed each but the refused resumption with 1000, before the server did; the server closed
+    # that one with 1011 and its reason, which the client echoed.
+    closes = _closes(events)
+    assert list(closes) == [first, resumed, refused, replayed]
+    for connection in (first, resumed, replayed):
+        close = closes[connection]
+        assert (close["sent"], close["received"], close["received_then_sent"]) == (
+            NORMAL_CLOSE,
+            NORMAL_CLOSE,
+            False,
+        )
+    refusal = {"code": 1011, "reason": "stub closed the session"}
+    close = closes[refused]
+    assert (close["received"], close["sent"], close["received_then_sent"]) == (
+        refusal,
+        refusal,
+        True,
+    )
+    assert closes[first]["scope"] == {"phase": "initialize"}
+    assert close["scope"]["decision"] == 1
     # The replay seeds both earlier turns on the new connection, screenshots included.
     (seeded,) = _by_type(_messages(events, replayed), "client", "client_content")
     history = json.loads(load_body(pack, seeded["body"]))["client_content"]
