@@ -1885,6 +1885,8 @@ Usage:
 
 import shutil as shutil
 
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
@@ -1928,14 +1930,12 @@ def reeval(run_dir: Path, *, allow_suite_hash_mismatch=False):
     registry = _registry_for_manifest(manifest, allow_suite_hash_mismatch=allow_suite_hash_mismatch)
     payload = manifest["payload"]
     if payload["kind"] == "task_state":
-        task = registry.get(manifest["task_id"])
+        lifecycle = TaskLifecycle(registry.get(manifest["task_id"]))
         state_path = artifact_dir / payload["state"]
         if sha(state_path) != payload["state_sha256"]:
             raise RuntimeError("state checksum mismatch")
         state = json.loads(state_path.read_text())
-        if not hasattr(task, "evaluate_snapshot"):
-            raise RuntimeError(f"task {manifest['task_id']} cannot evaluate saved state")
-        return task.evaluate_snapshot(state), manifest
+        return lifecycle.evaluate(state), manifest
 
     raise RuntimeError(f"artifact kind {payload['kind']!r} is not re-evaluable")
 

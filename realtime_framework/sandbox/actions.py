@@ -27,6 +27,7 @@ from realtime_framework.sandbox.budget import operation_budget
 from realtime_framework.sandbox.guest import GuestRefused
 from realtime_framework.sandbox.guest import action_timeout
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 
 ENVIRONMENT_BUDGET = EnvironmentBudgetConfig()
 
@@ -178,6 +179,8 @@ class GuestEnvironment:
         )
         self.clock_mode = clock_mode
         self.task = task
+        # Which hooks the task has, which the environment and the kernel's shells ask.
+        self.task_lifecycle = TaskLifecycle(task)
         self._episode_horizon_tick = None
         # Token-clock holds are leases on individual keys. This lets a movement hold survive later
         # actions and lets overlapping chords extend shared keys without an early keyUp.
@@ -353,8 +356,8 @@ class GuestEnvironment:
         """Publish action-visible pixels without advancing the token clock."""
         if self.clock_mode != "token":
             return None
-        renderer = getattr(self.task, "render_current_frame", None)
-        if not callable(renderer):
+        renderer = self.task_lifecycle.frame_renderer
+        if renderer is None:
             return None
         try:
             with operation_budget(
@@ -533,7 +536,7 @@ class GuestEnvironment:
 
     def _reject_page_reload(self, action):
         """Refuse the page-reload shortcuts in game tasks (see PAGE_RELOAD_KEYS)."""
-        if getattr(self.task, "category", None) != "browser_game":
+        if not self.task_lifecycle.reload_discards_episode:
             return
         try:
             parts, chord = self._key_chord(action)
@@ -1042,7 +1045,7 @@ class GuestEnvironment:
         """Best-effort episode cleanup for every stateful input primitive. It runs once the
         outcome is latched: a failure raises for the caller to log and leaves the run as it was."""
         try:
-            if self.clock_mode == "token" and hasattr(self.task, "clock_key_event"):
+            if self.clock_mode == "token" and self.task_lifecycle.takes_clock_keys:
                 self._clock_key_up(list(self._held_keys))
             if self.clock_mode != "token":
                 self._release_wall_holds()
@@ -1097,7 +1100,7 @@ class GuestEnvironment:
         try:
             if (
                 self.clock_mode == "token"
-                and hasattr(self.task, "clock_key_event")
+                and self.task_lifecycle.takes_clock_keys
                 and action_type in (ActionType.KEY, ActionType.HOLD_KEY)
             ):
                 self._reject(action)
@@ -1124,13 +1127,7 @@ class GuestEnvironment:
                     ActionType.HOLD_KEY,
                     ActionType.TYPE,
                 ) and self._ensure_page_focus()
-                begin_barrier = getattr(self.task, "begin_gui_action", None)
-                complete_barrier = getattr(self.task, "complete_gui_action", None)
-                barrier_snapshot = (
-                    begin_barrier()
-                    if callable(begin_barrier) and callable(complete_barrier)
-                    else None
-                )
+                barrier_snapshot = self.task_lifecycle.begin_gui_action()
                 result = None
                 if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
                     # Keys xdotool cannot name and zero-length holds fall through to the guest,
@@ -1157,7 +1154,7 @@ class GuestEnvironment:
                                 result = {"guest_result": result}
                             result["restored_wall_holds"] = restored
                 if barrier_snapshot is not None:
-                    barrier_result = complete_barrier(barrier_snapshot)
+                    barrier_result = self.task_lifecycle.complete_gui_action(barrier_snapshot)
                     if not isinstance(result, dict):
                         result = {"guest_result": result}
                     result["business_action_barrier"] = barrier_result

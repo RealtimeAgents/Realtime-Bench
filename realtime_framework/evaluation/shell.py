@@ -110,6 +110,7 @@ from realtime_framework.evaluation.kernel.events import (
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET, Execution
 from realtime_framework.sandbox.budget import operation_budget
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 
 
 class ShellEnvironment(Protocol):
@@ -125,7 +126,9 @@ class ShellEnvironment(Protocol):
 
     t0: float  # wall clock: the episode origin, which semantic readings count from
     d: float  # seconds per environment tick
-    task: Any  # the task runtime; the shell reads its evaluation_snapshot() at the freeze
+    # What the shell asks of the task: its snapshot reader at the freeze and, on the token clock,
+    # its last clock advance for the action-lifecycle record.
+    task_lifecycle: TaskLifecycle
     frame_ages: list[float]  # each reported decision's frame age, which the shell appends
     # Called with the invalid-run record ({"category", "reason", "detail"}) when the wall clock's
     # key-release timer, on its own thread, invalidates the run. Once the snapshot is frozen, an
@@ -977,9 +980,7 @@ class _Shell:
                     action=outcome.action,
                     execution_result=resolved["execution_result"],
                     coordinate_trace=resolved["coordinate_trace"],
-                    clock_advance=(
-                        getattr(env.task, "_last_clock_advance", None) if self.token else None
-                    ),
+                    clock_advance=(env.task_lifecycle.last_clock_advance if self.token else None),
                     recorded_unix_s=self.clocks.operational.time(),
                 ),
             )
@@ -1020,8 +1021,7 @@ class _Shell:
         """Read the scorer's snapshot; the error of a read that failed."""
         # The presentation boundary precedes the scorer's snapshot.
         self.end.snapshot_begins(self.clocks.operational.time())
-        # The Task base class has none (realtime_tasks/types.py).
-        snapshotter = getattr(self.env.task, "evaluation_snapshot", None)
+        snapshotter = self.env.task_lifecycle.snapshot_reader
         error = None
         if snapshotter is not None:
             try:
