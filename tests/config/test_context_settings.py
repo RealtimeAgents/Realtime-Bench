@@ -749,3 +749,61 @@ def test_generic_litellm_refuses_past_reasoning_elsewhere(environment, capsys, m
         "The litellm API sends past reasoning back only to ['deepseek', 'moonshot', "
         f"'together_ai', 'hosted_vllm'] models, whose LiteLLM conversions keep it, not to {model}",
     )
+
+
+# Kimi K3: its documentation requires its past reasoning back
+
+
+def _check(config):
+    """The pre-run checks of the trial worker (providers/preflight.py check_episode)."""
+    import realtime_tasks.registry as tasks
+    from realtime_framework.providers.preflight import check_episode
+
+    check_episode(config, clock_mode="wall", task=tasks.get(WEB), env_fps=config.fps)
+
+
+K3_REQUIRES = (
+    "kimi-k3 on the moonshot API runs only with reasoning_replay: true (Kimi's thinking-model "
+    "guide requires K3's past reasoning_content back in multi-turn conversations and tool-call "
+    "loops.); set it in the model YAML's context section or with --context KEY=VALUE"
+)
+
+
+def test_kimi_k3_runs_only_with_its_past_reasoning(environment, tmp_path, monkeypatch, capsys):
+    """An approved deviation the defaults file marks required: K3's YAML without it, or a run
+    that turns it off, is refused before the run; another moonshot model runs without it."""
+    models = tmp_path / "models"
+    models.mkdir()
+    text = (catalog.MODELS_DIR / "kimi-k3.yaml").read_text()
+    (models / "kimi-k3.yaml").write_text(text.replace("context:\n  reasoning_replay: true\n", ""))
+    monkeypatch.setattr(catalog, "MODELS_DIR", models)
+    catalog._catalog_entries.cache_clear()
+    fails(lambda: _check(catalog.to_model_config("kimi-k3", fps=1.0)), K3_REQUIRES)
+    monkeypatch.undo()
+    catalog._catalog_entries.cache_clear()
+    usage_error(
+        capsys, ["--catalog-model", "kimi-k3", "--context", "reasoning_replay=false"], K3_REQUIRES
+    )
+    _check(catalog.to_model_config("kimi-k3", fps=1.0))
+    _check(ModelConfig(adapter_type="moonshot", model_name="kimi-other", reasoning_effort=None))
+
+
+def test_kimi_k3_through_generic_litellm_runs_only_with_its_past_reasoning(environment, capsys):
+    usage_error(
+        capsys,
+        ["--model", "moonshot/kimi-k3"],
+        K3_REQUIRES.replace("kimi-k3 on the moonshot API", "moonshot/kimi-k3 on the litellm API"),
+    )
+    catalog._catalog_entries.cache_clear()
+    settings = trial(capsys, "--model", "moonshot/kimi-k3", "--context", "reasoning_replay=true")
+    context = ModelConfig.model_validate(settings["model_config"]).context
+    assert (context.item("reasoning_replay").category, context.standard) == ("approved", True)
+
+
+def test_a_required_deviation_is_true_or_false(tmp_path):
+    path = write(tmp_path, STANDARD, approved_deviations=[_deviation(required="yes")])
+    fails(
+        lambda: load_context_defaults(path),
+        "context_defaults.yaml: the approved deviation of moonshot kimi-k3: required must be true "
+        "or false, got 'yes'",
+    )

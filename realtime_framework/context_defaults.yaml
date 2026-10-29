@@ -14,14 +14,22 @@ standard:
   decision_history: turns
 # The settings a model of an API (endpoint.api and endpoint.model in its YAML) is approved to take
 # instead of the standard values, which its YAML's context section sets. A run that takes them
-# stays on the standard context; any other value of a setting that applies is a deviation.
+# stays on the standard context; any other value of a setting that applies is a deviation. A model
+# whose documentation requires them (required: true) runs only with them.
 approved_deviations:
   - api: moonshot
     model: kimi-k3
     settings: {reasoning_replay: true}
-    reason: >-
+    required: true
+    reason: &kimi >-
       Kimi's thinking-model guide requires K3's past reasoning_content back in multi-turn
       conversations and tool-call loops.
+  # K3 as LiteLLM names it (the trial worker's --model moonshot/kimi-k3).
+  - api: litellm
+    model: moonshot/kimi-k3
+    settings: {reasoning_replay: true}
+    required: true
+    reason: *kimi
   - api: gemini_live
     model: gemini-3.1-flash-live-preview
     settings: {tool_call_history: tool_transcript}

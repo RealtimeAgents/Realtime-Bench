@@ -23,7 +23,9 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
-from realtime_framework.entity.context_policy import PROMPT_CHANNELS, path_policy
+import json
+
+from realtime_framework.entity.context_policy import PROMPT_CHANNELS, context_defaults, path_policy
 from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.providers.registry import adapter_class
 
@@ -303,6 +305,25 @@ def check_context_policy(driver, policy, config) -> None:
             )
 
 
+def check_required_context(config) -> None:
+    """A model whose documentation requires some context settings, an approved deviation the
+    defaults file marks required (Kimi K3's reasoning replay), runs only with them."""
+    deviation = context_defaults()["approved_deviations"].get(
+        (config.adapter_type, config.model_name)
+    )
+    if deviation is None or not deviation.required:
+        return
+    values = config.context.values()
+    missing = {key: value for key, value in deviation.settings.items() if values[key] != value}
+    if missing:
+        settings = ", ".join(f"{key}: {json.dumps(value)}" for key, value in missing.items())
+        raise ValueError(
+            f"{config.model_name} on the {config.adapter_type} API runs only with {settings} "
+            f"({deviation.reason}); set it in the model YAML's context section or with --context "
+            "KEY=VALUE"
+        )
+
+
 def check_episode(
     model_config, *, clock_mode, task, env_fps, interaction_mode="turn_based"
 ) -> None:
@@ -333,3 +354,4 @@ def check_episode(
     check_fps(driver, model_config.fps)
     check_session_config(driver, model_config)
     check_context_policy(driver, path_policy(model_config), model_config)
+    check_required_context(model_config)

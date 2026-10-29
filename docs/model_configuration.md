@@ -92,7 +92,9 @@ is defined in `SETTINGS` (`realtime_framework/entity/context_policy.py`). `conte
 optional) sets the few a model needs instead: `reasoning_replay`, `tool_call_history`,
 `observation`, `execution_feedback` and `decision_history`, each only where it applies to the
 model's API. `configs/models/kimi-k3.yaml` sets `reasoning_replay: true`, which sends K3's past
-reasoning back, as Kimi requires for K3; other moonshot models leave it out and send none. K3
+reasoning back, as Kimi requires for K3; other moonshot models leave it out and send none. The
+defaults file marks it required for K3, on `moonshot` and as LiteLLM's `moonshot/kimi-k3`: K3
+without it is refused before the run. K3
 behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) sets it too. An
 endpoint given on the trial worker's command line has no YAML (`python -m
 realtime_framework.evaluation._trial --model DEPLOYMENT_ID --base-url URL`) and sets it with

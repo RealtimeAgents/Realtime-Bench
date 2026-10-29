@@ -217,6 +217,9 @@ class ApprovedDeviation:
     model: str  # ModelConfig.model_name
     settings: Mapping[str, bool | int | str]
     reason: str
+    # The model's documentation requires the settings: it runs only with them
+    # (providers/preflight.py check_required_context).
+    required: bool = False
 
 
 def setting_error(key: str, value) -> str | None:
@@ -255,10 +258,15 @@ def settings_error(settings) -> str | None:
     return None
 
 
+_DEVIATION_FIELDS = {"api", "model", "settings", "reason"}
+
+
 def _approved_deviation(name: str, entry) -> ApprovedDeviation:
-    if not isinstance(entry, dict) or set(entry) != {"api", "model", "settings", "reason"}:
+    fields = set(entry) if isinstance(entry, dict) else set()
+    if not _DEVIATION_FIELDS <= fields <= {*_DEVIATION_FIELDS, "required"}:
         raise ValueError(
-            f"{name}: each approved deviation has api, model, settings and reason; got {entry!r}"
+            f"{name}: each approved deviation has api, model, settings and reason, and may say "
+            f"it is required; got {entry!r}"
         )
     where = f"{name}: the approved deviation of {entry['api']} {entry['model']}"
     error = settings_error(entry["settings"])
@@ -266,8 +274,15 @@ def _approved_deviation(name: str, entry) -> ApprovedDeviation:
         raise ValueError(f"{where}: settings {error or 'name no setting'}")
     if not isinstance(entry["reason"], str) or not entry["reason"].strip():
         raise ValueError(f"{where}: give its reason")
+    required = entry.get("required", False)
+    if type(required) is not bool:
+        raise ValueError(f"{where}: required must be true or false, got {required!r}")
     return ApprovedDeviation(
-        entry["api"], entry["model"], MappingProxyType(dict(entry["settings"])), entry["reason"]
+        entry["api"],
+        entry["model"],
+        MappingProxyType(dict(entry["settings"])),
+        entry["reason"],
+        required,
     )
 
 

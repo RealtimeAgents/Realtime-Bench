@@ -143,7 +143,13 @@ HOOKED = {
     "moonshot": (
         "litellm.openai_sdk",
         _openai_answer,
-        {"adapter_type": "moonshot", "model_name": "kimi-k3", "api_base_url": "/v1"},
+        {
+            "adapter_type": "moonshot",
+            "model_name": "kimi-k3",
+            "api_base_url": "/v1",
+            # K3 runs only with its past reasoning back (its YAML's context).
+            "context": row_context("moonshot", "kimi-k3", model_layer={"reasoning_replay": True}),
+        },
     ),
     "chat_completions-stream": (
         "litellm.openai_sdk",

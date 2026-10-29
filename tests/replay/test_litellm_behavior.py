@@ -899,6 +899,8 @@ def test_a_refused_connection_is_sent_twice_per_attempt_on_litellms_handler(
     monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
     with HttpStub(_chat_answer) as stub:
         origin = stub.origin
+    # K3 runs only with its past reasoning back (its YAML's context).
+    k3 = {"reasoning_replay": True} if model_name == "kimi-k3" else {}
     config = _model(
         origin,
         adapter_type,
@@ -906,6 +908,7 @@ def test_a_refused_connection_is_sent_twice_per_attempt_on_litellms_handler(
         base,
         upstream_provider="anthropic" if adapter_type == "openrouter" else None,
         chat_stream=adapter_type != "litellm",
+        context=resolve_context(adapter_type, model_name, model_layer=k3),
     )
     episode = build_episode(
         config, tmp_path, task=ReplayTask(), instruction=TASK_INSTRUCTION, model_key="replay-model"
