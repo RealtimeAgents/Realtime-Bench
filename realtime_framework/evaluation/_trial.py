@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
@@ -40,15 +41,17 @@ class Launch(NamedTuple):
     model: str  # the catalog key
     reasoning_effort: str  # as the catalog names it
     task: str
+    model_config: ModelConfig
     graphics_mode: str
     recording_encoder: str
 
 
 def read_launch(path) -> Launch:
     """The run the launch file at ``path`` gives the runner, as main() writes it: the run
-    options, the model's catalog key and reasoning effort, the task, and the desktop's graphics
-    mode and recording encoder."""
-    plan = json.loads(Path(path).read_text())["plan"]
+    options, the model's catalog key and reasoning effort, the task, the model configuration main()
+    resolved, and the desktop's graphics mode and recording encoder."""
+    launch = json.loads(Path(path).read_text())
+    plan = launch["plan"]
     (model,) = plan["models"]
     (task,) = plan["tasks"]
     runtime = plan["runtime"]
@@ -57,6 +60,12 @@ def read_launch(path) -> Launch:
         model=model["key"],
         reasoning_effort=model["reasoning_effort"],
         task=task,
+        # The configuration's dump leaves out its key, which the driver reads from the variable
+        # api_key_env names, and its streaming settings, which a streaming launch file holds merged
+        # over the driver's; merged again, they are the same.
+        model_config=ModelConfig.model_validate(
+            {**launch["model_config"], "streaming": launch.get("streaming", {})}
+        ),
         graphics_mode=runtime["graphics_mode"],
         recording_encoder=runtime["recording_encoder"],
     )

@@ -4,7 +4,8 @@ The model is set up the way a ``--model provider/model-id`` run does it: the Har
 puts the endpoint into BENCHMARK_LITELLM_* (evaluation/harbor.py
 ApptainerEnvironment._runner_command; evaluation/_trial.py main), the catalog's bridge key
 ``litellm-vlm`` reads them when the catalog loads (providers/registry.py _load_entries), and the
-runner builds the config from that key (evaluation/runner.py main).
+trial worker builds the config from that key and writes it into the launch file the runner runs
+(evaluation/_trial.py main).
 
 What this API's driver class (providers/litellm.py DirectLiteLLMDriver) and context policy
 (entity/context_policy.py, the standard values) change against chat_completions:

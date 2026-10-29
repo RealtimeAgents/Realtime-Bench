@@ -5,6 +5,7 @@ entry points differ on purpose (ENTRY_DEFAULTS)."""
 from __future__ import annotations
 
 import dataclasses
+import os
 
 import pytest
 
@@ -160,3 +161,148 @@ def test_the_runner_takes_its_launch_file_and_where_to_write_alone(capsys):
     assert capsys.readouterr().err.strip().endswith(
         f"error: unrecognized arguments: --model {GEMINI} --fps 2"
     )
+
+
+def _launched_run(tmp_path, edit, *argv) -> dict:
+    """The export probes' record (evaluation/effective_config.py) of the runner run up to its
+    decision loop on the launch file the trial worker writes for Gemini Live on the web task with
+    ``argv``, after ``edit(settings)`` changed it; each in a fresh interpreter, with the
+    environment the trial worker execs the runner with."""
+    from realtime_framework.evaluation.effective_config import _probe, _runner_entry
+
+    environ = {"HOME": os.environ.get("HOME", "/"), "PATH": "/usr/bin:/bin"}
+    argv = ["--catalog-model", GEMINI, "--task", WEB, *argv]
+    request = {"runs": [(GEMINI, WEB, argv)], "env_file": None, "attribution": {}}
+    trial = _probe("trial", environ, request, scratch=tmp_path)["models"][GEMINI][WEB]
+    assert trial["error"] is None
+    settings = trial["settings"]
+    edit(settings)
+    runs = [(GEMINI, WEB, trial["runner_argv"], settings)]
+    exported = _runner_entry(
+        trial["runner_environ"], {}, runs, env_file=None, scratch=tmp_path, python=trial["python"]
+    )
+    record = exported["models"][GEMINI][WEB]
+    assert record["error"] is None
+    return record
+
+
+def test_the_runner_runs_the_model_configuration_its_launch_file_holds(tmp_path):
+    """The runner runs the model configuration in its launch file, the one the trial worker
+    checked and Harbor hashed (evaluation/config.py configuration_sha256), not one it rebuilds
+    from the catalog: a value changed there is the one its run identity, the identity its report
+    expects (reporting.prepare_episode_report) and its run configuration record."""
+
+    def edit(settings):
+        settings["model_config"].update(model_name="edited-backend", context_reserve_tokens=8192)
+
+    record = _launched_run(tmp_path, edit)
+    assert record["run"]["requested_model"] == {
+        "adapter": "gemini_live", "model": GEMINI, "backend_model": "edited-backend",
+    }  # fmt: skip
+    model_config = record["runtime_config"]["model_config"]
+    assert (model_config["model_name"], model_config["context_reserve_tokens"]) == (
+        "edited-backend", 8192,
+    )  # fmt: skip
+    assert record["expected_runtime_config_hash"] == record["runtime_config_hash"]
+
+
+def test_a_streaming_runner_runs_the_streaming_settings_its_launch_file_holds(tmp_path):
+    """A streaming launch file holds the model's streaming settings merged over its driver's
+    (evaluation/_trial.py main), which ModelConfig leaves out of its dump; the runner runs those."""
+
+    def edit(settings):
+        settings["streaming"]["compression_target_tokens"] = 16_384
+
+    record = _launched_run(tmp_path, edit, "--interaction-mode", "streaming")
+    assert record["runtime_config"]["streaming"] == {
+        "compression_trigger_tokens": 65_536, "compression_target_tokens": 16_384,
+    }  # fmt: skip
+    assert record["expected_runtime_config_hash"] == record["runtime_config_hash"]
+
+
+def test_the_emergency_summary_names_the_model_its_launch_file_holds(tmp_path, monkeypatch):
+    """A run that fails to set up is summarized from its launch file
+    (runner._write_emergency_setup_summary): the backend model and API of the model
+    configuration there, and the catalog key the trial worker resolved it from."""
+    import json
+    import sys
+
+    from realtime_framework.evaluation import runner
+
+    path = trial_launch(monkeypatch, tmp_path / "trial", "--catalog-model", GEMINI, "--task", WEB)
+    settings = json.loads(path.read_text())
+    settings["model_config"]["model_name"] = "edited-backend"
+    path.write_text(json.dumps(settings))
+    argv = ["--launch", str(path), "--results-dir", str(tmp_path), "--run-id", "run"]
+    monkeypatch.setattr(sys, "argv", ["runner", *argv])
+    runner._write_emergency_setup_summary("RuntimeError: guest not ready")
+    summary = json.loads((tmp_path / "run" / "run_summary.json").read_text())
+    assert (summary["model"], summary["adapter"], summary["backend_model"]) == (
+        GEMINI, "gemini_live", "edited-backend",
+    )  # fmt: skip
+
+
+ENDPOINT = "http://127.0.0.1:9/v1"
+# The inline endpoints, whose configuration the trial worker resolves from the variables it sets
+# (evaluation/_trial.py main, providers/registry.py _load_entries and to_model_config).
+INLINE = [
+    ("remote-vlm", ["--model", "dep-1", "--base-url", ENDPOINT, "--model-revision", "r1"]),
+    ("remote-vlm", ["--model", "dep-1", "--base-url", ENDPOINT, "--no-stream",
+                    "--context-preset", "kimi_k3"]),
+    ("litellm-vlm", ["--model", "openai/vlm-1", "--base-url", ENDPOINT, "--model-revision", "r2"]),
+    ("litellm-vlm", ["--model", "openai/vlm-1"]),
+]  # fmt: skip
+
+
+def _launches():
+    """Every catalog model in each mode its API takes, and the inline endpoints."""
+    cases = []
+    presets = catalog.keys()
+    for key in presets:
+        driver = catalog.adapter_class(catalog.get(key).adapter_type)
+        modes = ["turn_based"]
+        if "streaming" in driver.capabilities.interaction_modes:
+            modes.append("streaming")
+        cases += [(key, ["--catalog-model", key], mode) for mode in modes]
+    return cases + [(key, argv, "turn_based") for key, argv in INLINE]
+
+
+@pytest.mark.parametrize("key, argv, interaction_mode", _launches())
+def test_a_launch_file_carries_the_model_configuration_the_trial_worker_resolved(
+    tmp_path, key, argv, interaction_mode
+):
+    """The runner's model configuration, read from the launch file (evaluation/_trial.py
+    read_launch), is the one the trial worker resolved from the catalog: every field but the
+    key, which no launch file holds and which the driver reads from its variable, and the
+    streaming settings as the driver merges them, and so the same run configuration and hash."""
+    from realtime_framework.entity.config import ModelConfig, merge_streaming_settings
+    from realtime_framework.evaluation import _trial
+    from realtime_framework.evaluation.config import config_fingerprint, run_spec_config
+
+    catalog._catalog_entries.cache_clear()
+    try:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("ALLOW_EXPERIMENTAL_MODEL", "1")
+            path = trial_launch(
+                patch, tmp_path, *argv, "--task", WEB, "--interaction-mode", interaction_mode
+            )
+            launch = _trial.read_launch(path)
+            # As the trial worker resolved it, in the environment the runner gets.
+            catalog._catalog_entries.cache_clear()
+            resolved = catalog.to_model_config(
+                key, fps=launch.spec.model_input_fps, reasoning_effort=launch.reasoning_effort
+            )
+            launched = launch.model_config
+            for field in ModelConfig.model_fields:
+                if field not in ("api_key", "streaming"):
+                    assert getattr(launched, field) == getattr(resolved, field), field
+            if interaction_mode == "streaming":
+                driver = catalog.adapter_class(resolved.adapter_type)
+                assert merge_streaming_settings(driver, launched.streaming) == (
+                    merge_streaming_settings(driver, resolved.streaming)
+                )
+            assert config_fingerprint(run_spec_config(launch.spec, launched)) == (
+                config_fingerprint(run_spec_config(launch.spec, resolved))
+            )
+    finally:
+        catalog._catalog_entries.cache_clear()

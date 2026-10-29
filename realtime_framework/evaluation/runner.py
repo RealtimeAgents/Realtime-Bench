@@ -142,10 +142,10 @@ import realtime_tasks.registry as custom_tasks
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
 
-def _model_identity(model):
-    """Separate the stable catalog key from the actual backend model and adapter."""
-    entry = catalog.get(model)
-    return {"adapter": entry.adapter_type, "model": model, "backend_model": entry.model_name}
+def _model_identity(model, config):
+    """Separate the stable catalog key ``model`` from the actual backend model and adapter of the
+    model configuration ``config`` it runs."""
+    return {"adapter": config.adapter_type, "model": model, "backend_model": config.model_name}
 
 
 def _distinct(failures: list[dict]) -> list[dict]:
@@ -247,21 +247,18 @@ def main():
     # spec.model_input_fps the rate of the frames the model is fed (ModelConfig.fps, B, the prompt).
     env_fps, model_input_fps = spec.fps, spec.model_input_fps
     tokens_per_frame, protocol = spec.tokens_per_frame, spec.protocol
-    requested_model_identity = _model_identity(launch.model)
+    # The model configuration the trial worker resolved, whole; the catalog gives only the
+    # model's leaderboard status. B controls simulated time rather than response length; only the
+    # remaining episode horizon and native model limits can bound a decision.
+    cfg = launch.model_config
+    model_identity = _model_identity(launch.model, cfg)
     catalog_entry = catalog.get(launch.model)
     reasoning_effort = launch.reasoning_effort
     benchmark_cell_eligible = bool(catalog_entry.benchmark_eligible)
     comparison_scope = catalog_entry.comparison_scope
     # The trial worker applied every pre-run rule to this run before it wrote the launch file
-    # (evaluation/_trial.py main), which the runner runs as written. B controls simulated time
-    # rather than response length; only the remaining episode horizon and native model limits
-    # can bound a decision.
+    # (evaluation/_trial.py main), which the runner runs as written.
     ctask = custom_tasks.get(launch.task)
-    cfg = catalog.to_model_config(
-        launch.model,
-        fps=model_input_fps,
-        reasoning_effort=reasoning_effort,
-    )
     clocks = episode_clocks(spec.clock_mode, env_fps)
     run_id = a.run_id or datetime.fromtimestamp(clocks.operational.time()).strftime("%Y%m%d_%H%M%S")
     run_dir = Path(a.results_dir) / run_id
@@ -277,7 +274,7 @@ def main():
         TraceEvent.EPISODE_STARTED,
         {
             "task_id": launch.task,
-            "requested_model": requested_model_identity,
+            "requested_model": model_identity,
             "clock_mode": spec.clock_mode,
             "mode": spec.mode,
             "fps": env_fps,
@@ -373,7 +370,7 @@ def main():
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
-                model=requested_model_identity["model"],
+                model=launch.model,
                 open_capture=lambda text_observation: BrowserSceneCapture(
                     guest,
                     ctask,
@@ -585,7 +582,7 @@ def main():
                 clock=clocks.operational,
                 ctask=ctask,
                 adapter=cfg.adapter_type,
-                model=requested_model_identity["model"],
+                model=launch.model,
                 backend_model=cfg.model_name,
                 mode=spec.mode,
                 cap=spec.duration_minutes,
@@ -885,15 +882,10 @@ def main():
                 validate_decision_count=False,
             )
             run_metrics["run_metrics_error"] = metrics_error
-        effective_model_identity = {
-            "adapter": cfg.adapter_type,
-            "model": requested_model_identity["model"],
-            "backend_model": cfg.model_name,
-        }
         run_identity = resolve_run_identity(
             task_id=launch.task,
             ctask=ctask,
-            **effective_model_identity,
+            **model_identity,
             mode=spec.mode,
             cap=spec.duration_minutes,
             protocol=protocol,
@@ -1235,7 +1227,7 @@ def _write_emergency_summary(
         return
     run_identity = resolve_run_identity(
         task_id=launch.task,
-        **_model_identity(launch.model),
+        **_model_identity(launch.model, launch.model_config),
         mode=spec.mode,
         cap=spec.duration_minutes,
         protocol=spec.protocol,
