@@ -37,16 +37,19 @@ once more right before an action that arrived since the last read, and once more
 action executed. The read before an action finds whether the task ended before it executes, as the
 turn-based clock reads right before landing (turns.py ``_pre_checked``); an end it finds, and the
 failure of a third read in a row, are dated when it was asked (N44). Its answer that finds no end,
-failed or not, is handled in the order it came, so that a call cancelled, a reply given up or the
-deadline passed before the kernel took it in keeps the action from executing, however long the shell
-held that answer up (core.py ``Kernel.request``). The read after an action settles it, as the one
-that ended the task or not, before anything else runs, so nothing executes once the task has ended
-but after a failed read, which tells nothing, as on the turn-based clock (turns.py
+failed or not, is filed where the kernel takes it in, behind the timers due by then and what was
+posted before it (core.py ``Kernel.request``), so that a call cancelled, a reply given up or the
+deadline passed by then keeps the action from executing, however long the shell held that answer up.
+A third failure among such answers ends the run where the read was asked only if nothing handled
+before it ended the run: the first end handled fixes the cause, the invalid run's reason and the
+time (core.py ``Kernel.invalidate``, ``Kernel.end``). The read after an action settles it, as the
+one that ended the task or not, before anything else runs, so nothing executes once the task has
+ended but after a failed read, which tells nothing, as on the turn-based clock (turns.py
 ``_end_checked``). A capture out when the action finishes holds that read up, but it stands for one
 right as the action finished: an end it finds is dated there, and the deadline waits for it (N31),
-as the turn-based clock reads right then. A failed read counts as the frame's.
-Three failed reads in a row invalidate the run. Every outcome, the refusals included, is committed
-to the agent as its feedback.
+as the turn-based clock reads right then. A failed read counts as the frame's. Three failed reads in
+a row invalidate the run. Every outcome, the refusals included, is committed to the agent as its
+feedback.
 
 Captures, reads and actions run on lanes of their own. A capture and an action may run at once,
 so that frames keep coming during a long action (phase2.md, native streaming); a read runs only
@@ -939,8 +942,8 @@ class StreamingPolicy:
         time its end is dated by, but for the read after an action, which stands for one as the
         action finished. It is this frame's read, and whichever came due meanwhile. An action
         waiting, which arrived before, takes the lane for it: it is the read before that action
-        (decision 12), whose answer, unless it finds the end, is handled in the order it came
-        (core.py ``Kernel.request``)."""
+        (decision 12), whose answer, unless it finds the end, is filed where the kernel takes it
+        in (core.py ``Kernel.request``)."""
         if "read" in self._line:
             self._line.remove("read")
         if self._lane is _Lane.IDLE and self.waiting is not None:

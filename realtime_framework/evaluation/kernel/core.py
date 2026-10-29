@@ -153,9 +153,11 @@ class Kernel:
     def request(self, by_arrival: bool = False) -> int:
         """A fresh id to match an answer to its command. An end check asked ``by_arrival`` has an
         answer that finds no end filed at the reading the kernel takes it in, as another posted
-        event is, so that it comes after what was posted before it and after a timer due by then;
-        one that finds the end is filed where it was asked all the same (``step``). The read
-        right before a streaming action is asked so (streaming.py ``_ask``)."""
+        event is: after a timer due by then, and among the events taken in with it by priority,
+        then in the order they were posted (agenda.py), so after a cancellation posted before it
+        but not one posted after it, nor one the kernel takes in later. One that finds the end is
+        filed where it was asked all the same (``step``). The read right before a streaming
+        action is asked so (streaming.py ``_ask``)."""
         request = next(self._requests)
         self._asked[request] = self.semantic
         if by_arrival:
