@@ -340,3 +340,31 @@ def test_a_re_evaluation_says_the_environment_is_not_valid_once_anything_found_i
     the run set up, keeps saying so. Nothing makes it valid."""
     replaced, _ = _reevaluated(tmp_path, monkeypatch, capsys, summary, HEALTHY)
     assert replaced["environment_valid"] is valid
+
+
+def test_the_success_metrics_follow_the_score_and_the_end_of_the_episode():
+    """The task-success rate is the score as 1/0, and the time to success the end of a solved
+    episode over its horizon; a run summary written before the termination record has no end."""
+    end = {**TERMINATION, "end_s": 30.0}
+    assert reporting.success_metrics(True, end, 60.0) == {
+        "task_success_rate": 1.0,
+        "normalized_time_to_success": 0.5,
+    }
+    assert reporting.success_metrics(False, end, 60.0) == {
+        "task_success_rate": 0.0,
+        "normalized_time_to_success": None,
+    }
+    assert reporting.success_metrics(None, end, 60.0) == {
+        "task_success_rate": None,
+        "normalized_time_to_success": None,
+    }
+    assert reporting.success_metrics(True, None, 60.0)["normalized_time_to_success"] is None
+
+
+def test_a_re_evaluation_of_a_summary_without_a_termination_record(tmp_path, monkeypatch, capsys):
+    """A run summary written before the termination record, re-evaluated solved: its
+    task-success rate counts the score, and it has no time to success."""
+    summary = _summary(invalid_run=EVALUATOR, termination=None)
+    replaced, _ = _reevaluated(tmp_path, monkeypatch, capsys, summary, HEALTHY)
+    assert (replaced["solved"], replaced["task_success_rate"]) == (True, 1.0)
+    assert replaced["normalized_time_to_success"] is None

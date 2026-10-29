@@ -334,6 +334,25 @@ def _rounded(value):
     return None if value is None else round(float(value), 9)
 
 
+def success_metrics(solved, termination: dict | None, horizon_s) -> dict:
+    """A run's task-success rate and normalized time to success, from its score and the end of
+    its episode, as summarize_run_metrics counts them and a re-evaluation recounts them
+    (reevaluate_main). A run summary written before the termination record has no end."""
+    horizon = _number(horizon_s)
+    # A solved run always has a termination record: only a finalized loop is scored.
+    normalized_time_to_success = (
+        termination["end_s"] / horizon
+        if solved is True and termination is not None and horizon not in {None, 0}
+        else None
+    )
+    return {
+        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
+        # observation 1/0. Suite/category success rates are aggregated across these values.
+        "task_success_rate": float(solved) if isinstance(solved, bool) else None,
+        "normalized_time_to_success": _rounded(normalized_time_to_success),
+    }
+
+
 def _distribution(
     values,
     *,
@@ -473,20 +492,11 @@ def summarize_run_metrics(
                 parse_errors += 1
                 parse_error_reasons[str(protocol.get("protocol_failure") or "unspecified")] += 1
 
-    task_success_rate = float(solved) if isinstance(solved, bool) else None
-    horizon = _number(horizon_s)
-    # A solved run always has a termination record: only a finalized loop is scored.
-    normalized_time_to_success = (
-        termination["end_s"] / horizon
-        if solved is True and horizon not in {None, 0}
-        else None
-    )
+    success = success_metrics(solved, termination, horizon_s)
 
     return {
         "run_metrics_schema": RUN_METRICS_SCHEMA,
-        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
-        # observation 1/0. Suite/category success rates are aggregated across these values.
-        "task_success_rate": task_success_rate,
+        "task_success_rate": success["task_success_rate"],
         "decision_simulated_latency_s": _distribution(
             simulated_latencies,
             total_decisions=total_decisions,
@@ -520,7 +530,7 @@ def summarize_run_metrics(
         "action_parse_eligible_decisions": parse_eligible,
         "action_parse_error_reasons": dict(sorted(parse_error_reasons.items())),
         "action_parse_error_definition": "action_protocol.valid_action == false",
-        "normalized_time_to_success": _rounded(normalized_time_to_success),
+        "normalized_time_to_success": success["normalized_time_to_success"],
         "normalized_time_to_success_definition": (
             "termination.end_s/(max_minutes*60), defined only when solved == true"
         ),
@@ -1984,6 +1994,13 @@ def reeval(run_dir: Path, *, allow_suite_hash_mismatch=False):
     raise RuntimeError(f"artifact kind {payload['kind']!r} is not re-evaluable")
 
 
+def _horizon_s(summary: dict):
+    """The scored horizon of the run a summary describes; None when it does not say (episode
+    outcomes read max_minutes the same way, _reached_horizon)."""
+    minutes = _number(summary.get("max_minutes"))
+    return None if minutes is None else minutes * 60
+
+
 def reevaluate_main():
     p = argparse.ArgumentParser()
     p.add_argument("run_dir", type=Path)
@@ -2068,6 +2085,9 @@ def reevaluate_main():
                 "solved": conclusion.solved,
                 "verification": result,
                 "progress": conclusion.progress,
+                **success_metrics(
+                    conclusion.solved, summary.get("termination"), _horizon_s(summary)
+                ),
                 "evaluation_artifact": out.name,
                 "reevaluated_from_saved_artifact": True,
             }

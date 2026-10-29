@@ -510,8 +510,8 @@ def test_a_re_evaluation_judges_an_unscorable_evaluation_as_the_run_did(tmp_path
 
 def test_a_re_evaluation_that_scores_a_run_invalid_for_its_evaluator(tmp_path, monkeypatch):
     """The run is invalid only for its evaluator's unhealthy backend; a re-evaluation that scores
-    the saved state solved makes it scored and passed, stopped as its loop stopped. Its run
-    metrics stay those of the run as written."""
+    the saved state solved makes it scored and passed, stopped as its loop stopped, with the
+    task-success rate and the time to success main() writes of a run solved when it ended."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = UnhealthyTask(clock, guest, "task_success", True)
@@ -528,8 +528,41 @@ def test_a_re_evaluation_that_scores_a_run_invalid_for_its_evaluator(tmp_path, m
     assert (replaced["stop_reason"], replaced["outcome"], replaced["failure_attribution"]) == (
         "task_success", "pass", None,
     )  # fmt: skip
-    assert (replaced["task_success_rate"], replaced["normalized_time_to_success"]) == (None, None)
+    assert (replaced["task_success_rate"], replaced["normalized_time_to_success"]) == (
+        1.0, round(END_S / HORIZON_S, 9),
+    )  # fmt: skip
     assert scored(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("verification", "concluded"),
+    [
+        ({"resolved": False, "evaluation_version": 1}, ("scored", False, "fail", 0.0)),
+        (
+            {"resolved": True, "evaluation_version": 1, "ok": False},
+            ("invalid", None, "error", None),
+        ),
+    ],
+    ids=["unsolved", "not safe to score"],
+)
+def test_a_re_evaluation_of_a_solved_run_counts_the_new_score(
+    tmp_path, monkeypatch, verification, concluded
+):
+    """A run scored solved, re-evaluated unsolved or not safe to score: its task-success rate
+    and time to success follow the new score."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    summary = run_main(
+        tmp_path, FakeTask(clock, guest, "task_success", True), FakeAgent(clock), clock, guest
+    )
+    assert (summary["task_success_rate"], summary["normalized_time_to_success"]) == (
+        1.0, round(END_S / HORIZON_S, 9),
+    )  # fmt: skip
+    replaced = _reevaluated(tmp_path / "run", verification, monkeypatch)
+    assert (
+        replaced["run_status"], replaced["solved"], replaced["outcome"], replaced["task_success_rate"],
+    ) == concluded  # fmt: skip
+    assert replaced["normalized_time_to_success"] is None
 
 
 def _reevaluate(run_dir, verification, monkeypatch, capsys) -> tuple[dict, object]:
