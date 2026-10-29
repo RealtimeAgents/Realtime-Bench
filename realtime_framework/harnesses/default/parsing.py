@@ -1081,6 +1081,15 @@ def text_action(body: str, *, framed: bool) -> tuple[Action | None, object]:
     return ActionTranslator.from_json(data), reference
 
 
+def structured_action(body: str) -> tuple[Action | None, object]:
+    """The action of a function call or a Decision's choice, from the JSON action object its
+    channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
+    choice), and the value of its frame field."""
+    data = json.loads(body)
+    reference = data.pop("frame", None)
+    return ActionTranslator.from_json(data), reference
+
+
 def _action_key(action: Action) -> str:
     parameters = dict(action.parameters)
     defaults = {
@@ -1106,25 +1115,26 @@ from realtime_framework.entity.harness import Decision as ActionOutputResolution
 
 @dataclass(frozen=True)
 class ResolvedOutput:
-    """The one action resolved from model output, and what the parse made of each body it was
-    given that parsed, in the order they were tried: the one the action is, and all of them."""
+    """The one action resolved from model output, and what grounding made of the action of each
+    body that read as one, in the order they were tried: the one the action is, and all of them."""
 
     decision: ActionOutputResolution
-    chosen: Any = None  # the parse whose action the decision holds; None unless it is valid
+    chosen: Any = None  # the grounding whose action the decision holds; None unless it is valid
     parses: tuple = ()
 
 
 def resolve_action_output(
     content: str,
-    parse: Callable[[str], Any],
+    ground: Callable[[Action, object], Any],
     *,
     framed: bool = False,
 ) -> ResolvedOutput:
-    """Resolve one unambiguous action from canonical or commonly wrapped model output.
-    ``parse(body)`` is None for a body that does not parse, otherwise what it made of the body,
-    whose ``action`` is the action, None when the body parsed to none, as an action naming marks
-    its frame lacks. ``framed``: the canonical form also carries the frame field of a streaming
-    action."""
+    """Resolve one unambiguous action from canonical or commonly wrapped text output. Each body
+    tried is read as text_action reads it. ``ground(action, reference)`` is what the caller makes
+    of the action a body reads as and of the value of its frame field (None unless ``framed``):
+    its ``action`` is the action as grounded, None when it cannot be, as an action naming marks
+    its frame lacks, and the body is then a rejected candidate. ``framed``: a streaming action,
+    whose canonical form also carries its frame field."""
     text = (content or "").strip()
     if len(text) > 1_000_000:
         return ResolvedOutput(
@@ -1147,9 +1157,10 @@ def resolve_action_output(
     parses = []
 
     def safe_parse(body):
-        """The parse of a body that parsed to an action, else None."""
+        """The grounding of the action a body reads as, if it grounds to an action, else None."""
         try:
-            parsed = parse(body)
+            asked, reference = text_action(body, framed=framed)
+            parsed = None if asked is None else ground(asked, reference)
         except (ValueError, TypeError, KeyError, RecursionError):
             return None
         if parsed is None:
@@ -1243,12 +1254,16 @@ def resolve_action_output(
     return ResolvedOutput(decision, None, tuple(parses))
 
 
-def resolve_structured_output(content: str, parse: Callable[[str], Any]) -> ResolvedOutput:
+def resolve_structured_output(
+    content: str, ground: Callable[[Action, object], Any]
+) -> ResolvedOutput:
     """The one action of a function call or a Decision's choice, whose channel hands over the
-    action object itself: ``parse(content)`` as resolve_action_output's ``parse`` reads it, and
-    nothing is recovered from content that is no action."""
+    action object itself: read as structured_action reads it and grounded as
+    resolve_action_output's ``ground`` grounds it; nothing is recovered from content that is no
+    action."""
     try:
-        parsed = parse(content)
+        asked, reference = structured_action(content)
+        parsed = None if asked is None else ground(asked, reference)
     except (ValueError, TypeError, KeyError, RecursionError):
         parsed = None
     parses = () if parsed is None else (parsed,)

@@ -14,7 +14,6 @@ from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.usage import normalize_provider_token_usage
-from realtime_framework.entity.actions import ActionTranslator
 
 
 class VisionAgentBase(StreamingAgent):
@@ -364,7 +363,6 @@ from dataclasses import replace as replace
 from realtime_framework.clock import SystemClock
 from realtime_framework.harnesses.default.parsing import resolve_action_output
 from realtime_framework.harnesses.default.parsing import resolve_structured_output
-from realtime_framework.harnesses.default.parsing import text_action
 from realtime_framework.entity.model import GenerationOutput
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import PendingDecision
@@ -567,14 +565,8 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
     streaming = agent.interaction_mode == "streaming"
     structured = agent.driver.capabilities.action_channel != "text_json"
 
-    def ground(body) -> _Grounded | None:
-        if structured:
-            asked, reference = structured_action(body)
-        else:
-            asked, reference = text_action(body, framed=streaming)
+    def ground(asked, reference) -> _Grounded:
         frame, error = frames.locate(reference) if streaming else (own_frame, None)
-        if asked is None:
-            return None
         if frame is None:
             return _Grounded(asked, asked, frame, reference, error)
         action, resolution = resolve_action_references(asked, frame.marks)
@@ -624,15 +616,6 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
     )
     action_protocol["grounding"] = grounding
     return action, action_protocol, last
-
-
-def structured_action(body: str) -> tuple[Action | None, object]:
-    """The action of a function call or a Decision's choice, from the JSON action object its
-    channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
-    choice), and the value of its frame field."""
-    data = json.loads(body)
-    reference = data.pop("frame", None)
-    return ActionTranslator.from_json(data), reference
 
 
 def action_text(action: Action) -> str:
