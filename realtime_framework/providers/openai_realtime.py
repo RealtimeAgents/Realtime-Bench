@@ -133,12 +133,31 @@ def classify_realtime_message(direction: str, message: dict):
 
 def _close_codes(closed: ConnectionClosedOK) -> str:
     """A normal close as websockets describes it, by each side's code and which closed first,
-    without the server's reason: classify_transport_error reads the text of a failure it has no
-    type for, and the reason is the server's free text."""
+    without the reason, which is the server's free text."""
     received, sent = (str(replace(frame, reason="")) for frame in (closed.rcvd, closed.sent))
     if closed.rcvd_then_sent:
         return f"received {received}; then sent {sent}"
     return f"sent {sent}; then received {received}"
+
+
+# What a Realtime error means, by what its type or code names, in this order.
+_ERROR_KINDS = (
+    ("insufficient_quota", QUOTA_EXHAUSTED),
+    ("rate_limit", RATE_LIMITED),
+    ("server_error", TRANSIENT),
+)
+
+
+def _error_failure(error) -> TransportFailure:
+    """The failure a Realtime error means, an `error` event's or a failed response's, by its
+    type and code: an exhausted quota, rate limiting (rate_limit_exceeded, say), a server fault;
+    any other error is fatal."""
+    fields = object_dict(error) or {}
+    names = [str(fields.get("type") or ""), str(fields.get("code") or "")]
+    for named, kind in _ERROR_KINDS:
+        if any(named in name for name in names):
+            return TransportFailure(kind)
+    return TransportFailure(FATAL)
 
 
 class _Session:
@@ -322,7 +341,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
     def classify_transport_error(exc: BaseException) -> TransportFailure:
         """Classify a failed turn, which the harness retries on a rebuilt session, or a failed
         connect attempt, which a turn-based connect() retries, and the native-streaming agent's
-        readying of the session.
+        readying of the session. A server error or a failed response is not classified here:
+        events() reads what it means off its type and code (_error_failure), and the shared retry
+        takes that as it is.
 
         Realtime WebSocket writes are not automatically replayed by the SDK. The harness retries
         only when it has received no output or usage for the failed turn, so rebuilding from
@@ -366,14 +387,6 @@ class OpenAIRealtimeDriver(SessionLifecycle):
             if isinstance(status, int):
                 headers = getattr(getattr(current, "response", None), "headers", None)
                 return classify_http_failure(status, str(current), retry_after_seconds(headers))
-        # Server `error` events and failed responses arrive as their error-code text.
-        detail = str(exc).lower()
-        if "insufficient_quota" in detail:
-            return TransportFailure(QUOTA_EXHAUSTED)
-        if "rate_limit" in detail:
-            return TransportFailure(RATE_LIMITED)
-        if "server_error" in detail:
-            return TransportFailure(TRANSIENT)
         return TransportFailure(FATAL)
 
     @staticmethod
@@ -741,7 +754,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                         "connection_closed",
                         "the connection closed before the response completed: "
                         + _close_codes(session.closed),
-                        True,
+                        failure=TransportFailure(FATAL),
                         **numbers,
                     )
                 return
@@ -771,7 +784,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                     sequence,
                     event_type,
                     repr(error or "realtime error")[:500],
-                    not cancel_race,
+                    failure=None if cancel_race else _error_failure(error),
                     **numbers,
                 )
                 continue
@@ -833,6 +846,7 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                                 "error": object_dict(error) or error,
                             }
                         )[:500],
+                        failure=_error_failure(error),
                         **numbers,
                     )
                     return
@@ -885,25 +899,8 @@ class OpenAIRealtimeDriver(SessionLifecycle):
                 detail=request.reason,
                 provider_metadata={"history_session_reconnected": True},
             )
-        except Exception as exc:
-            # Before a generation, a connect the shared retry gave up on, or a failure the outer
-            # retry may still retry, propagates as it is: that retry reads its kind and spent
-            # budget off it, which a BROKEN result's text would lose (decision 39). A repair
-            # after a generation, the only sync with a current generation, breaks the session
-            # instead, and the turn keeps its result (decision 35). The result keeps no error
-            # for the session's failure to be raised from (HistorySyncResult.error):
-            # classify_transport_error reads that failure's text, which holds this repr, and
-            # would read a kept error's HTTP status first, which can name another kind.
-            if request.current_generation is None and (
-                isinstance(exc, TransportFailureError)
-                or self.classify_transport_error(exc).retryable
-            ):
-                raise
-            return HistorySyncResult(
-                SyncDisposition.BROKEN,
-                ProviderHistoryState.UNKNOWN,
-                detail=repr(exc)[:500],
-            )
+        except Exception as exc:  # noqa: BLE001 - raised again or kept by _failed_sync
+            return self._failed_sync(request, exc)
 
     async def _fallback_from_in_place(
         self,
@@ -911,11 +908,9 @@ class OpenAIRealtimeDriver(SessionLifecycle):
         cause: str,
     ) -> HistorySyncResult:
         rebuilt = await self._rebuild(request)
-        return HistorySyncResult(
-            rebuilt.disposition,
-            rebuilt.history_state,
-            rebuilt.detail,
-            {
+        return replace(
+            rebuilt,
+            provider_metadata={
                 **rebuilt.provider_metadata,
                 "history_in_place_edit_fallback": True,
                 "history_in_place_edit_error": cause[:500],
