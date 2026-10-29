@@ -741,7 +741,7 @@ def _reached_horizon(summary: dict) -> bool:
             isinstance(v, (int, float)) and not isinstance(v, bool) for v in (world, minutes)
         )
         return numbers and world >= 60 * minutes
-    # The record keeps nine decimals (legacy_loop.py _termination).
+    # The termination record keeps nine decimals.
     horizon_s = round(60 * summary["max_minutes"], 9)
     return termination["stop_reason"] in HORIZON_STOP_REASONS or termination["end_s"] >= horizon_s
 

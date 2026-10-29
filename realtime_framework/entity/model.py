@@ -67,7 +67,6 @@ class RealtimeCapabilities:
     # or, for prompt windows too small to retain SoM turns, only a digest of actions and feedback.
     # Context policy item 9 must name this form (providers/preflight.py check_context_policy);
     # under the digest every turn's feedback is in it, whatever item 3 says.
-    # tests/replay/test_context_policy.py pins it.
     history_replay: Literal["canonical", "action_digest"] = "canonical"
     # What the encoder can render of the context policy: the roles, feedback placements,
     # reasoning replay and tool-call replay forms below, which the pre-run checks hold the

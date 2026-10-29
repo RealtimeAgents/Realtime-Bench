@@ -22,7 +22,7 @@ def invalidated(record: dict) -> Invalidated:
 
 def invalid_record(invalid: Invalidated) -> dict:
     """An invalid run as main() is handed it and writes it as RunInvalidated: the detail only when
-    there is one (legacy_loop.py ``_invalidate``)."""
+    there is one."""
     record = {"category": invalid.category, "reason": invalid.reason}
     if invalid.detail:
         record["detail"] = invalid.detail
@@ -30,7 +30,7 @@ def invalid_record(invalid: Invalidated) -> dict:
 
 
 def invalid_line(invalid: Invalidated) -> str:
-    """The log line of an invalid run (legacy_loop.py ``_invalidate``)."""
+    """The log line of an invalid run: its category and reason, and its detail if it has one."""
     detail = invalid.detail
     return f"[invalid-run] {invalid.category}:{invalid.reason}" + (f" — {detail}" if detail else "")
 
@@ -52,7 +52,7 @@ def with_unheard(termination: Termination, unheard: Invalidated | None, log) -> 
     finishes on it."""
     if unheard is None or termination.invalid is not None:
         return termination
-    # The end of a traceback names the exception (legacy_loop.py _invalidate).
+    # The end of a traceback names the exception.
     detail = None if unheard.detail is None else unheard.detail[-2000:]
     invalid = Invalidated(unheard.category, unheard.reason, detail)
     with contextlib.suppress(Exception):
@@ -77,7 +77,7 @@ def escaped_termination(
     invalid = kernel.invalid or (
         invalidated(latched)
         if latched is not None
-        # The end of a traceback names the exception (legacy_loop.py _invalidate).
+        # The end of a traceback names the exception.
         else Invalidated("runner", "run_exception", failure[-2000:])
     )
     if ending is None:
@@ -151,9 +151,8 @@ class EpisodeResult:
     # wrap-up's when the kernel raised (N11). None when the wrap-up got no further.
     termination: Termination | None
     # What the shell wrote of it at the end: the stop reason, the termination record in world
-    # seconds to nine places (legacy_loop.py _termination) and the verdict, the environment's own
-    # record of a failure it latched itself. Until the shell wrote them none, and the verdict is
-    # what the environment latched.
+    # seconds to nine places and the verdict, the environment's own record of a failure it latched
+    # itself. Until the shell wrote them none, and the verdict is what the environment latched.
     stop_reason: str | None
     termination_record: dict | None
     invalid_run: dict | None
@@ -220,11 +219,11 @@ class EpisodeEnd:
         self, termination: Termination, env, snapshot_read: bool, ticks_per_s: float = 1.0
     ) -> dict | None:
         """Write how the episode ended, the verdict first: main() is handed it whatever else
-        could be written. The termination record is in world seconds to nine places
-        (legacy_loop.py ``_termination``), of semantic times counted ``ticks_per_s`` to the
-        second; a snapshot read whose reading after it failed, not ``snapshot_read``, is one the
-        kernel took as failed. Returns a failure the environment latched once the snapshot was
-        frozen, which the kernel was not told of and which is only logged (decision 30)."""
+        could be written. The termination record is in world seconds to nine places, of semantic
+        times counted ``ticks_per_s`` to the second; a snapshot read whose reading after it
+        failed, not ``snapshot_read``, is one the kernel took as failed. Returns a failure the
+        environment latched once the snapshot was frozen, which the kernel was not told of and
+        which is only logged (decision 30)."""
         self.termination = termination
         invalid, latched = termination.invalid, self.latched(env)
         late = latched if invalid is None else None

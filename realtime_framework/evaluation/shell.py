@@ -39,8 +39,7 @@ answers starts the count over. The kernel keeps the count (kernel/turns.py READ_
 over every read that decides whether the episode is over: ``check_end()``, which answers CheckEnd,
 and on the token clock the reads a key tap makes inside ``execute()``, which the shell passes on as
 ``ActionExecuted.end_checks``. The environment invalidates the run for a failed read on neither
-path; the legacy loop's environment (tests/differential/legacy_environment.py) invalidates the run
-at the first failed read.
+path; the legacy loop's environment invalidates the run at the first failed read.
 """
 
 from __future__ import annotations
@@ -531,8 +530,8 @@ class _Shell:
     def _run(self, command) -> None:
         if self._batch_invalid and isinstance(command, Execute | AdvanceClock | RenderFrame):
             # The kernel takes the invalid run the shell posted only at its next step: what is
-            # left of the batch acts on the world no more, as the legacy loop executed nothing
-            # once _invalid_run was latched (legacy_loop.py _land_action).
+            # left of the batch acts on the world no more, as nothing executes once the run is
+            # invalid.
             return self.post(self._not_run(command))
         try:
             self._handle(command)
@@ -612,7 +611,7 @@ class _Shell:
 
     def _escaped(self, failure: str) -> None:
         """An exception that escaped the legacy loop: it is logged, and the first traceback is
-        the summary's error (tests/differential/legacy_loop.py _run_stream_legacy, main)."""
+        the summary's error."""
         self.log(f"[default] decision loop raised:\n{failure}")
         if self.end.loop_error is None:
             self.end.loop_error = failure
@@ -763,11 +762,10 @@ class _Shell:
     def _settle_returned(self, count: int) -> None:
         """Settle the first ``count`` results the workers handed back, on this thread, and hand
         them to the kernel. One back after a bound on its generation fell due waits for the
-        kernel to give the generation up, as the runner's bounded wait did (legacy_loop.py
-        _bounded_call). The late result of a generation the kernel gave up on (_given_up) goes
-        back as it came, to be discarded: the runner never handled one either. One back before a
-        bound the kernel then handled first, busy as the shell was, is settled all the same: the
-        kernel discards it, and its records are its own."""
+        kernel to give the generation up: the bound came first. The late result of a generation
+        the kernel gave up on (_given_up) goes back as it came, to be discarded unhandled. One
+        back before a bound the kernel then handled first, busy as the shell was, is settled all
+        the same: the kernel discards it, and its records are its own."""
         for _ in range(count):
             held = self._returned.popleft()
             if held.given_up:
@@ -797,11 +795,10 @@ class _Shell:
         self, held: _Generation, r: dict, outcome: str = "reported"
     ) -> tuple[GenerationResult, tuple]:
         """The result's annotations, usage, token accounting, cap audit and trajectory row, in
-        the runner's order (legacy_loop.py ``_decide``); what the kernel needs of it, and its
-        OutputChunkReceived and InferenceCompleted payloads as they were before the trajectory
-        row. Its settlement goes into the episode's, with ``outcome`` (clock.py Settlement): the
-        decision of a result the kernel takes is reported unless the shell marks it otherwise
-        (_given_up, _record_unfinished)."""
+        that order; what the kernel needs of it, and its OutputChunkReceived and InferenceCompleted
+        payloads as they were before the trajectory row. Its settlement goes into the episode's,
+        with ``outcome`` (clock.py Settlement): the decision of a result the kernel takes is
+        reported unless the shell marks it otherwise (_given_up, _record_unfinished)."""
         budget, clock_mode, agent = held.budget, self.config.clock_mode, self.agent
         episode_records.annotate_result(
             r,
@@ -858,9 +855,8 @@ class _Shell:
 
     def _abort(self, generation: int) -> None:
         """Interrupt a generation the kernel gave up on. One whose worker came back is aborted
-        too, before its result is discarded: a session that holds its reply rebuilds from the
-        accepted history, as the runner aborted every call it gave up on (legacy_loop.py
-        _bounded_call)."""
+        too, before its result is discarded, as every call given up on is: a session that holds
+        its reply rebuilds from the accepted history."""
         held = self._generations.get(generation)  # None when its StartGeneration raised
         if held is None:
             return
@@ -1050,9 +1046,9 @@ class _Shell:
             self.log("[cleanup] failed to release stateful inputs:\n" + traceback.format_exc())
 
     def _finish(self, finish: Finish) -> None:
-        """The termination record main() and the report read, in world seconds to nine places
-        (legacy_loop.py ``_termination``); the token clock's are ticks, and a failure the shell
-        found in this last batch goes into it (episode_end.py with_unheard)."""
+        """The termination record main() and the report read, in world seconds to nine places;
+        the token clock's are ticks, and a failure the shell found in this last batch goes into it
+        (episode_end.py with_unheard)."""
         termination = with_unheard(finish.termination, self._unheard, self.log)
         try:
             self._terminate(termination, finish.think_spent, finish.dropped_intermediate_frames)
@@ -1074,9 +1070,9 @@ class _Shell:
     def _wrap_up(self, failure: str) -> None:
         """The kernel, or the shell's reading of the clocks, raised (N11). The kernel's state no
         longer holds, so the shell wraps the episode up without it, as the runner wrapped up a loop
-        that raised (tests/differential/legacy_loop.py _run_stream_legacy, _finalize): the
-        call running is interrupted, the snapshot frozen unless it was, the inputs released
-        and the termination record written. A failure on the way is only logged."""
+        that raised: the call running is interrupted, the snapshot frozen unless it was, the
+        inputs released and the termination record written. A failure on the way is only
+        logged."""
         self._escaped(failure)
         # What the environment latched by now came first; a failure during the wrap-up after.
         latched = self.end.latched(self.env)
@@ -1189,10 +1185,10 @@ class _Shell:
             self.writer.emit(TraceEvent.ACTION_APPLIED, decision.resolved, entry)
         elif kind == TraceEvent.CLOCK_ADVANCED.value:
             if data["phase"] == "inference_to_action":
-                # The action lands: the runner times its resolution here, whatever comes of it
-                # (legacy_loop.py _apply). On the wall clock that is the reading the kernel landed
-                # it at, which its frame age counts from too (kernel/turns.py _approached); on the
-                # token clock it is when the clock got to the action time.
+                # The action lands: its resolution is timed here, whatever comes of it. On the wall
+                # clock that is the reading the kernel landed it at, which its frame age counts from
+                # too (kernel/turns.py _approached); on the token clock it is when the clock got to
+                # the action time.
                 decision.landed_at = (
                     self.clocks.operational.time() if self.token else self.env.t0 + entry.semantic
                 )
@@ -1220,11 +1216,10 @@ class _Shell:
     def _given_up(self, entry: Entry) -> None:
         """A generation the kernel gave up on. One whose result came back before and was settled
         keeps the call's own records, written now, ahead of the decision's, and what made that
-        result unusable still invalidates the run, as the runner's check of every result did
-        (legacy_loop.py _apply): the shell posts that reason, as the kernel discards the result
-        without it. Otherwise one given up on at the per-move cap, the wall deadline or the
-        provider watchdog timed out: it is logged and recorded as the runner records a call it
-        gave up on (legacy_loop.py _run_step), with no usage, which leaves the episode's cost
+        result unusable still invalidates the run, as it does for every result: the shell posts
+        that reason, as the kernel discards the result without it. Otherwise one given up on at
+        the per-move cap, the wall deadline or the provider watchdog timed out: it is logged and
+        recorded as a call given up on, with no usage, which leaves the episode's cost
         incomplete (decision 48). One the task's end or an invalidation gave up on is recorded
         so too, named for what ended the episode (N10), as a synthesized record the token
         totals and the model timing leave out (N34). Only the move over the cap is reported, as
@@ -1280,8 +1275,8 @@ class _Shell:
             capped = bound == "per_move_cap"
             timeout = max(0.1, self.config.per_move_cap_s) if capped else round(seconds, 2)
         if bound is not None:
-            # The cap and the watchdog as the runner names them (legacy_loop.py _move_timeout); the
-            # deadline from the call's start, where the legacy loop gave the time left plus a grace.
+            # The log line gives the cap, at least 0.1 s, and the watchdog as set, and the deadline
+            # as the time from the call's start.
             self.log(
                 f"[default] k={held.decision} generation TIMED OUT (>{timeout}s, {bound}) "
                 "— discarded"
@@ -1306,8 +1301,8 @@ class _Shell:
 
     def _froze(self) -> bool:
         """Whether the frame whose echo this is froze the stream: the kernel judged it in the
-        step that handled it (kernel/turns.py _captured), and the runner writes no frame its
-        check stops (legacy_loop.py _decide)."""
+        step that handled it (kernel/turns.py _captured), and a frame its check stops is not
+        written."""
         invalid = self.kernel.invalid
         return invalid is not None and invalid.reason == "observation_stream_frozen"
 

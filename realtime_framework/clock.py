@@ -15,8 +15,7 @@ token clock and in pause mode the semantic clock is the environment's frame coun
 The interface follows .NET's TimeProvider: reads (wall time and monotonic time), a blocking sleep,
 a wait with a timeout for another thread's Event or Future, timers, and waits on an event loop the
 clock made. A Clock also starts the threads that wait on it and makes their event loops, so that a
-test clock can tell when every one of them is waiting and only then move time on
-(tests/fake_clock.py).
+test clock can tell when every one of them is waiting and only then move time on.
 """
 
 import asyncio as asyncio

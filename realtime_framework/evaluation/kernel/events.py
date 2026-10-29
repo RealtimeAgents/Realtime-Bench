@@ -41,9 +41,9 @@ class EndCause:
     not_applied: str | None  # the status of an action it keeps from landing; None if none can be
 
 
-# By the end causes of the kernel (core.py Kernel.end), in the runner's names (legacy_loop.py
-# _finalize, _land_action). The horizon keeps an action from landing before it ends the episode,
-# at the next loop top; the think budget ends it only once the decision is reported.
+# By the end causes of the kernel (core.py Kernel.end): the run's stop reason and the status of an
+# action the end keeps from landing. The horizon keeps an action from landing before it ends the
+# episode, at the next loop top; the think budget ends it only once the decision is reported.
 END_CAUSES = {
     "environment": EndCause(None, "not_applied_terminal"),
     "deadline": EndCause("time_limit", "not_applied_time_limit"),
@@ -79,7 +79,7 @@ class Timer:
 
 @dataclass(frozen=True)
 class Invalidated:
-    """A non-model failure. The run is never scored (legacy_loop.py _invalidate)."""
+    """A non-model failure. The run is never scored."""
 
     category: str
     reason: str
@@ -342,8 +342,7 @@ class AdvanceClock:
 
     step: float
     # Whether a failed step escapes the decision loop, as the legacy loop let one escape: all but
-    # a wait action's own steps, which ran inside execute() and failed the action
-    # (tests/differential/legacy_environment.py LegacyStateReads).
+    # a wait action's own steps, which ran inside execute() and failed the action.
     escapes: bool
 
 
