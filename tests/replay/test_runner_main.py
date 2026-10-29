@@ -601,7 +601,8 @@ def test_a_failure_after_the_first_is_kept_and_keeps_a_re_evaluated_run_invalid(
 ):
     """The evaluator says its backend was unhealthy, and then the scene capture fails to close.
     The run is invalid for the first, and its summary lists both. A re-evaluation whose evaluator
-    answers healthy leaves it invalid for the other."""
+    answers healthy leaves it invalid for the other, its environment's, which it says is not
+    valid."""
     clock = FakeClock(1_000_000.0)
     guest = FakeGuest()
     task = UnhealthyTask(clock, guest, "task_success", True)
@@ -613,6 +614,7 @@ def test_a_failure_after_the_first_is_kept_and_keeps_a_re_evaluated_run_invalid(
         ("evaluator", "evaluation_backend_unhealthy"),
         ("environment", "cdp_close_failed"),
     ]
+    assert summary["environment_valid"] is None
     replaced = _reevaluated(
         tmp_path / "run", {"resolved": True, "evaluation_version": 1}, monkeypatch
     )
@@ -620,6 +622,7 @@ def test_a_failure_after_the_first_is_kept_and_keeps_a_re_evaluated_run_invalid(
         "invalid", "cdp_close_failed",
     )  # fmt: skip
     assert (replaced["stop_reason"], replaced["outcome"]) == ("invalid_run", "error")
+    assert replaced["environment_valid"] is False
     assert not scored(tmp_path)
 
 

@@ -321,3 +321,22 @@ def test_a_re_evaluation_reads_an_empty_or_missing_record_as_no_failure():
     summary = _summary(invalid_run=ENVIRONMENT)
     del summary["benchmark_eligible"]
     assert reporting.conclude_reevaluation(summary, HEALTHY).run_status == "invalid"
+
+
+@pytest.mark.parametrize(
+    ("summary", "valid"),
+    [
+        (_summary(invalid_run=EVALUATOR, invalid_runs=[EVALUATOR, ENVIRONMENT]), False),
+        (_summary(invalid_run=EVALUATOR, environment_valid=False), False),
+        (_summary(invalid_run=EVALUATOR, environment_valid=None), None),
+    ],
+    ids=["invalid for its environment now", "found invalid before", "never found invalid"],
+)
+def test_a_re_evaluation_says_the_environment_is_not_valid_once_anything_found_it_so(
+    tmp_path, monkeypatch, capsys, summary, valid
+):
+    """A healthy re-evaluation that leaves the run invalid for its environment says the
+    environment is not valid; one that scores a run whose environment was found not valid, as
+    the run set up, keeps saying so. Nothing makes it valid."""
+    replaced, _ = _reevaluated(tmp_path, monkeypatch, capsys, summary, HEALTHY)
+    assert replaced["environment_valid"] is valid

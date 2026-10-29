@@ -2060,6 +2060,10 @@ def reevaluate_main():
                 "run_status": conclusion.run_status,
                 "invalid_run": conclusion.invalid_run,
                 "failure_attribution": conclusion.failure_attribution,
+                # Not valid once the run found it so, as it set up or now.
+                "environment_valid": conclusion.environment_valid(
+                    summary.get("environment_valid") is False
+                ),
                 "stop_reason": conclusion.stop_reason,
                 "solved": conclusion.solved,
                 "verification": result,
