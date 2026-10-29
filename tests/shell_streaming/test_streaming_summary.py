@@ -174,6 +174,7 @@ def test_the_summary_pairs_each_frame_with_its_own_push(tmp_path):
         if n == 11:
             refused("f11.frame")
             kernel("FramePushed", observation_id=observation_id, sent_at=None, error="refused")
+            kernel("FrameDropped", observation_id=observation_id, reason="push_failed", dropped=1)
             continue
         capture(
             trace, clock, sequence, TraceEvent.FRAME_SENT, frame=n, observation_id=observation_id,
@@ -194,6 +195,28 @@ def test_the_summary_pairs_each_frame_with_its_own_push(tmp_path):
     assert (confirm["sample_count"], confirm["complete"], confirm["min"]) == (11, True, 0.2)
     age = summary["actions"]["frame_age_s"]
     assert (age["sample_count"], age["total_decisions"], age["complete"]) == (2, 2, True)
+
+
+def test_a_push_the_end_s_abort_failed_is_no_failed_push(tmp_path):
+    """The kernel drops a frame whose push failed as push_failed, and one whose push failed once
+    the episode had ended, as the end's abort closing the session fails it, as ended
+    (kernel/streaming.py _pushed): only the first counts as a failed push."""
+    path = tmp_path / "trace.jsonl"
+    trace = EpisodeTrace(path, run_id="s", clock=FakeClock())
+
+    def kernel(kind, **data):
+        trace.emit("KernelRecord", {"kind": kind, "data": data})
+
+    for n, reason in ((1, "push_failed"), (2, "ended")):
+        observation_id = f"obs-{n}"
+        kernel("FrameCaptured", observation_id=observation_id, timestamp=float(n), error=None)
+        kernel("FramePushed", observation_id=observation_id, sent_at=None, error="closed")
+        kernel("FrameDropped", observation_id=observation_id, reason=reason, dropped=n)
+    trace.close()
+
+    frames = summarize_streaming(path, OPENAI, attempt_id=trace.attempt_id)["frames"]
+    assert (frames["captured"], frames["pushed"], frames["push_failed"]) == (2, 0, 1)
+    assert (frames["dropped"], frames["dropped_by_reason"]) == (2, {"ended": 1, "push_failed": 1})
 
 
 def test_the_summary_reads_its_own_run_of_a_trace_written_twice(tmp_path):

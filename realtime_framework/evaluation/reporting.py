@@ -545,15 +545,17 @@ def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -
     another attempt's records before.
 
     Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
-    FramePushed, and those dropped by reason (FrameDropped). For each frame pushed the agent's
-    FrameSent gives its frame-table row: when it was captured, written on the wire and confirmed
-    by the provider, on the wall clock (decision N43), which give the seconds from capture to
-    push and from push to confirmation. Gemini Live confirms no frame; OpenAI Realtime's push
-    returns once the frame is confirmed, which does not count in its push. A frame whose push the
-    provider refused, from the session's delivery records, is one that never went in: FrameSent
-    names each frame that did by the number its block goes under, and the session refusing such
-    a frame's placeholder as it folds it refuses no frame. Actions: those that arrived, the age of
-    the frame each found names when it arrived, and each one's outcome (ActionResolved), with the
+    FramePushed, and those dropped by reason (FrameDropped), push_failed among them: a frame
+    whose push failed once the episode ended, as the end's abort fails one, is dropped as ended
+    (kernel/streaming.py). For each frame pushed the agent's FrameSent gives its frame-table
+    row: when it was captured, written on the wire and confirmed by the provider, on the wall
+    clock (decision N43), which give the seconds from capture to push and from push to
+    confirmation. Gemini Live confirms no frame; OpenAI Realtime's push returns once the frame
+    is confirmed, which does not count in its push. A frame whose push the provider refused,
+    from the session's delivery records, is one that never went in: FrameSent names each frame
+    that did by the number its block goes under, and the session refusing such a frame's
+    placeholder as it folds it refuses no frame. Actions: those that arrived, the age of the
+    frame each found names when it arrived, and each one's outcome (ActionResolved), with the
     seconds an applied action waited from its arrival and ran.
     Replies: those started and those given up, by reason. Each distribution's total_decisions
     counts the frames or actions it is taken over. ``settings`` is the run configuration's
@@ -617,7 +619,7 @@ def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -
         "frames": {
             "captured": len(captured),
             "pushed": len(pushed),
-            "push_failed": len(kernel["FramePushed"]) - len(pushed),
+            "push_failed": dropped["push_failed"],
             "dropped": sum(dropped.values()),
             "dropped_by_reason": dict(sorted(dropped.items())),
             "confirmed": len(acked),

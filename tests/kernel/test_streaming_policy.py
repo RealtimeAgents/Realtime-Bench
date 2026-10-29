@@ -1044,6 +1044,26 @@ def test_every_frame_captured_is_pushed_or_counted_as_dropped():
     assert len(sim.captures) == 6
 
 
+def test_a_push_the_end_s_abort_fails_is_dropped_as_ended_not_as_failed():
+    """The second push hangs until the session is closed. At the deadline the end gives the reply
+    up, and its abort closes the session, which fails the push: the frame is dropped as one the
+    end kept out, as the frame waiting behind it is, not as a failed push. Failed the same way by
+    the abort of a reply its watchdog gave up within the episode, the push is a failed one."""
+    sim = _run(World(stuck_pushes={2}), 2.5)
+    assert [(d["observation_id"], d["reason"]) for d in sim.data("FrameDropped")] == [
+        ("obs-2", "ended"),
+        ("obs-1", "ended"),
+    ]
+    assert (sim.policy.frames_pushed, sim.policy.dropped_frames) == (1, 2)
+    within = _run(World(stuck_pushes={2}), 6.0, push_watchdog_s=2.0)
+    assert within.data("GenerationAbandoned")[0]["reason"] == "push_watchdog"
+    assert within.data("FrameDropped")[0] == {
+        "observation_id": "obs-1",
+        "reason": "push_failed",
+        "dropped": 1,
+    }
+
+
 def test_a_frame_captured_across_the_end_is_counted_as_dropped():
     """The capture at 2 takes until 3.5, past the deadline at 3; its frame goes nowhere."""
     sim = _run(World(capture_times={3: 1.5}), 3.0)
