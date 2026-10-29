@@ -207,3 +207,56 @@ def test_an_evaluation_not_safe_to_score_is_the_evaluator_s_failure():
         "reason": "evaluation_not_an_object",
         "detail": '"crashed"',
     }
+
+
+def test_a_re_evaluation_keeps_a_run_invalid_for_a_failure_not_the_evaluator_s():
+    """A healthy re-evaluation decides the evaluator's failures alone: the run stays invalid for
+    the first earlier failure that was not the evaluator's, from the failures its summary lists,
+    or from its invalid run when it found only one."""
+    listed = _summary(invalid_run=EVALUATOR, invalid_runs=[EVALUATOR, ENVIRONMENT])
+    conclusion = reporting.conclude_reevaluation(listed, HEALTHY)
+    assert (conclusion.invalid_run, conclusion.run_status, conclusion.solved) == (
+        ENVIRONMENT, "invalid", None,
+    )  # fmt: skip
+    assert (conclusion.stop_reason, conclusion.failure_attribution) == (
+        "invalid_run",
+        "environment",
+    )
+    assert conclusion.listed() == {}  # the summary keeps the run's own list
+    alone = reporting.conclude_reevaluation(_summary(invalid_run=ENVIRONMENT), HEALTHY)
+    assert alone.invalid_run is ENVIRONMENT
+
+
+def test_a_re_evaluation_scores_a_run_invalid_for_its_evaluator_alone():
+    """Once a healthy evaluation decides the evaluator's failure, the run counts as its summary
+    says it may: scored, or experimental outside maintained results; stopped as its loop
+    stopped, or as its summary says when the loop's stop was not recorded."""
+    evaluation = {**HEALTHY, "progress": 0.25}
+    conclusion = reporting.conclude_reevaluation(_summary(invalid_run=EVALUATOR), evaluation)
+    assert (conclusion.run_status, conclusion.invalid_run, conclusion.solved) == (
+        "scored", None, True,
+    )  # fmt: skip
+    assert (conclusion.stop_reason, conclusion.progress) == ("time_limit", 0.25)
+    experimental = reporting.conclude_reevaluation(
+        _summary(invalid_run=EVALUATOR, benchmark_eligible=False, loop_stop_reason=None),
+        HEALTHY,
+    )
+    assert (experimental.run_status, experimental.stop_reason) == ("experimental", "invalid_run")
+
+
+def test_a_re_evaluation_not_safe_to_score_invalidates_the_run_for_the_evaluator():
+    unhealthy = {**HEALTHY, "ok": False}
+    conclusion = reporting.conclude_reevaluation(_summary(invalid_run=ENVIRONMENT), unhealthy)
+    assert conclusion.invalid_run == reporting.evaluator_failure(unhealthy)
+    assert (conclusion.run_status, conclusion.solved) == ("invalid", None)
+
+
+def test_a_re_evaluation_reads_an_empty_or_missing_record_as_no_failure():
+    """An empty invalid run names no failure: the run counts, and the empty record stands as
+    its invalid run. A summary that does not say whether the run may count needs to only when
+    it does."""
+    empty = reporting.conclude_reevaluation(_summary(invalid_run={}), HEALTHY)
+    assert (empty.run_status, empty.invalid_run, empty.failure_attribution) == ("scored", {}, None)
+    summary = _summary(invalid_run=ENVIRONMENT)
+    del summary["benchmark_eligible"]
+    assert reporting.conclude_reevaluation(summary, HEALTHY).run_status == "invalid"

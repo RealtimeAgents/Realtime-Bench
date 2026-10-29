@@ -855,11 +855,49 @@ def conclude(failures, evaluation=None, *, benchmark_eligible=None, stop_reason=
     and stopped as its episode stopped (``stop_reason``); those three are read only then, so a
     run known to be invalid is concluded from its failures alone."""
     failures = _distinct(failures)
-    if failures:
-        return Conclusion(failures[0], tuple(failures), "invalid", None, "invalid_run", evaluation)
-    return Conclusion(
+    return _concluded(
+        failures[0] if failures else None,
+        tuple(failures),
+        evaluation,
+        benchmark_eligible,
+        stop_reason,
+    )
+
+
+def conclude_reevaluation(summary: dict, evaluation) -> Conclusion:
+    """How a finished run concludes once its saved state is evaluated again (reevaluate_main),
+    from its run summary as written, by this runner or an earlier one. The new evaluation decides
+    the evaluator's failures alone: one not safe to score invalidates the run for the
+    evaluator, and otherwise the run stays invalid for the first failure that was not the
+    evaluator's, from the failures the summary lists or its invalid run when it found only one.
+    A record there that names no failure, such as an empty one, leaves the run counting and
+    stands as its invalid run. The summary says whether the run may count, read only when it
+    does, and how its loop stopped."""
+    persistent = next(
+        (
+            prior
+            for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
+            if isinstance(prior, dict) and prior.get("category") != "evaluator"
+        ),
         None,
-        (),
+    )
+    invalid_run = evaluator_failure(evaluation) or persistent
+    return _concluded(
+        invalid_run,
+        (invalid_run,) if invalid_run else (),
+        evaluation,
+        None if invalid_run else summary["benchmark_eligible"],
+        summary.get("loop_stop_reason") or summary.get("stop_reason"),
+    )
+
+
+def _concluded(invalid_run, failures, evaluation, benchmark_eligible, stop_reason) -> Conclusion:
+    """The run is invalid when its invalid run names a failure, and counts otherwise."""
+    if invalid_run:
+        return Conclusion(invalid_run, failures, "invalid", None, "invalid_run", evaluation)
+    return Conclusion(
+        invalid_run,
+        failures,
         "scored" if benchmark_eligible else "experimental",
         evaluation["resolved"],
         stop_reason,
@@ -2014,42 +2052,18 @@ def reevaluate_main():
                     )
         if sp.exists() and not backup.exists():
             shutil.copy2(sp, backup)
-        # The first failure the evaluation did not decide; a summary lists its failures only when
-        # there was more than one (runner.py main).
-        persistent_invalid = next(
-            (
-                prior
-                for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
-                if isinstance(prior, dict) and prior.get("category") != "evaluator"
-            ),
-            None,
-        )
-        replacement_invalid = (
-            {
-                "category": "evaluator",
-                "reason": invalid_reason,
-                "detail": json.dumps(result, default=str)[:2000],
-            }
-            if invalid_reason
-            else persistent_invalid
-        )
-        if replacement_invalid:
-            reported_invalid_reason = replacement_invalid.get("reason")
+        conclusion = conclude_reevaluation(summary, result)
+        if conclusion.invalid_run:
+            reported_invalid_reason = conclusion.invalid_run.get("reason")
         summary.update(
             {
-                "run_status": "invalid"
-                if replacement_invalid
-                else ("scored" if summary["benchmark_eligible"] else "experimental"),
-                "invalid_run": replacement_invalid,
-                "failure_attribution": (
-                    (replacement_invalid or {}).get("category") if replacement_invalid else None
-                ),
-                "stop_reason": "invalid_run"
-                if replacement_invalid
-                else summary.get("loop_stop_reason") or summary.get("stop_reason"),
-                "solved": None if replacement_invalid else result.get("resolved"),
+                "run_status": conclusion.run_status,
+                "invalid_run": conclusion.invalid_run,
+                "failure_attribution": conclusion.failure_attribution,
+                "stop_reason": conclusion.stop_reason,
+                "solved": conclusion.solved,
                 "verification": result,
-                "progress": (result or {}).get("progress"),
+                "progress": conclusion.progress,
                 "evaluation_artifact": out.name,
                 "reevaluated_from_saved_artifact": True,
             }
