@@ -565,7 +565,10 @@ class ApptainerEnvironment(BaseEnvironment):
         if resolved.return_code:
             raise ValueError(f"Cannot resolve model configuration: {resolved.stderr.strip()}")
         launch = json.loads(resolved.stdout)
+        from realtime_framework.entity.context_policy import context_values
         from realtime_framework.evaluation.config import configuration_sha256
+
+        context = launch["model_config"]["context"]
 
         # Marks the results of an external driver as unofficial (evaluation/submission.py).
         external = {"external_driver": launch["external_driver"]} if "external_driver" in launch else {}
@@ -576,6 +579,13 @@ class ApptainerEnvironment(BaseEnvironment):
             # Compare with the actual report so edits between resolution and execution
             # cannot silently evaluate a different configuration.
             "configuration_sha256": configuration_sha256(launch),
+            # The values of the context settings the trial runs with, which the upload holds
+            # against the standard ones (evaluation/submission.py check_standard_context).
+            "resolved_context": {
+                "api": context["api"],
+                "model": context["model"],
+                "values": context_values(context),
+            },
             **external,
         }
 
@@ -888,6 +898,11 @@ def aggregate(job, *, official=False):
         "model_revision": system.get("model_revision"),
         "mode": system.get("mode"),
         **({"external_driver": system["external_driver"]} if "external_driver" in system else {}),
+        **(
+            {"resolved_context": system["resolved_context"]}
+            if "resolved_context" in system
+            else {}
+        ),
         "integration_hash": hashlib.sha256(next(iter(systems)).encode()).hexdigest()
         if systems
         else None,

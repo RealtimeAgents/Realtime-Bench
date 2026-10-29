@@ -32,7 +32,7 @@ shell to send it).
 | `--ak api_key_env=MY_KEY` | Read the credential from another variable (`provider/model-id` only; set a preset's in its YAML). |
 | `--ak model_revision=REV` | Record the deployment revision (`provider/model-id` only; presets use `endpoint.revision`). |
 | `--ak context_file=PATH` | An experiment file: a YAML mapping of [context settings](model_configuration.md#context-settings) to values, for every model of the job. |
-| `--ak context='{"reasoning_replay": true}'` | Context settings of the run, over the experiment file's and the model YAML's; values keep their JSON types. |
+| `--ak context='{"reasoning_replay": true}'` | Context settings of the run, over the experiment file's and the model YAML's; values keep their JSON types. A run off the standard settings cannot be uploaded. |
 | `--ek lane=2` | Use a separate [lane](#parallel-runs) for a concurrent job. |
 | `--job-name NAME` | Name the job's results directory (default: Harbor's timestamp). |
 | `--print-config` | Show the resolved Harbor configuration without running. |

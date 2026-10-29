@@ -839,3 +839,39 @@ def test_upload_refuses_external_driver_results(external, tmp_path, monkeypatch,
     reports = submit(tmp_path / "registered", request)
     assert [report["outcomes"]["error"] for report in reports] == [1, 1, 1]
     assert all("external_driver" not in report for report in reports)
+
+
+def test_upload_refuses_runs_off_the_standard_context(tmp_path, monkeypatch):
+    """Harbor's resolve records the values of the context settings a trial runs with; the upload
+    judges them again against this release's defaults file, not the record's own judgement: each
+    standard, or an approved deviation of the model, as Kimi K3's reasoning replay is. A job
+    recorded before the settings were ran under its release's, and passes."""
+    from realtime_framework.evaluation.submission import SubmissionError
+
+    request = resolved_request(monkeypatch, tmp_path, "my-model")
+    assert request["resolved_context"] == {
+        "api": "chat_completions",
+        "model": "YOUR_MODEL",
+        "values": {
+            "screenshots_kept": 20, "screenshot_fold_block": 10, "turns_kept": 50,
+            "turn_archive_block": 10, "execution_feedback": "separate_message",
+            "observation": "som_screenshot", "reasoning_replay": False,
+            "archive_over_window": True, "tool_call_history": "native_tools",
+            "decision_history": "turns",
+        },
+    }  # fmt: skip
+    reports = submit(tmp_path / "standard", request)
+    assert all(report["resolved_context"] == request["resolved_context"] for report in reports)
+    k3 = resolved_request(monkeypatch, tmp_path, "kimi-k3")
+    assert k3["resolved_context"]["values"]["reasoning_replay"] is True
+    submit(tmp_path / "approved", k3)
+    off = json.loads(json.dumps(request))
+    off["resolved_context"]["values"].update(screenshots_kept=12, reasoning_replay=True)
+    with pytest.raises(SubmissionError) as caught:
+        submit(tmp_path / "off", off)
+    assert str(caught.value) == (
+        f"{tmp_path / 'off' / 'run1'}: the runs are off the standard context settings: "
+        "screenshots_kept is 12, standard 20; reasoning_replay is True, standard False"
+    )
+    before = {key: value for key, value in request.items() if key != "resolved_context"}
+    assert all("resolved_context" not in report for report in submit(tmp_path / "old", before))
