@@ -61,7 +61,6 @@ _EXTRA_VARIABLES = frozenset(
         "BENCHMARK_LITELLM_MODEL", "BENCHMARK_LITELLM_API_BASE", "BENCHMARK_LITELLM_KEY_ENV",
         "BENCHMARK_CONTEXT_WINDOW_TOKENS", "BENCHMARK_CONTEXT_COUNTER",
         "BENCHMARK_CONTEXT_IMAGE_TOKENS", "BENCHMARK_CONTEXT_RESERVE_TOKENS",
-        "BENCHMARK_CONTEXT_PRESET",
         "STREAM_CHAT_STREAM", "STREAM_CHAT_INCLUDE_USAGE", "STREAM_CHAT_API_KEY_ENV",
         # Read at call time, not recorded (LiteLLMDriver._transport_kwargs, GeminiLiveDriver).
         "OPENROUTER_REFERER", "OPENROUTER_TITLE", "GEMINI_API_KEY_START_SLOT",
@@ -268,7 +267,7 @@ def _probe_runner(request: dict) -> dict:
     import realtime_framework.sandbox.desktop as desktop
     import realtime_tasks.registry as tasks
     from realtime_framework.entity.config import EnvironmentConfig
-    from realtime_framework.entity.context_policy import current_context_policy
+    from realtime_framework.entity.context_policy import path_policy
     from realtime_framework.evaluation._trial import LAUNCH_FILE
 
     settings = {}
@@ -306,14 +305,12 @@ def _probe_runner(request: dict) -> dict:
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
         # (harnesses/default/harness.py DefaultHarness._setup_backend).
-        policy = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        )
+        policy = path_policy(config)
         state["settings_at_agent_setup"] = {
-            "active_visual_budget": policy.visuals.keep,
-            "visual_fold_block_size": policy.visuals.block,
-            "detailed_history_turns": policy.turns.keep,
-            "detailed_history_drop_block_size": policy.turns.block,
+            "active_visual_budget": policy.screenshots_kept,
+            "visual_fold_block_size": policy.screenshot_fold_block,
+            "detailed_history_turns": policy.turns_kept,
+            "detailed_history_drop_block_size": policy.turn_archive_block,
         }
         state["prompts"] = policy.prompts
         return _Agent(config)
@@ -392,6 +389,7 @@ def _probe_runner(request: dict) -> dict:
             config = json.loads(run_config.read_text())
             for key in ("harness_version", "harness_hash"):
                 config.pop(key)  # source identity, not configuration
+            record["context_settings"] = config.pop("context_settings")  # beside the hash
             record["runtime_config_hash"] = config.pop("runtime_config_hash")
             record["runtime_config"] = config
             record["recorded_vs_used"] = _recorded_vs_used(

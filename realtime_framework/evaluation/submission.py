@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from realtime_framework.entity.context_policy import resolve_context
 from realtime_framework.evaluation.harbor import aggregate
 from realtime_tasks.registry import UNRELEASED
 
@@ -53,6 +54,23 @@ def check_registered_driver(job: Path, report: dict) -> None:
         )
 
 
+def check_standard_context(job: Path, report: dict) -> None:
+    """Only runs on the standard context settings are leaderboard results. Their values, which
+    Harbor's resolve recorded, are judged again against this release's defaults file: each
+    standard, or an approved deviation of the model (entity/context_policy.py resolve_context).
+    A job recorded before runs recorded them ran under its release's."""
+    context = report.get("resolved_context")
+    if context is None:
+        return
+    settings = resolve_context(context["api"], context["model"], run=context["values"])
+    off = [item for item in settings.deviations if item.category == "nonstandard"]
+    if off:
+        raise SubmissionError(
+            f"{job}: the runs are off the standard context settings: "
+            + "; ".join(f"{item.key} is {item.value!r}, standard {item.standard!r}" for item in off)
+        )
+
+
 def check_runs(jobs: list[Path]) -> list[dict]:
     """Return one report per job, or explain why the jobs are not a leaderboard submission."""
     if len(jobs) != RUNS or len({job.resolve() for job in jobs}) != RUNS:
@@ -64,6 +82,7 @@ def check_runs(jobs: list[Path]) -> list[dict]:
         except (OSError, ValueError, KeyError) as exc:
             raise SubmissionError(f"{job}: {exc}") from exc
         check_registered_driver(job, report)
+        check_standard_context(job, report)
         if not report["complete"]:
             raise SubmissionError(f"{job}: {report['scored']}/{report['expected']} tasks have a trial")
         for field, value in REQUIRED.items():

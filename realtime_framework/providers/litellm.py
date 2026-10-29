@@ -48,6 +48,7 @@ from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
+from realtime_framework.providers.capture import replayed_reasoning
 from realtime_framework.providers.capture import response_statuses
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
@@ -665,7 +666,8 @@ class LiteLLMDriver(StatelessEncoder):
         kwargs.update(self._transport_kwargs())
         # An abort can replace the client, and its capture, before the request or these events end.
         capture = self._http_capture
-        response = await self._sdk.acompletion(**kwargs)
+        with replayed_reasoning(kwargs["messages"]):
+            response = await self._sdk.acompletion(**kwargs)
         audit = {
             "usage": None,
             "usage_revision": 0,
@@ -933,7 +935,7 @@ class LiteLLMDriver(StatelessEncoder):
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         kwargs["logger_fn"] = observe
-        with response_statuses() as statuses:
+        with response_statuses() as statuses, replayed_reasoning(kwargs["messages"]):
             response = await self._sdk.acompletion(**kwargs)
         if not response.choices:
             raise RuntimeError("LiteLLM returned no response choices")
@@ -1125,7 +1127,7 @@ class MoonshotDriver(LiteLLMDriver):
         protocol_family="moonshot_chat",
         # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
         # multi-turn conversations and tool-call loops". That is K3's requirement, not the API's:
-        # K3's YAML names the kimi_k3 preset, which sends it (entity/context_policy.py PRESETS).
+        # K3's YAML sets reasoning_replay, which sends it (configs/models/kimi-k3.yaml).
         # LiteLLM's Moonshot config sends the encoder's reasoning_content unchanged.
         reasoning_replay="optional",
     )
@@ -1179,7 +1181,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
         wall_clock_only=True,
         # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
         # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
-        # template. A model that needs it back names a preset that sends it (K3: kimi_k3).
+        # template. A model that needs it back sets reasoning_replay in its YAML's context (K3).
         reasoning_replay="optional",
     )
     protocol = ChatProtocol(
@@ -1243,8 +1245,8 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         wall_clock_only=True,
         # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:
         # sent unchanged to OpenAI-format APIs, an unsigned thought part for Gemini, dropped for
-        # Anthropic.
-        reasoning_replay="unsupported",
+        # Anthropic. It may go back to the providers compat names.
+        reasoning_replay="optional",
     )
     protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
     deployment = ChatDeployment(
@@ -1255,4 +1257,11 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         gateway="litellm",
         require_api_key=False,
     )
-    compat = ChatCompat()
+    # The providers whose conversion (LiteLLM 1.106.1) keeps an assistant message's
+    # reasoning_content: llms/deepseek/chat/transformation.py (which fills a missing one with a
+    # space in thinking mode), llms/moonshot/chat/transformation.py, llms/together_ai/chat/
+    # transformation.py (which says Together consumes it) and llms/hosted_vllm/chat/
+    # transformation.py (which keeps a string one).
+    compat = ChatCompat(
+        reasoning_replay_providers=("deepseek", "moonshot", "together_ai", "hosted_vllm")
+    )

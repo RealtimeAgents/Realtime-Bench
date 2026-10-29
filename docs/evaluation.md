@@ -31,6 +31,8 @@ shell to send it).
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
 | `--ak api_key_env=MY_KEY` | Read the credential from another variable (`provider/model-id` only; set a preset's in its YAML). |
 | `--ak model_revision=REV` | Record the deployment revision (`provider/model-id` only; presets use `endpoint.revision`). |
+| `--ak context_file=PATH` | An experiment file: a YAML mapping of [context settings](model_configuration.md#context-settings) to values, for every model of the job. |
+| `--ak context='{"reasoning_replay": true}'` | Context settings of the run, over the experiment file's and the model YAML's; values keep their JSON types. A run off the standard settings cannot be uploaded. |
 | `--ek lane=2` | Use a separate [lane](#parallel-runs) for a concurrent job. |
 | `--job-name NAME` | Name the job's results directory (default: Harbor's timestamp). |
 | `--print-config` | Show the resolved Harbor configuration without running. |
@@ -118,6 +120,18 @@ one, over `spend_tasks` tasks, of which `spend_incomplete_tasks` are incomplete 
 then a lower bound), and `invalid_known_spend_usd`, the known spend of its invalid tasks.
 `mean_cost_usd` stays the mean over the tasks whose cost is complete. Archived retry attempts
 list theirs under `retry_attempts`.
+
+A turn-based trial's `run_summary.json` also counts the past reasoning its requests sent back
+(the [context setting](model_configuration.md#context-settings) `reasoning_replay`), in
+`reasoning_replay`: `requests`, the generation requests recorded as sent, each attempt and resend
+its own, including one that failed to connect, since a request is recorded before it is sent;
+`requests_with_reasoning`, those that carried at least one past reasoning; and
+`replayed_reasoning`, the past reasonings over all of them. Each request's own count is its
+`ModelRequestSent` record's `replayed_reasoning` in the episode trace. `exact_wire` is false where
+the counts are of LiteLLM's final request dict rather than the bytes sent (the generic `litellm`
+API, as `-m provider/model-id` runs), and those counts miss a resend LiteLLM's own HTTP handler
+makes after a connection error. Only LiteLLM's APIs record these counts; for the others the
+section is null.
 
 ## Streaming runs
 

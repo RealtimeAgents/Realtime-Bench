@@ -50,6 +50,10 @@ REDACTED = "<redacted>"
 _STATUSES: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar(
     "response_statuses", default=None
 )
+# The past reasonings of the request a send hands its SDK (replayed_reasoning).
+_REPLAYED_REASONING: contextvars.ContextVar[int | None] = contextvars.ContextVar(
+    "replayed_reasoning", default=None
+)
 
 
 @contextlib.contextmanager
@@ -63,6 +67,31 @@ def response_statuses():
         yield statuses
     finally:
         _STATUSES.reset(token)
+
+
+def reasoning_messages(messages) -> int:
+    """The past reasonings a chat request carries back: its assistant messages whose
+    reasoning_content has more than whitespace, so not the space DeepSeek's LiteLLM conversion
+    puts in a missing one in thinking mode (llms/deepseek/chat/transformation.py
+    _fill_reasoning_content)."""
+    return sum(
+        message.get("role") == "assistant"
+        and isinstance(message.get("reasoning_content"), str)
+        and bool(message["reasoning_content"].strip())
+        for message in messages
+    )
+
+
+@contextlib.contextmanager
+def replayed_reasoning(messages):
+    """Record, with each request a hooked client sends within this context, the past reasonings
+    of ``messages``, the request a LiteLLM driver hands its SDK (reasoning_messages). As for
+    response_statuses, the hooks run in the calling task."""
+    token = _REPLAYED_REASONING.set(reasoning_messages(messages))
+    try:
+        yield
+    finally:
+        _REPLAYED_REASONING.reset(token)
 
 
 def header_kept(name: str) -> bool:
@@ -193,10 +222,13 @@ class HttpCapture:
         self.hooks = {"request": [self._on_request], "response": [self._on_response]}
 
     async def _on_request(self, request: httpx.Request) -> None:
+        payload = _request_payload(self.channel, self.purpose, request)
+        replayed = _REPLAYED_REASONING.get()
+        if replayed is not None:
+            # Of the request the SDK was handed; the body recorded is the one it sent.
+            payload["replayed_reasoning"] = replayed
         self._sent[request] = self.owner._trace.capture(
-            TraceEvent.MODEL_REQUEST_SENT,
-            _request_payload(self.channel, self.purpose, request),
-            body=request.content,
+            TraceEvent.MODEL_REQUEST_SENT, payload, body=request.content
         )
 
     async def _on_response(self, response: httpx.Response) -> None:
@@ -250,7 +282,9 @@ class LoggerCapture:
     That API has no HTTP client to hook (LiteLLM builds its own), so the request is LiteLLM's
     final request dict and the reply its logged response text: not the bytes on the wire
     (``exact_wire`` is false). The callback also carries the plaintext key (``api_key`` and the
-    logged request headers); neither is copied. The API base is LiteLLM's masked copy.
+    logged request headers); neither is copied. The API base is LiteLLM's masked copy. The past
+    reasonings a request carried are counted on that dict; LiteLLM logs it once before its HTTP
+    handler sends it, so a resend the handler makes after a connection error is not recorded.
     """
 
     channel = "litellm.logger_fn"
@@ -262,6 +296,7 @@ class LoggerCapture:
     def __call__(self, details: dict) -> None:
         kind = details.get("log_event_type")
         if kind == "pre_api_call":
+            body = (details.get("additional_args") or {}).get("complete_input_dict")
             self.request_seq = self.owner._trace.capture(
                 TraceEvent.MODEL_REQUEST_SENT,
                 {
@@ -271,8 +306,11 @@ class LoggerCapture:
                     "method": "POST",
                     "url": (details.get("litellm_params") or {}).get("api_base"),
                     "headers": None,
+                    # A Gemini model's dict has contents in place of messages (LiteLLM's
+                    # RequestBody, types/llms/vertex_ai.py).
+                    "replayed_reasoning": reasoning_messages(body.get("messages", ())),
                 },
-                body=(details.get("additional_args") or {}).get("complete_input_dict"),
+                body=body,
             )
         elif kind == "post_api_call":
             # LiteLLM logs the provider reply as text (it dumps a dict reply to JSON first).

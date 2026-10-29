@@ -111,7 +111,7 @@ from realtime_framework.harnesses.registry import configure_agent
 from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.entity.config import EnvironmentConfig
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.model import TransportFailureError
 from realtime_framework.sandbox.observation.capture import BrowserSceneCapture
 from realtime_framework.sandbox.guest import GuestClient
@@ -132,6 +132,7 @@ from realtime_framework.evaluation.config import config_fingerprint
 from realtime_framework.evaluation.config import run_spec_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 from realtime_framework.evaluation.reporting import summarize_run_metrics
+from realtime_framework.evaluation.reporting import summarize_reasoning_replay
 from realtime_framework.evaluation.reporting import summarize_streaming
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.evaluation.reporting import episode_outcome
@@ -412,6 +413,9 @@ def main():
                 "harness_version": harness_version(harness_hash),
                 "harness_hash": harness_hash,
                 "runtime_config_hash": runtime_config_hash,
+                # The context settings as resolved: where each value came from, what it replaced
+                # and how it stands. The hash takes their values alone (model_config.context).
+                "context_settings": cfg.context.model_dump(),
             },
         )
 
@@ -823,29 +827,35 @@ def main():
             else (latched or ("setup_error" if env is None else "unknown"))
         )
         world_time_s = termination["end_s"] if termination is not None else None
-        # The trace holds every record the episode wrote, checkpointed above. A streaming section
-        # that cannot be read leaves the run unscored, as the run metrics below then count it.
-        streaming = None
-        if spec.interaction_mode == "streaming":
-            try:
+        # The trace holds every record the episode wrote, checkpointed above. A section read from
+        # it, a streaming run's streaming section or a turn-based run's reasoning replay, that
+        # cannot be read leaves the run unscored, as the run metrics below then count it.
+        streaming = reasoning_replay = None
+        section = "streaming" if spec.interaction_mode == "streaming" else "reasoning_replay"
+        try:
+            if section == "streaming":
                 streaming = summarize_streaming(
                     run_dir / "episode_trace.jsonl",
                     (runtime_config or {}).get("streaming"),
                     attempt_id=episode_trace.attempt_id,
                 )
-            # A record written in part has the next one after it on its line (EpisodeTrace.emit).
-            except json.JSONDecodeError:
-                invalid_runs.append(
-                    {
-                        "category": "harness",
-                        "reason": "streaming_summary_failed",
-                        "detail": traceback.format_exc(),
-                    }
+            else:
+                reasoning_replay = summarize_reasoning_replay(
+                    run_dir / "episode_trace.jsonl", attempt_id=episode_trace.attempt_id
                 )
-                invalid_run = invalid_runs[0]
-                solved = None
-                run_status = "invalid"
-                stop_reason = "invalid_run"
+        # A record written in part has the next one after it on its line (EpisodeTrace.emit).
+        except json.JSONDecodeError:
+            invalid_runs.append(
+                {
+                    "category": "harness",
+                    "reason": f"{section}_summary_failed",
+                    "detail": traceback.format_exc(),
+                }
+            )
+            invalid_run = invalid_runs[0]
+            solved = None
+            run_status = "invalid"
+            stop_reason = "invalid_run"
         try:
             run_metrics = summarize_run_metrics(
                 run_dir / "action_lifecycle.jsonl",
@@ -1022,6 +1032,8 @@ def main():
         episode_trace.close()
         if spec.interaction_mode == "streaming":
             summ["streaming"] = streaming
+        else:
+            summ["reasoning_replay"] = reasoning_replay
         _atomic_write_json(run_dir / "run_summary.json", summ)
     except Exception:
         detail = traceback.format_exc()
@@ -1158,9 +1170,7 @@ def set_up_agent(
     setup.stage = "tool_setup"
     # Choice models need focused fields and control state to enumerate actions,
     # including when they also receive screenshots (context policy item 12).
-    context_policy = current_context_policy().for_path(
-        cfg.adapter_type, cfg.provider_options, cfg.context_preset
-    )
+    context_policy = path_policy(cfg)
     text_observation = context_policy.observation != "som_screenshot"
     scene_capture = setup.scene_capture = open_capture(text_observation)
     setup.tool_runtime = ToolRuntime(

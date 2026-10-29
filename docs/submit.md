@@ -26,7 +26,9 @@ leaderboard scores every task over the three runs (pass^k and pass@k).
 
 `rtbench upload` refuses the results of an
 [external driver](model_configuration.md#use-an-external-driver); contribute the driver as a model
-API first.
+API first. It also refuses runs off the standard
+[context settings](model_configuration.md#context-settings): each setting must have its value in
+`realtime_framework/context_defaults.yaml`, or one the file approves for the model.
 
 1. **Get a submission token.** Email **realtime-agents@utlists.utexas.edu** with the model's name
    and your organization. Put the token we send you in `.env` as `RTBENCH_SUBMIT_TOKEN`.

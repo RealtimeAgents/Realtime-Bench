@@ -489,7 +489,7 @@ def session_record(
 def replay_items(policy: PathPolicy) -> list[str]:
     """The context policy items a session rebuilt from the history view replays it by: item 10,
     past tool calls in the policy's format."""
-    return ["tool_call_replay"] if policy.tool_call_replay is not None else []
+    return ["tool_call_history"] if policy.tool_call_history is not None else []
 
 
 class SessionStates:

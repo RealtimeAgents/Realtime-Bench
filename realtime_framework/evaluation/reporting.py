@@ -535,6 +535,40 @@ def summarize_run_metrics(
     }
 
 
+# What the run summary's reasoning_replay counts (summarize_reasoning_replay).
+REASONING_REPLAY_DEFINITION = (
+    "requests: the generation requests this attempt recorded as sent, each attempt and resend "
+    "its own, one that failed to connect among them, as a hooked client records a request before "
+    "it sends it; requests_with_reasoning: those that carried at least one past reasoning back; "
+    "replayed_reasoning: the past reasonings over all of them. exact_wire is false where a count "
+    "is of LiteLLM's final request dict, not the bytes sent (the generic litellm API), which "
+    "also misses a resend LiteLLM's HTTP handler makes after a connection error"
+)
+
+
+def summarize_reasoning_replay(trace_path, *, attempt_id: str) -> dict | None:
+    """The reasoning_replay section of a run's summary: how many generation requests of its own
+    attempt (EpisodeTrace.attempt_id) carried past reasoning back, and how many past reasonings,
+    from the count each recorded as sent (providers/capture.py replayed_reasoning, LoggerCapture).
+    None where no request recorded one: only LiteLLM's APIs send past reasoning."""
+    sent = [
+        row["payload"]
+        for row in rows(trace_path, {TraceEvent.MODEL_REQUEST_SENT.value})
+        if row["attempt_id"] == attempt_id
+        and row["payload"].get("purpose") == "generation"
+        and "replayed_reasoning" in row["payload"]
+    ]
+    if not sent:
+        return None
+    return {
+        "requests": len(sent),
+        "requests_with_reasoning": sum(payload["replayed_reasoning"] > 0 for payload in sent),
+        "replayed_reasoning": sum(payload["replayed_reasoning"] for payload in sent),
+        "exact_wire": all(payload["exact_wire"] for payload in sent),
+        "definition": REASONING_REPLAY_DEFINITION,
+    }
+
+
 STREAMING_SUMMARY_SCHEMA = "realtime_bench.streaming_summary.v1"
 _FRAME_BLOCK = re.compile(r"f\d+\.frame")  # harnesses/streaming/history.py frame_block
 

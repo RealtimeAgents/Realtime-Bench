@@ -11,6 +11,8 @@ from pydantic import BaseModel as BaseModel
 from pydantic import ConfigDict as ConfigDict
 from pydantic import Field as Field
 
+from realtime_framework.entity.context_policy import ContextSettings, resolve_context
+
 SANDBOX_CONTAINER = os.environ.get("SANDBOX_CONTAINER", "streaming-agent-sandbox")
 SANDBOX_DISPLAY_NUMBER = int(os.environ.get("SANDBOX_DISPLAY_NUMBER", "99"))
 if not 0 <= SANDBOX_DISPLAY_NUMBER <= 65535:
@@ -31,63 +33,6 @@ def task_seed(value) -> int:
 
 
 DEFAULT_FRAME_MAX_DIM = 768
-DEFAULT_ACTIVE_VISUAL_BUDGET = 20
-DEFAULT_VISUAL_FOLD_BLOCK_SIZE = 10
-DEFAULT_DETAILED_HISTORY_TURNS = 50
-DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE = 10
-
-
-def effective_detailed_history_policy() -> tuple[int, int]:
-    """Return the verbatim text-history window and block-archive size.
-
-    At ``window + 1`` turns, the oldest ``drop_block_size`` complete detailed turns are archived
-    together. With the maintained defaults, verbatim text/action context therefore cycles between
-    41 and 50 turns while older executed actions remain available through the compact ledger,
-    unless a request that does not fit leaves the earliest of them out.
-    """
-    window = int(
-        os.environ.get(
-            "STREAM_DETAILED_HISTORY_TURNS",
-            str(DEFAULT_DETAILED_HISTORY_TURNS),
-        )
-    )
-    drop_block_size = int(
-        os.environ.get(
-            "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
-            str(DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE),
-        )
-    )
-    if window <= 0:
-        raise ValueError("detailed history turns must be positive")
-    if drop_block_size <= 0 or drop_block_size > window:
-        raise ValueError("detailed history drop block size must be in [1, detailed history turns]")
-    return window, drop_block_size
-
-
-def effective_visual_fold_policy() -> tuple[int, int]:
-    """Return the independent active-image budget and visual folding block size.
-
-    At ``budget + 1`` active visual observations, the oldest ``block_size`` screenshots and their
-    bound interactables are replaced together by fixed text. The matching text/action turns remain
-    until the separate detailed-history policy archives them.
-    """
-    budget = int(
-        os.environ.get(
-            "STREAM_ACTIVE_VISUAL_BUDGET",
-            str(DEFAULT_ACTIVE_VISUAL_BUDGET),
-        )
-    )
-    block_size = int(
-        os.environ.get(
-            "STREAM_VISUAL_FOLD_BLOCK_SIZE",
-            str(DEFAULT_VISUAL_FOLD_BLOCK_SIZE),
-        )
-    )
-    if budget <= 0:
-        raise ValueError("active visual budget must be positive")
-    if block_size <= 0 or block_size > budget:
-        raise ValueError("visual fold block size must be in [1, active visual budget]")
-    return budget, block_size
 
 
 @dataclass(frozen=True)
@@ -191,11 +136,18 @@ class ModelConfig(BaseModel):
     reasoning_effort: Optional[str] = "low"
     # Driver-specific wire options from the model YAML's provider_options (for example Gemini Live
     # tool scheduling), checked against the driver's compat before the run (providers/preflight.py
-    # check_provider_options); the context policy reads history_format.
+    # check_provider_options).
     provider_options: dict = Field(default_factory=dict)
-    # The context-policy preset the model takes in place of its API row's (one of
-    # entity/context_policy.py MODEL_PRESETS), from its model YAML's context_preset.
-    context_preset: str | None = None
+    # The context settings, resolved once (entity/context_policy.py resolve_context): each value,
+    # where it came from and how it stands against the standard. The catalog resolves them from
+    # the defaults file, the model's YAML and the run (providers/registry.py to_model_config); a
+    # configuration built without them takes the standard values. Every dump holds the whole
+    # record, which a launch file carries to the runner and a validation reads back as it was;
+    # the configuration hashes take its values alone (evaluation/config.py configuration_sha256,
+    # effective_run_config).
+    context: ContextSettings = Field(
+        default_factory=lambda fields: resolve_context(fields["adapter_type"], fields["model_name"])
+    )
     # Native streaming only: the model YAML's streaming settings, which replace the same keys of
     # its driver's streaming_settings. Left out of every dump of the model configuration: only a
     # streaming run's configuration records them, merged, as its streaming settings

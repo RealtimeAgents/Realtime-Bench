@@ -95,7 +95,7 @@ def _turn_items(policy: PathPolicy, turn: CanonicalTurn) -> list[RequestItem]:
     # action and its tool rounds, rather than appending a growing duplicate ledger after the
     # newest observation. Older turns form a stable prefix after their SoM text is retired, until
     # a block fold/archive changes it.
-    if policy.feedback == "separate_message" and turn.execution_feedback:
+    if policy.execution_feedback == "separate_message" and turn.execution_feedback:
         items.append(RequestItem(_feedback(turn), Intent("input", "in_order")))
     return items
 
@@ -111,7 +111,7 @@ def tool_exchange_block(
     """The tool rounds of decision ``decision``'s generation, as its encoder reported them
     (``completed_turn_refs``), in the form context policy item 10 replays them; None when the
     policy replays no tool calls or the generation had none."""
-    if policy.tool_call_replay is None:
+    if policy.tool_call_history is None:
         return None
     exchanges = refs.get("native_tool_exchanges", [])
     initial_text = refs.get("native_initial_text", "")
@@ -120,7 +120,7 @@ def tool_exchange_block(
     # Item 10: past calls replayed as text, never as calls the model would see as new.
     transcript = (
         policy.texts.gemini_tool_history_header + "\n" + json.dumps(exchanges, ensure_ascii=False)
-        if exchanges and policy.tool_call_replay == "tool_transcript"
+        if exchanges and policy.tool_call_history == "tool_transcript"
         else ""
     )
     return ContentBlock(

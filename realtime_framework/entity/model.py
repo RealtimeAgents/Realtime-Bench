@@ -76,7 +76,7 @@ class RealtimeCapabilities:
     roles: tuple[str, ...] = ()
     # The protocol has no roles: blocks are told apart by their position and labels.
     labels_instead_of_roles: bool = False
-    # Item 3: where execution feedback can go (PathPolicy.feedback values).
+    # Item 3: where execution feedback can go (PathPolicy.execution_feedback values).
     feedback_placements: tuple[str, ...] = ()
     # Item 6: whether past reasoning can be sent back, and whether the provider's documentation
     # requires it in multi-turn conversations.
@@ -86,7 +86,7 @@ class RealtimeCapabilities:
     # conversation besides what the client sent: nothing, or a session's own items the client
     # never sees (reasoning, thoughts, audio).
     server_context: Literal["none", "unknown"] = "unknown"
-    # Item 10: the forms past tool calls can be replayed in (PathPolicy.tool_call_replay values).
+    # Item 10: the forms past tool calls can be replayed in (PathPolicy.tool_call_history values).
     tool_call_replay: tuple[str, ...] = ()
     # Not a context-policy item. Choice channel: options per question; the selection flow groups
     # larger candidate sets.
@@ -141,6 +141,9 @@ class Compat:
     )
     # The reasoning_effort values the encoder maps (None: the provider default); None takes any.
     reasoning_efforts: tuple[str | None, ...] | None = None
+    # Where the model id names the provider (provider/model-id), the providers past reasoning may
+    # go back to (context setting reasoning_replay); None: any the API takes it for.
+    reasoning_replay_providers: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -763,3 +766,5 @@ class ModelSpec:
     pricing: Optional[dict] = None  # billing-only rate card; not runtime identity
     benchmark_eligible: bool = True  # false => excluded from maintained leaderboard sweeps
     comparison_scope: str = "model"  # model | experimental_system | system_reference
+    # The context settings the model's YAML sets (its context section), over the standard values
+    context: dict = field(default_factory=dict)

@@ -23,7 +23,9 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
-from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
+import json
+
+from realtime_framework.entity.context_policy import PROMPT_CHANNELS, context_defaults, path_policy
 from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.providers.registry import adapter_class
 
@@ -232,8 +234,10 @@ def check_context_policy(driver, policy, config) -> None:
     """The context policy's items, held against what the encoder declares it can render."""
     capabilities = driver.capabilities
     api = config.adapter_type
-    if policy.feedback not in capabilities.feedback_placements:
-        raise ValueError(f"The {api} API cannot place execution feedback as {policy.feedback}")
+    if policy.execution_feedback not in capabilities.feedback_placements:
+        raise ValueError(
+            f"The {api} API cannot place execution feedback as {policy.execution_feedback}"
+        )
     if policy.ledger_role not in capabilities.roles and not capabilities.labels_instead_of_roles:
         raise ValueError(f"The {api} API has no {policy.ledger_role} role for the action ledger")
     if capabilities.reasoning_replay == "required" and not policy.reasoning_replay:
@@ -243,8 +247,18 @@ def check_context_policy(driver, policy, config) -> None:
         )
     if capabilities.reasoning_replay == "unsupported" and policy.reasoning_replay:
         raise ValueError(f"The {api} API cannot send past reasoning back")
+    providers = driver.compat.reasoning_replay_providers
     if (
-        policy.pressure_archive
+        policy.reasoning_replay
+        and providers is not None
+        and config.model_name.partition("/")[0] not in providers
+    ):
+        raise ValueError(
+            f"The {api} API sends past reasoning back only to {list(providers)} models, whose "
+            f"LiteLLM conversions keep it, not to {config.model_name}"
+        )
+    if (
+        policy.archive_over_window
         and config.context_window_tokens is not None
         and not implements(driver, "request_context_status")
     ):
@@ -255,11 +269,11 @@ def check_context_policy(driver, policy, config) -> None:
     if form != _HISTORY_FORMS[capabilities.history_replay]:
         raise ValueError(f"The {api} API cannot replay history as {form}")
     if (
-        policy.tool_call_replay is not None
-        and policy.tool_call_replay not in capabilities.tool_call_replay
+        policy.tool_call_history is not None
+        and policy.tool_call_history not in capabilities.tool_call_replay
     ):
         raise ValueError(
-            f"The {api} API cannot replay past tool calls as {policy.tool_call_replay}"
+            f"The {api} API cannot replay past tool calls as {policy.tool_call_history}"
         )
     if (policy.observation == "observation_json_text") != (
         capabilities.observation_modality == "text"
@@ -291,6 +305,25 @@ def check_context_policy(driver, policy, config) -> None:
             )
 
 
+def check_required_context(config) -> None:
+    """A model whose documentation requires some context settings, an approved deviation the
+    defaults file marks required (Kimi K3's reasoning replay), runs only with them."""
+    deviation = context_defaults()["approved_deviations"].get(
+        (config.adapter_type, config.model_name)
+    )
+    if deviation is None or not deviation.required:
+        return
+    values = config.context.values()
+    missing = {key: value for key, value in deviation.settings.items() if values[key] != value}
+    if missing:
+        settings = ", ".join(f"{key}: {json.dumps(value)}" for key, value in missing.items())
+        raise ValueError(
+            f"{config.model_name} on the {config.adapter_type} API runs only with {settings} "
+            f"({deviation.reason}); set it in the model YAML's context section or with --context "
+            "KEY=VALUE"
+        )
+
+
 def check_episode(
     model_config, *, clock_mode, task, env_fps, interaction_mode="turn_based"
 ) -> None:
@@ -320,7 +353,5 @@ def check_episode(
     check_choice_task(driver, task)
     check_fps(driver, model_config.fps)
     check_session_config(driver, model_config)
-    policy = current_context_policy().for_path(
-        adapter_type, model_config.provider_options, model_config.context_preset
-    )
-    check_context_policy(driver, policy, model_config)
+    check_context_policy(driver, path_policy(model_config), model_config)
+    check_required_context(model_config)

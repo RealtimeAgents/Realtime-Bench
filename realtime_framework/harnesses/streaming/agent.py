@@ -59,7 +59,7 @@ from realtime_framework.entity.actions import (
     gui_function_declarations,
 )
 from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
@@ -259,9 +259,7 @@ class NativeStreamingAgent(VisionAgentBase):
         )
         self.driver.bind_trace(self._trace)
         self._states = SessionStates(self._trace, self.driver.capabilities.protocol_family)
-        self._context_policy = current_context_policy().for_path(
-            self.config.adapter_type, self.config.provider_options, self.config.context_preset
-        )
+        self._context_policy = path_policy(self.config)
         self._execution = ExecutionThread(
             self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"
         )
@@ -309,9 +307,10 @@ class NativeStreamingAgent(VisionAgentBase):
         # the policy's.
         own = "retained_frames" in self.driver.streaming_settings
         self._retained = self.driver.streaming_settings.get(
-            "retained_frames", self._context_policy.visuals.keep
+            "retained_frames", self._context_policy.screenshots_kept
         )
-        self._fold_item = None if own else "visuals"  # the policy item a fold is recorded under
+        # The policy item a fold is recorded under.
+        self._fold_item = None if own else "screenshots_kept"
         self._execution.start()
         with self._lock:
             view = self._view()

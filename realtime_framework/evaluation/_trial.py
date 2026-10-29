@@ -8,13 +8,19 @@ import os
 import shutil
 import sys
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.context_policy import MODEL_PRESETS
+from realtime_framework.entity.context_policy import (
+    CONTEXT_PRESET_OPTION_REMOVED,
+    ContextLayers,
+    legacy_context_error,
+    read_experiment_file,
+)
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
@@ -71,6 +77,21 @@ def read_launch(path) -> Launch:
     )
 
 
+def context_settings(arguments: list[str]) -> dict:
+    """The --context KEY=VALUE arguments as settings: each value parsed as JSON, else a string,
+    then checked as a run's settings are (entity/context_policy.py resolve_context)."""
+    settings = {}
+    for argument in arguments:
+        key, separator, text = argument.partition("=")
+        if not separator or not key:
+            raise ValueError(f"--context takes KEY=VALUE, got {argument!r}")
+        try:
+            settings[key] = json.loads(text)
+        except json.JSONDecodeError:
+            settings[key] = text
+    return settings
+
+
 def runner_environment(plan) -> dict:
     """The variables the runner's fresh interpreter receives before any module-level defaults are
     loaded: the suite, the desktop's graphics mode and recording encoder, and the lane's."""
@@ -122,11 +143,20 @@ def main(argv=None):
         "--no-include-usage for endpoints that reject stream_options)",
     )
     parser.add_argument(
-        "--context-preset",
-        choices=MODEL_PRESETS,
-        help="Context-policy preset of the endpoint, as a model YAML's context_preset "
-        "(kimi_k3: send Kimi K3 its past reasoning)",
+        "--context-file",
+        type=Path,
+        help="Experiment file: a YAML mapping of context settings to values, for every model",
     )
+    parser.add_argument(
+        "--context",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="A context setting of this run (repeatable; the value is JSON, else a string), over "
+        "the experiment file's and the model YAML's",
+    )
+    # Removed; refused with what replaced it.
+    parser.add_argument("--context-preset", help=argparse.SUPPRESS)
     parser.add_argument("--reasoning-effort", help="Only set if the selected endpoint supports it")
     parser.add_argument(
         "--suite", default="public", help="Task suite NAME or NAME@MAJOR.MINOR (default: public)"
@@ -200,6 +230,11 @@ def main(argv=None):
 
     load_project_secrets()
     os.environ.setdefault("REALTIMEBENCH_PYTHON", sys.executable)
+    if args.context_preset is not None:
+        parser.error(CONTEXT_PRESET_OPTION_REMOVED)
+    legacy = legacy_context_error(os.environ)
+    if legacy:
+        parser.error(legacy)
     if args.lane < 0 or 9292 + args.lane * 1000 > 65535:
         parser.error("--lane must be between 0 and 56")
     if args.catalog_model:
@@ -212,8 +247,6 @@ def main(argv=None):
             parser.error(
                 "Endpoint options apply to --model; catalog models use their own transport configuration"
             )
-        if args.context_preset is not None:
-            parser.error("A catalog model's YAML names its context_preset; omit --context-preset")
         key = args.catalog_model
     elif args.model and "/" in args.model:
         from realtime_framework.providers.litellm import validate_endpoint
@@ -222,11 +255,6 @@ def main(argv=None):
             parser.error("Use a LiteLLM model name in provider/model-id format")
         if args.include_usage is not None:
             parser.error("LiteLLM collects response usage automatically; omit --include-usage")
-        if args.context_preset is not None:
-            parser.error(
-                "--context-preset applies to an endpoint (--model DEPLOYMENT_ID --base-url URL), "
-                "not a LiteLLM model"
-            )
         try:
             base_url = validate_endpoint(args.base_url) if args.base_url else ""
         except ValueError as exc:
@@ -258,7 +286,6 @@ def main(argv=None):
             BENCHMARK_CONTEXT_COUNTER="estimate",
             BENCHMARK_CONTEXT_IMAGE_TOKENS="4096",
             BENCHMARK_CONTEXT_RESERVE_TOKENS="4096",
-            BENCHMARK_CONTEXT_PRESET=args.context_preset or "",
             STREAM_CHAT_API_KEY_ENV=args.api_key_env or "OPENAI_API_KEY",
         )
         if args.api_key_env and not os.environ.get(args.api_key_env):
@@ -332,8 +359,12 @@ def main(argv=None):
     import realtime_tasks.registry as tasks
 
     try:
+        layers = ContextLayers(run=context_settings(args.context))
+        if args.context_file is not None:
+            experiment_file, experiment = read_experiment_file(args.context_file)
+            layers = replace(layers, experiment=experiment, experiment_file=experiment_file)
         resolved_model = catalog.to_model_config(
-            key, fps=spec.model_input_fps, reasoning_effort=effort
+            key, context=layers, fps=spec.model_input_fps, reasoning_effort=effort
         )
         # The pre-run rules, applied here alone: the runner runs the launch file as written, and
         # Harbor's resolve, the dry run, refuses what a run would.
