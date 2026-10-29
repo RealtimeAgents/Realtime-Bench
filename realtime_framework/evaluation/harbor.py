@@ -226,6 +226,7 @@ class RealtimeBenchOptions(AgentOptions):
     fps: float = _DEFAULT.fps
     model_input_fps: float | None = None
     interaction_mode: str = _DEFAULT.interaction_mode
+    action_space: str = _DEFAULT.action_space
     duration_minutes: float = _DEFAULT.duration_minutes
     seed: int = _DEFAULT.seed
     model_revision: str | None = Field(default=None, min_length=1)
@@ -249,6 +250,7 @@ class RealtimeBenchOptions(AgentOptions):
             fps=self.fps,
             model_input_fps=self.model_input_fps,
             interaction_mode=self.interaction_mode,
+            action_space=self.action_space,
             duration_minutes=self.duration_minutes,
             seed=self.seed,
         )
@@ -488,6 +490,9 @@ class ApptainerEnvironment(BaseEnvironment):
             "--clock", request["clock"],
             "--tokens-per-frame", str(request["tokens_per_frame"]),
         ]
+        # A GUI-only trial's command line is as it was before the action space was a setting.
+        if self.task.get("action_space", "gui") != "gui":
+            command += ["--action-space", self.task["action_space"]]
         if request.get("catalog_model"):
             command += ["--catalog-model", request["catalog_model"]]
         else:
@@ -538,6 +543,10 @@ class ApptainerEnvironment(BaseEnvironment):
             "duration_minutes": request["duration_minutes"],
             "seed": request["seed"],
         }
+        # A GUI-only trial's task record is as it was before the action space was a setting
+        # (aggregate reads a missing one as gui).
+        if request.get("action_space", "gui") != "gui":
+            self.task["action_space"] = request["action_space"]
         request = {**request, "task": self.task, "suite_tasks": suite_tasks}
         resolved = await self._run(
             [*self._runner_command(request), "--dry-run"],
@@ -761,7 +770,7 @@ def aggregate(job, *, official=False):
         raise ValueError("The job has no recorded trials")
     shared_fields = (
         "suite_id", "suite_version", "suite_hash", "harness_version", "harness_hash", "fps",
-        "model_input_fps", "interaction_mode", "duration_minutes", "seed",
+        "model_input_fps", "interaction_mode", "action_space", "duration_minutes", "seed",
     )
     identities = {
         json.dumps(
@@ -859,6 +868,8 @@ def aggregate(job, *, official=False):
         "model_input_fps": identity.get("model_input_fps", identity["fps"]),
         # Jobs recorded before the interaction mode was a run setting ran turn-based.
         "interaction_mode": identity.get("interaction_mode", "turn_based"),
+        # Jobs recorded before the action space was a run setting had GUI actions only.
+        "action_space": identity.get("action_space", "gui"),
         "duration_minutes": identity["duration_minutes"],
         "clock": system.get("clock", "wall"),
         **(

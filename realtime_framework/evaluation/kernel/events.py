@@ -441,3 +441,112 @@ class Finish:
     # unobserved. A streaming episode counts neither.
     think_spent: float = 0.0
     dropped_intermediate_frames: int = 0
+
+
+# ---- run_script (the gui+cli action space) ------------------------------------------------------
+# A script is one decision's action that runs for a while in the workspace (workspace/runner.py),
+# as a wait lets time pass, and acts through the action gateway (workspace/gateway.py) meanwhile.
+# Each request of the gateway comes to the kernel as a ScriptRequest; the policy has the shell
+# carry out the ones it admits with the environment calls of a model action (ScriptExecute,
+# ScriptCapture) and answers the others itself (ScriptReply). The wall clock alone runs scripts
+# (providers/preflight.py check_action_space).
+
+
+@dataclass(frozen=True)
+class ScriptRequest:
+    """The script asked the gateway for an action or a screenshot; the gateway's thread waits
+    for its answer. ``seq`` numbers the shell's requests; ``action`` is the canonical action of
+    an "act" request, None for a "screenshot"."""
+
+    seq: int
+    kind: str  # "act" or "screenshot"
+    action: Action | None = None
+
+    priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class ScriptActionExecuted:
+    """The answer to ScriptExecute: as ActionExecuted's, for an action of the script's."""
+
+    decision: int
+    seq: int
+    result: Any = None
+    rejection: str | None = None
+    error: str | None = None
+
+    @property
+    def priority(self) -> Priority:
+        return Priority.CONTROL if self.error else Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class ScriptCaptured:
+    """The answer to ScriptCapture; a capture that failed carries its error and invalidates the
+    run, as a frame's does."""
+
+    decision: int
+    seq: int
+    path: str | None = None
+    error: str | None = None
+
+    @property
+    def priority(self) -> Priority:
+        return Priority.CONTROL if self.error else Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class ScriptFinished:
+    """The answer to StartScript: the script's process is gone, by itself or killed.
+    ``result`` is its workspace/runner.py ScriptResult."""
+
+    decision: int
+    result: Any
+
+    priority: ClassVar[Priority] = Priority.COMPLETION
+
+
+@dataclass(frozen=True)
+class StartScript:
+    """Run the decision's run_script in the workspace on a worker; answer with ScriptFinished
+    once its process is gone. The gateway answers its requests from now on."""
+
+    decision: int
+    action: Action
+
+
+@dataclass(frozen=True)
+class AbortScript:
+    """Kill the decision's script, for ``reason``, and answer the gateway's requests ``done``
+    from now on; its ScriptFinished still comes."""
+
+    decision: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class ScriptExecute:
+    """Run one action of the script's as Execute runs a model's; answer with
+    ScriptActionExecuted, and the gateway with its outcome."""
+
+    decision: int
+    seq: int
+    action: Action
+    release_at: float | None = None
+
+
+@dataclass(frozen=True)
+class ScriptCapture:
+    """Write a desktop screenshot into the workspace; answer with ScriptCaptured, and the
+    gateway with where it is."""
+
+    decision: int
+    seq: int
+
+
+@dataclass(frozen=True)
+class ScriptReply:
+    """Answer a gateway request the policy does not carry out; wants no answer."""
+
+    seq: int
+    reply: dict

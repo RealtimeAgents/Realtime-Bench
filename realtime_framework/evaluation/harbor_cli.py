@@ -56,10 +56,10 @@ def _benchmark_results(folder: Path) -> bool:
 
 
 def setup() -> None:
-    """Build or reuse both task images."""
-    from realtime_framework.sandbox.apptainer import build_image
+    """Build or reuse the task images and the gui+cli workspace image."""
+    from realtime_framework.sandbox.apptainer import IMAGES, build_image
 
-    for kind in ("sandbox", "realtime"):
+    for kind in IMAGES:
         print(f"Task image ready: {build_image(kind)}", flush=True)
 
 
@@ -227,6 +227,7 @@ def plan_job(path: Path) -> dict:
         "suite": plan["suite"],
         "fps": runtime["fps"],
         "interaction_mode": runtime["interaction_mode"],
+        "action_space": runtime["action_space"],
         "duration_minutes": runtime["duration_minutes"],
         "seed": runtime["seed"],
         "clock": runtime["clock_mode"],

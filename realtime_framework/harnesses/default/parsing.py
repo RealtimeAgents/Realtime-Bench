@@ -952,7 +952,13 @@ class FunctionCallTurnCollector:
             text = ""
         else:
             try:
-                action = canonical_function_action(call.name, call.arguments)
+                action = canonical_function_action(
+                    call.name,
+                    call.arguments,
+                    action_space=getattr(
+                        getattr(self.agent, "prompt_options", None), "action_space", "gui"
+                    ),
+                )
             except ValueError as exc:
                 # A call its function's schema rejects is no action: the turn stays, complete and
                 # charged, and the shared harness executes WAIT. A malformed action is model

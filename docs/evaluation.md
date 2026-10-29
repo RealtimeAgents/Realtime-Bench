@@ -26,6 +26,7 @@ shell to send it).
 | `--ak fps=1` / `--ak seed=42` | Environment frame rate and [task seed](#task-seed) (defaults shown). |
 | `--ak model_input_fps=1` | Frames per second fed to the model, at most `fps`; `tokens_per_frame` counts these frames (default: `fps`). |
 | `--ak interaction_mode=turn_based` | `turn_based` (default): one frame per model generation. `streaming` pushes frames into a live session (OpenAI Realtime, Gemini Live) on the wall clock and is reported separately ([streaming runs](#streaming-runs)). |
+| `--ak action_space=gui` | `gui` (default): GUI actions only. `gui+cli` adds `run_script`, a script in a network-less workspace that acts through the action gateway; turn-based wall clock only, never on the leaderboard ([scripts](#scripts)). |
 | `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
 | `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
@@ -145,6 +146,34 @@ in the session and replaces older ones with a placeholder itself. Gemini Live's 
 once the session reaches `compression_trigger_tokens`, the server compresses it down to
 `compression_target_tokens` without saying what it removed, and Gemini confirms no frame it
 received. Both are [streaming settings](model_configuration.md#streaming-settings) of the model.
+
+## Scripts
+
+`--ak action_space=gui+cli` (or `action_space: gui+cli` in a run plan's `runtime`, as in
+`configs/runs/gui-cli.yaml`) lets a text JSON or function-call model answer a turn with
+`run_script`: a Python or bash script that runs in the episode's workspace while the world keeps
+running, and observes and acts on the task only through `rtact` (`realtime_framework/workspace/
+rtact.py`). Each `rtact` call goes over a unix socket to the action gateway, which accepts a
+validated GUI action or a screenshot request and nothing else; the runner executes the action
+exactly as it executes the model's own, with the end check right after it. The script's exit
+code, its gateway actions and the tail of its output come back as that turn's EXECUTION RESULT;
+the episode trace keeps its full record (`ScriptFinished`), and the workspace stays in the run
+directory.
+
+Scripts run in the workspace image (`realtime_framework/sandbox/images/workspace.def`: Python,
+Pillow and bash, nothing of the task's), which `rtbench setup` builds beside the task images. Its
+instance starts before the episode's clock, with `--containall --cleanenv --net --network none`:
+no route to the task's services, its state API, Chrome's devtools port or the X display, which
+the task sandbox serves on the host network, and no host files, `/sys` or `/dev/pts`. Each script
+is an `apptainer exec` into that instance, so it pays only for joining it, and every process it
+leaves is killed when it ends. A script is given `/workspace` and, read-only, `/rtact`: the
+gateway's socket and the `rtact` client. A run's scripts always run there; the unisolated local
+backend is the tests' alone, and a run refuses `RTBENCH_WORKSPACE_BACKEND=local`.
+`tests/workspace/test_isolation.py` checks the isolation on a host with Apptainer.
+
+A gui+cli run's configuration hash differs from the GUI-only run's, so its results are never
+mixed with them, and `rtbench submit` refuses them. The script's timeout (`timeout_s`, default
+30 s, at most 300 s), the task's end and the deadline each kill it, with every process it started.
 
 ## Parallel runs
 

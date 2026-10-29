@@ -23,9 +23,14 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
+import os
+
 from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
 from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.providers.registry import adapter_class
+
+# The interaction profiles that answer a run_script (harnesses/default/harness.py cli_rules).
+SCRIPT_PROMPTS = ("standard_vlm", "function_call")
 
 
 class UnsupportedTokenBudget(ValueError):
@@ -95,6 +100,31 @@ def check_streaming_options(interaction_mode, *, think_budget_s, per_move_cap_s)
     ]
     if given:
         raise ValueError(f"Streaming does not support {' or '.join(given)}")
+
+
+def check_action_space(action_space, *, clock_mode, interaction_mode) -> None:
+    """gui+cli adds run_script, whose script runs while the world does. Only the turn-based wall
+    clock admits it: on the token clock a script's run time has no charge in ticks yet, and a
+    streaming episode has no turn for a script to take."""
+    from realtime_framework.entity.actions import ACTION_SPACES
+
+    if action_space not in ACTION_SPACES:
+        raise ValueError("action_space must be 'gui' or 'gui+cli'")
+    if action_space == "gui":
+        return
+    if clock_mode != "wall":
+        raise ValueError("action_space gui+cli requires a wall clock")
+    if interaction_mode != "turn_based":
+        raise ValueError("action_space gui+cli requires turn_based interaction")
+    from realtime_framework.workspace.runner import WORKSPACE_BACKEND_ENV
+
+    # A run's scripts run isolated, always; the unisolated local backend is the tests' alone.
+    backend = os.environ.get(WORKSPACE_BACKEND_ENV, "apptainer")
+    if backend != "apptainer":
+        raise ValueError(
+            f"{WORKSPACE_BACKEND_ENV}={backend}: a run's scripts run on the apptainer backend; "
+            "the local backend is for tests only"
+        )
 
 
 def check_frame_rates(fps, model_input_fps) -> None:
@@ -292,7 +322,13 @@ def check_context_policy(driver, policy, config) -> None:
 
 
 def check_episode(
-    model_config, *, clock_mode, task, env_fps, interaction_mode="turn_based"
+    model_config,
+    *,
+    clock_mode,
+    task,
+    env_fps,
+    interaction_mode="turn_based",
+    action_space="gui",
 ) -> None:
     """The runner's rules, applied before it starts a container (and by the Harbor trial worker).
 
@@ -324,3 +360,14 @@ def check_episode(
         adapter_type, model_config.provider_options, model_config.context_preset
     )
     check_context_policy(driver, policy, model_config)
+    check_action_space(action_space, clock_mode=clock_mode, interaction_mode=interaction_mode)
+    if action_space != "gui":
+        # A script is answered in the text JSON or function-call form; a choice API chooses among
+        # its observation's candidates, which hold none (harnesses/default/harness.py
+        # InteractionProfile.cli_rules).
+        prompt = policy.prompts.get(getattr(task, "category", None))
+        if prompt not in SCRIPT_PROMPTS:
+            raise ValueError(
+                f"action_space gui+cli needs a text JSON or function-call prompt; the {adapter_type} "
+                f"API prompts this task with {prompt}"
+            )

@@ -39,11 +39,12 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
-from realtime_framework.entity.actions import Action, ActionType
+from realtime_framework.entity.actions import DEFAULT_SCRIPT_TIMEOUT, Action, ActionType
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.evaluation.kernel.events import (
     END_CAUSES,
+    AbortScript,
     ActionExecuted,
     AdvanceClock,
     Capture,
@@ -62,7 +63,17 @@ from realtime_framework.evaluation.kernel.events import (
     Priority,
     ReleaseKeys,
     RenderFrame,
+    ScriptActionExecuted,
+    ScriptCapture,
+    ScriptCaptured,
+    ScriptExecute,
+    ScriptFinished,
+    ScriptReply,
+    ScriptRequest,
+    StartScript,
 )
+from realtime_framework.workspace.gateway import DONE as SCRIPT_DONE
+from realtime_framework.workspace.runner import script_feedback
 
 # The run is invalid once this many state reads in a row have failed; a read that answers starts
 # the count over (phase2.md, 时间和结束判定). A failed read short of it answers "not over".
@@ -108,6 +119,7 @@ class _Phase(str, Enum):
     PRE_CHECK = "pre_check"  # the end check right before execution
     EXECUTE = "execute"
     WAIT = "wait"  # a wait action letting its time pass
+    SCRIPT = "script"  # a run_script running, acting through the gateway
     POST_CHECK = "post_check"  # the end check right after execution
     PACE = "pace"  # moving to the next observation
     RENDER = "render"
@@ -147,6 +159,14 @@ class _Decision:
     post_before: float = 0.0
     rendered: bool = False
     dropped: int = 0
+    # A run_script's: the gateway request being carried out, the script's result once its
+    # process is gone, why the kernel stopped it, its timeout timer and what it did.
+    script_pending: int | None = None
+    script_result: Any = None
+    script_aborted: str | None = None
+    script_timer: int | None = None
+    script_actions: int = 0
+    script_rejected: int = 0
 
 
 def _ceil(value: float) -> int:
@@ -243,6 +263,14 @@ class TurnPolicy:
                 self._rendered(event)
             case OutcomeCommitted():
                 self._committed(event)
+            case ScriptRequest():
+                self._script_request(event)
+            case ScriptActionExecuted():
+                self._script_executed(event)
+            case ScriptCaptured():
+                self._script_captured(event)
+            case ScriptFinished():
+                self._script_finished(event)
 
     def on_result(self, result: GenerationResult) -> None:
         self.kernel.cancel_timer(self.decision.timeout)
@@ -277,6 +305,9 @@ class TurnPolicy:
             self._accept(GenerationResult(latency=timer.data["bound"]), timed_out=True)
         elif timer.kind in ("wake", "landing"):
             self._moved()
+        elif timer.kind == "script_timeout":
+            self.decision.script_timer = None
+            self._abort_script("timeout")
 
     def on_end(self) -> None:
         """Settle the decision in hand once the episode is over; nothing lands after the end. A
@@ -302,6 +333,9 @@ class TurnPolicy:
             self._resolve(self.decision.status, terminal_after_action=True)
         elif phase is _Phase.PACE:
             self._paced()
+        elif phase is _Phase.SCRIPT:
+            # It settles once its process is gone (_script_finished).
+            self._abort_script("episode_end")
         # EXECUTE, RENDER and COMMIT settle when their answer arrives.
 
     # ---- the loop ---------------------------------------------------------------------------
@@ -522,6 +556,8 @@ class TurnPolicy:
         d.execute_at = kernel.semantic
         if d.action.action_type is ActionType.WAIT:
             return self._start_wait()
+        if d.action.action_type is ActionType.RUN_SCRIPT:
+            return self._start_script()
         release_at = None
         if not self.token and d.action.action_type is ActionType.HOLD_KEY:
             # A wall hold's lease ends this long after it is pressed (sandbox/actions.py
@@ -637,6 +673,126 @@ class TurnPolicy:
             ),
         }
         self._after_execution("wait")
+
+    # ---- run_script ---------------------------------------------------------------------------
+
+    def _start_script(self) -> None:
+        """A script runs as a wait lets time pass: the world goes on, the periodic end checks
+        read during it, and any end stops it. Its gateway actions land one at a time, each with
+        the check right after it; it is over when its process is gone (_script_finished)."""
+        d, kernel = self.decision, self.kernel
+        if self.token:
+            # check_action_space admits gui+cli on the wall clock alone. The end settles the
+            # decision, still before landing (_settle).
+            return kernel.invalidate("harness", "run_script_needs_wall_clock")
+        timeout = float(d.action.parameters.get("timeout_s", DEFAULT_SCRIPT_TIMEOUT))
+        self.phase = _Phase.SCRIPT
+        kernel.emit(StartScript(d.index, d.action))
+        d.script_timer = kernel.set_timer(
+            "script_timeout", Clock.SEMANTIC, kernel.semantic + timeout, Priority.CONTROL
+        )
+
+    def _script_live(self) -> bool:
+        d = self.decision
+        return (
+            self.phase is _Phase.SCRIPT
+            and d.script_aborted is None
+            and d.script_result is None
+            and self.kernel.ending is None
+            and not self._past_deadline()
+        )
+
+    def _script_request(self, event: ScriptRequest) -> None:
+        kernel = self.kernel
+        if not self._script_live():
+            return kernel.emit(ScriptReply(event.seq, dict(SCRIPT_DONE)))
+        d = self.decision
+        if d.script_pending is not None:
+            # The gateway holds requests to one at a time (workspace/gateway.py).
+            return kernel.emit(
+                ScriptReply(
+                    event.seq,
+                    {"ok": False, "done": False, "status": "busy", "detail": "one at a time"},
+                )
+            )
+        d.script_pending = event.seq
+        if event.kind == "screenshot":
+            return kernel.emit(ScriptCapture(d.index, event.seq))
+        action, release_at = event.action, None
+        if action.action_type is ActionType.HOLD_KEY:
+            # As a model's wall hold (_pre_checked).
+            duration = float(action.parameters.get("duration", 1.0))
+            if duration > 0:
+                release_at = kernel.semantic + duration
+        kernel.emit(ScriptExecute(d.index, event.seq, action, release_at))
+
+    def _script_executed(self, event: ScriptActionExecuted) -> None:
+        d = self.decision
+        if self.phase is not _Phase.SCRIPT or d is None or event.decision != d.index:
+            return
+        d.script_pending = None
+        if event.error is not None:
+            # The run is invalid; its end stops the script (_settle).
+            self.kernel.invalidate("environment", "action_execution_failed", event.error)
+        else:
+            d.script_actions += 1
+            if event.rejection is not None:
+                d.script_rejected += 1
+            elif self.kernel.ending is None:
+                # An executed action can end the task at once (_after_execution).
+                self._check_end(None, after_action=True)
+        if d.script_result is not None:
+            self._script_done()
+
+    def _script_captured(self, event: ScriptCaptured) -> None:
+        d = self.decision
+        if self.phase is not _Phase.SCRIPT or d is None or event.decision != d.index:
+            return
+        d.script_pending = None
+        if event.error is not None:
+            self.kernel.invalidate("environment", "script_capture_failed", event.error)
+        if d.script_result is not None:
+            self._script_done()
+
+    def _abort_script(self, reason: str) -> None:
+        d = self.decision
+        if self.phase is not _Phase.SCRIPT or d.script_aborted is not None:
+            return
+        if d.script_result is not None:
+            return
+        d.script_aborted = reason
+        self.kernel.cancel_timer(d.script_timer)
+        d.script_timer = None
+        self.kernel.emit(AbortScript(d.index, reason))
+
+    def _script_finished(self, event: ScriptFinished) -> None:
+        d = self.decision
+        if self.phase is not _Phase.SCRIPT or d is None or event.decision != d.index:
+            return
+        self.kernel.cancel_timer(d.script_timer)
+        d.script_timer = None
+        d.script_result = event.result
+        # A request carried out still answers first: its action ran in the world.
+        if d.script_pending is None:
+            self._script_done()
+
+    def _script_done(self) -> None:
+        d, kernel = self.decision, self.kernel
+        result = d.script_result
+        # The action's records (ActionResolved, the lifecycle record) name how it ended; its
+        # output is in the trace once, in the ScriptFinished record.
+        d.execution_result = {
+            "script": result.summary(),
+            "gateway_actions": d.script_actions,
+            "gateway_rejected": d.script_rejected,
+        }
+        d.detail = script_feedback(result, d.script_actions, d.script_rejected)
+        if result.error is not None and kernel.invalid is None:
+            # The workspace could not start it: the environment's failure, not the model's.
+            kernel.invalidate("environment", "script_start_failed", result.error)
+        if kernel.invalid is not None:
+            return self._resolve("invalid_run")
+        self._after_execution("applied")
 
     def _resolve(self, status: str, terminal_after_action: bool = False) -> None:
         d, kernel = self.decision, self.kernel

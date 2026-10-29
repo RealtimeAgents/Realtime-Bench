@@ -18,6 +18,7 @@ from dataclasses import dataclass, fields
 from realtime_framework.entity.config import DEFAULT_TASK_SEED
 from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import task_seed
+from realtime_framework.providers.preflight import check_action_space
 from realtime_framework.providers.preflight import check_streaming_options
 
 DEFAULT_MODE = "default"
@@ -69,6 +70,7 @@ class RunSpec:
     fps: float = 1.0
     model_input_fps: float | None = None
     interaction_mode: str = "turn_based"
+    action_space: str = "gui"
     duration_minutes: float = 5.0
     seed: int = DEFAULT_TASK_SEED
     protocol: str | None = None
@@ -118,6 +120,9 @@ class RunSpec:
             self.interaction_mode,
             think_budget_s=self.think_budget_s,
             per_move_cap_s=self.per_move_cap_s,
+        )
+        check_action_space(
+            self.action_space, clock_mode=self.clock_mode, interaction_mode=self.interaction_mode
         )
 
 

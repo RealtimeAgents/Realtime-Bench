@@ -259,6 +259,15 @@ class GuestEnvironment:
                 pass
         return obs
 
+    def script_screenshot(self):
+        """gui+cli: a PNG of the whole desktop for a run_script (evaluation/shell.py), in the
+        desktop pixels its gateway actions use. It is no observation: no frame index, marks or
+        recorded frame, and the model's frame stream is untouched."""
+        with operation_budget(
+            "script screenshot", ENVIRONMENT_BUDGET.capture_s, clock=self.clocks.operational
+        ):
+            return self.g.screenshot()
+
     def wait_until_tick(self, target):
         if self.clock_mode == "token":
             target = float(target)

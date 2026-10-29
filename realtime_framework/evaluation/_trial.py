@@ -14,6 +14,7 @@ from pathlib import Path
 from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
+from realtime_framework.entity.actions import ACTION_SPACES
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import PROTOCOLS
@@ -115,6 +116,11 @@ def main(argv=None):
         "turn_based)",
     )
     parser.add_argument(
+        "--action-space",
+        choices=ACTION_SPACES,
+        help="GUI actions only, or GUI actions plus run_script (default: gui)",
+    )
+    parser.add_argument(
         "--duration-minutes",
         "--max-minutes",
         type=float,
@@ -144,6 +150,7 @@ def main(argv=None):
             fps=args.fps,
             model_input_fps=args.model_input_fps,
             interaction_mode=args.interaction_mode,
+            action_space=args.action_space,
             duration_minutes=args.duration_minutes,
             seed=args.seed,
         )
@@ -295,6 +302,7 @@ def main(argv=None):
             task=tasks.get(args.task),
             env_fps=spec.fps,
             interaction_mode=spec.interaction_mode,
+            action_space=spec.action_space,
         )
     except (OSError, ValueError, ImportError) as exc:
         parser.error(str(exc))

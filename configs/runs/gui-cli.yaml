@@ -1,0 +1,12 @@
+# GUI actions plus run_script (docs/evaluation.md#scripts). Not a leaderboard setting.
+suite: public
+models:
+- my-model
+runtime:
+  seed: 42
+  mode: default
+  clock_mode: wall
+  fps: 1
+  duration_minutes: 5
+  protocol: wall-clock
+  action_space: gui+cli

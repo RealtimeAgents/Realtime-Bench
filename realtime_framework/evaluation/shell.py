@@ -77,6 +77,7 @@ from realtime_framework.evaluation.episode_end import (
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import (
     AbortGeneration,
+    AbortScript,
     AcceptResult,
     ActionExecuted,
     AdvanceClock,
@@ -103,14 +104,25 @@ from realtime_framework.evaluation.kernel.events import (
     ReleaseInputs,
     ReleaseKeys,
     RenderFrame,
+    ScriptActionExecuted,
+    ScriptCapture,
+    ScriptCaptured,
+    ScriptExecute,
+    ScriptFinished,
+    ScriptReply,
+    ScriptRequest,
     SetTimer,
     SnapshotFrozen,
     StartGeneration,
+    StartScript,
     Termination,
 )
 from realtime_framework.evaluation.kernel.turns import TurnConfig, TurnPolicy
 from realtime_framework.sandbox.actions import ENVIRONMENT_BUDGET
 from realtime_framework.sandbox.budget import operation_budget
+from realtime_framework.workspace.gateway import DONE as SCRIPT_DONE
+from realtime_framework.workspace.gateway import ActionGateway
+from realtime_framework.workspace.runner import ScriptResult
 
 
 class ShellEnvironment(Protocol):
@@ -153,6 +165,9 @@ class ShellEnvironment(Protocol):
     on_invalid: Callable[[dict], None] | None
 
     def capture(self) -> Observation: ...
+
+    def script_screenshot(self) -> bytes:
+        """gui+cli: a PNG of the desktop for a script, outside the frame stream."""
 
     def execute(self, action: Action, *, release_at: float | None = None) -> str:
         """Run one action and return its status as today. Never a wait: the kernel lets a wait's
@@ -222,6 +237,16 @@ class KernelAgent(Protocol):
 # ---- the shell --------------------------------------------------------------------------------
 
 
+# How long the gateway's thread waits for the kernel to answer one request.
+SCRIPT_REQUEST_WAIT_S = 60.0
+
+
+def _png_size(png: bytes) -> tuple[int | None, int | None]:
+    if png[:8] != b"\x89PNG\r\n\x1a\n" or len(png) < 24:
+        return None, None
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
 def run_episode(
     agent: KernelAgent,
     env: ShellEnvironment,
@@ -232,6 +257,7 @@ def run_episode(
     trace=None,
     agent_trace=None,
     inputs_log: Path | None = None,
+    workspace=None,
 ) -> EpisodeResult:
     """Run one episode on the kernel; return how it came out (episode_end.py), with its timeline,
     ``(k, t_k, d_ticks, tau_k, action)`` for each decision it reported. Build ``config`` with
@@ -247,8 +273,13 @@ def run_episode(
     same reproduces the episode's log (phase2.md, 怎么验证). A step the kernel raised in is
     recorded too, marked ``raised``; the log of an episode the kernel finished ends with an
     ``end`` line, so one without it is incomplete: the loop raised, a write failed or the process
-    was stopped."""
-    return _Shell(agent, env, config, clocks, log, trace, agent_trace, inputs_log).run()
+    was stopped.
+
+    ``workspace`` (workspace/runner.py Workspace) runs the episode's run_script actions, in the
+    gui+cli action space; the shell serves its action gateway for the episode."""
+    return _Shell(
+        agent, env, config, clocks, log, trace, agent_trace, inputs_log, workspace
+    ).run()
 
 
 @dataclass
@@ -300,7 +331,16 @@ class _Decision:
 
 class _Shell:
     def __init__(
-        self, agent, env, config: TurnConfig, clocks: Clocks, log, trace, agent_trace, inputs_log
+        self,
+        agent,
+        env,
+        config: TurnConfig,
+        clocks: Clocks,
+        log,
+        trace,
+        agent_trace,
+        inputs_log,
+        workspace=None,
     ):
         self.agent, self.env, self.config, self.clocks = agent, env, config, clocks
         self.log, self.agent_trace = log, agent_trace
@@ -341,6 +381,13 @@ class _Shell:
         self.end = EpisodeEnd()
         self._drained = False
         self._finished = False
+        # gui+cli: the workspace, its gateway, and the gateway requests waiting for an answer.
+        self.workspace = workspace
+        self.gateway: ActionGateway | None = None
+        self._script_lock = threading.Lock()
+        self._script_seq = 0
+        self._script_boxes: dict[int, list] = {}  # seq -> [answered Event, reply]
+        self._script_done = None  # set once the running script's worker is done
 
     def run(self) -> EpisodeResult:
         env = self.env
@@ -357,11 +404,14 @@ class _Shell:
                 self.log("[default] kernel inputs log write failed:\n" + traceback.format_exc())
         try:
             try:
+                self._open_gateway()
                 self._episode()
             except Exception:  # noqa: BLE001 - the run is invalid and the episode still finalizes
                 self._wrap_up(traceback.format_exc())
             else:
                 self._record_inputs("end", [])
+            finally:
+                self._close_gateway()
         finally:
             if inputs is not None:
                 try:
@@ -546,6 +596,10 @@ class _Shell:
             self._run(command)
 
     def _run(self, command) -> None:
+        if self._batch_invalid and isinstance(command, ScriptExecute | ScriptCapture):
+            # As an Execute (below); the script hears it may act no more.
+            self._reply(command.seq, dict(SCRIPT_DONE))
+            return self.post(self._not_run(command))
         if self._batch_invalid and isinstance(command, Execute | AdvanceClock | RenderFrame):
             # The kernel takes the invalid run the shell posted only at its next step: what is
             # left of the batch acts on the world no more, as the legacy loop executed nothing
@@ -610,6 +664,16 @@ class _Shell:
                 self._release_inputs()
             case Finish():
                 self._finish(command)
+            case StartScript():
+                self._start_script(command)
+            case AbortScript(reason=reason):
+                self._abort_script(reason)
+            case ScriptExecute():
+                self._script_execute(command)
+            case ScriptCapture():
+                self._script_capture(command)
+            case ScriptReply(seq=seq, reply=reply):
+                self._reply(seq, reply)
 
     def _raised(self, failure: str) -> None:
         """An exception the legacy loop let escape it: the run is invalid and the episode still
@@ -647,6 +711,14 @@ class _Shell:
                 return OutcomeCommitted(outcome.decision, failure)
             case FreezeSnapshot():
                 return SnapshotFrozen(semantic, semantic if ops is None else ops, failure)
+            case ScriptExecute(decision=decision, seq=seq):
+                self._reply(seq, dict(SCRIPT_DONE))
+                return ScriptActionExecuted(decision, seq, error=failure)
+            case ScriptCapture(decision=decision, seq=seq):
+                self._reply(seq, dict(SCRIPT_DONE))
+                return ScriptCaptured(decision, seq, error=failure)
+            case StartScript(decision=decision):
+                return ScriptFinished(decision, ScriptResult(None, None, 0.0, "", "", 0, 0, failure))
         return None
 
     @staticmethod
@@ -662,6 +734,10 @@ class _Shell:
                 return ClockStepped(error)
             case RenderFrame():
                 return FrameRendered(error=error)
+            case ScriptExecute(decision=decision, seq=seq):
+                return ScriptActionExecuted(decision, seq, error=error)
+            case ScriptCapture(decision=decision, seq=seq):
+                return ScriptCaptured(decision, seq, error=error)
 
     def _env(self, operation, *args, **kwargs):
         """Run one synchronous environment operation. An invalid run the environment latched
@@ -959,6 +1035,132 @@ class _Shell:
             # action_execution_failed.
             self._invalidate(invalidated(invalid))
             self.post(answer)
+
+    # ---- run_script (gui+cli) -------------------------------------------------------------------
+
+    def _open_gateway(self) -> None:
+        if self.workspace is None:
+            return
+        self.workspace.prepare()
+        self.gateway = ActionGateway(self.workspace.gateway_dir, self._script_submit)
+        self.gateway.start()
+
+    def _close_gateway(self) -> None:
+        """Nothing of the workspace outlives the episode: a script still running is killed and
+        its worker waited for a bounded time, and the gateway closes."""
+        if self.workspace is None:
+            return
+        self.workspace.kill("teardown")
+        done = self._script_done
+        if done is not None:
+            self.clocks.operational.wait(done, self.config.timing.abandoned_drain_s)
+        if self.gateway is not None:
+            self.gateway.close()
+        self.workspace.close()
+        with self._script_lock:
+            boxes, self._script_boxes = self._script_boxes, {}
+        for box in boxes.values():
+            box[1] = dict(SCRIPT_DONE)
+            box[0].set()
+
+    def _script_submit(self, kind: str, action) -> dict:
+        """The gateway's thread: hand the kernel one request and wait for its answer. One left
+        unanswered this long (a script that outlived its episode) is answered done."""
+        with self._script_lock:
+            self._script_seq += 1
+            seq = self._script_seq
+            box = self._script_boxes[seq] = [self.clocks.operational.event(), None]
+        self.post(ScriptRequest(seq, kind, action))
+        self.clocks.operational.wait(box[0], SCRIPT_REQUEST_WAIT_S)
+        with self._script_lock:
+            self._script_boxes.pop(seq, None)
+        return box[1] or dict(SCRIPT_DONE)
+
+    def _reply(self, seq: int, reply: dict) -> None:
+        with self._script_lock:
+            box = self._script_boxes.get(seq)
+        if box is not None:
+            box[1] = reply
+            box[0].set()
+
+    def _start_script(self, command: StartScript) -> None:
+        if self.workspace is None:
+            result = ScriptResult(None, None, 0.0, "", "", 0, 0, "the run has no workspace")
+            return self.post(ScriptFinished(command.decision, result))
+        done = self._script_done = self.clocks.operational.event()
+        self.gateway.open()
+
+        def run() -> None:
+            try:
+                result = self.workspace.run(command.action)
+            except BaseException:  # noqa: BLE001 - the kernel invalidates the run for it
+                result = ScriptResult(None, None, 0.0, "", "", 0, 0, traceback.format_exc())
+            finally:
+                self.gateway.shut()
+                done.set()
+            self.post(ScriptFinished(command.decision, result))
+
+        self.clocks.operational.start_thread(run, name=f"script-{command.decision}")
+
+    def _abort_script(self, reason: str) -> None:
+        if self.gateway is not None:
+            self.gateway.shut()
+        if self.workspace is not None:
+            self.workspace.kill(reason)
+
+    def _script_execute(self, command: ScriptExecute) -> None:
+        """One action of the script's, run as a model's (_execute); the gateway hears how it
+        went."""
+        env = self.env
+        env._last_execution_result = None
+        env._last_coordinate_trace = None
+        latched = getattr(env, "_invalid_run", None)
+        status = env.execute(command.action, release_at=command.release_at)
+        rejection = error = None
+        if status == "failed":
+            if env._last_rejected_by_guest:
+                rejection = env._last_exec_error or ""
+            else:
+                error = env._last_exec_error
+        invalid = getattr(env, "_invalid_run", None)
+        if (
+            invalid is not None
+            and invalid is not latched
+            and invalid["reason"] != "action_execution_failed"
+        ):
+            self._invalidate(invalidated(invalid))
+        self.post(
+            ScriptActionExecuted(
+                command.decision,
+                command.seq,
+                result=env._last_execution_result,
+                rejection=rejection,
+                error=error,
+            )
+        )
+        if error is not None:
+            reply = dict(SCRIPT_DONE)
+        elif rejection is not None:
+            reply = {"ok": False, "done": False, "status": "rejected", "detail": rejection}
+        else:
+            reply = {"ok": True, "done": False, "status": "applied", "detail": ""}
+        self._reply(command.seq, reply)
+
+    def _script_capture(self, command: ScriptCapture) -> None:
+        try:
+            png = self._env(self.env.script_screenshot)
+            path, inside = self.workspace.screenshot_path()
+            path.write_bytes(png)
+        except Exception:  # noqa: BLE001 - the kernel invalidates the run for it
+            self.post(ScriptCaptured(command.decision, command.seq, error=traceback.format_exc()))
+            return self._reply(command.seq, dict(SCRIPT_DONE))
+        width, height = _png_size(png)
+        self.post(ScriptCaptured(command.decision, command.seq, path=inside))
+        self._reply(
+            command.seq,
+            {"ok": True, "done": False, "status": "captured", "path": inside,
+             "width": width, "height": height},
+        )  # fmt: skip
 
     def _commit(self, outcome: Outcome) -> None:
         env, decision, config = self.env, self._decision, self.config

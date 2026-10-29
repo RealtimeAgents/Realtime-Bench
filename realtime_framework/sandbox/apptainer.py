@@ -112,8 +112,15 @@ def require_runtime() -> None:
         )
 
 
+# The variable that names a prebuilt image of each kind in place of IMAGE_DIR's.
+IMAGE_ENV = {"sandbox": "SANDBOX_IMAGE", "realtime": "RT_SUITE_IMAGE", "workspace": "WORKSPACE_IMAGE"}
+# Every run builds these; the workspace image only gui+cli runs use (workspace/runner.py).
+TASK_IMAGES = ("sandbox", "realtime")
+IMAGES = (*TASK_IMAGES, "workspace")
+
+
 def image_path(kind: str = "sandbox") -> Path:
-    override = os.environ.get("SANDBOX_IMAGE" if kind == "sandbox" else "RT_SUITE_IMAGE")
+    override = os.environ.get(IMAGE_ENV[kind])
     return Path(override).expanduser().resolve() if override else IMAGE_DIR / f"{kind}.sif"
 
 
@@ -131,6 +138,10 @@ def source_fingerprint(kind: str) -> str:
     )
     if kind == "realtime":
         sources.append(ROOT / "realtime_framework/sandbox/images/realtime-requirements.txt")
+    if kind == "workspace":
+        # Its definition and its packages alone.
+        directories = []
+        sources.append(ROOT / "realtime_framework/sandbox/images/workspace-requirements.txt")
     for directory in directories:
         sources.extend(
             p for p in directory.rglob("*") if p.is_file() and "__pycache__" not in p.parts
@@ -279,7 +290,7 @@ def build_image(kind: str = "sandbox", image: Path | None = None) -> Path:
         if (
             image.is_file()
             and not stamp.exists()
-            and os.environ.get("SANDBOX_IMAGE" if kind == "sandbox" else "RT_SUITE_IMAGE")
+            and os.environ.get(IMAGE_ENV[kind])
         ):
             if kind == "sandbox" and "browser" not in image_provenance(image):
                 raise RuntimeError(
@@ -568,9 +579,9 @@ def main() -> None:
     parser.add_argument("names", nargs="*")
     args = parser.parse_args()
     if args.action == "build":
-        for kind in args.names or ["sandbox", "realtime"]:
-            if kind not in {"sandbox", "realtime"}:
-                parser.error("build expects sandbox or realtime")
+        for kind in args.names or list(IMAGES):
+            if kind not in IMAGES:
+                parser.error(f"build expects one of {', '.join(IMAGES)}")
             print(build_image(kind))
     elif args.action == "stop":
         for name in args.names:

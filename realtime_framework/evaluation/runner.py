@@ -37,6 +37,7 @@ def run_stream(
     clocks=None,
     inputs_log=None,
     interaction_mode="turn_based",
+    workspace=None,
 ):
     """Run one episode on the event kernel's shell (shell.run_episode) and return how it came out
     (episode_end.py EpisodeResult), its timeline with it. The horizon in world seconds and the
@@ -81,6 +82,7 @@ def run_stream(
         trace=trace,
         agent_trace=agent_trace,
         inputs_log=inputs_log,
+        workspace=workspace,
     )
 
 
@@ -141,6 +143,7 @@ from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.agent_trace import close_agent_trace
 from realtime_framework.entity.records import canonical_sha256
 import realtime_tasks.registry as custom_tasks
+from realtime_framework.workspace.runner import episode_workspace
 from realtime_framework.sandbox.observation.som import ToolRuntime
 
 
@@ -232,6 +235,7 @@ def _invalid_snapshot(snapshot):
 # Capture, simulated-time advancement, and action execution live in realtime_framework.sandbox.actions.
 from realtime_framework.evaluation.config import runner_run_spec
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
+from realtime_framework.entity.actions import ACTION_SPACES
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import PROTOCOLS
@@ -270,6 +274,13 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="turn_based: one frame per model generation (the leaderboard); streaming: frames "
         "pushed into a live session while the model generates.",
+    )
+    p.add_argument(
+        "--action-space",
+        choices=ACTION_SPACES,
+        default=None,
+        help="gui: GUI actions only (the leaderboard); gui+cli: GUI actions plus run_script, a "
+        "script in a network-less workspace that acts through the action gateway (default: gui).",
     )
     p.add_argument(
         "--clock",
@@ -335,8 +346,8 @@ def _parser() -> argparse.ArgumentParser:
 # What a launch file gives in place of the runner's arguments.
 _LAUNCHED = (
     "adapter", "model", "task", "reasoning_effort", "clock", "tokens_per_frame", "fps",
-    "model_input_fps", "interaction_mode", "max_minutes", "seed", "protocol", "think_budget_s",
-    "per_move_cap_s",
+    "model_input_fps", "interaction_mode", "action_space", "max_minutes", "seed", "protocol",
+    "think_budget_s", "per_move_cap_s",
 )  # fmt: skip
 
 
@@ -358,7 +369,10 @@ def _run_spec(p: argparse.ArgumentParser, a) -> RunSpec:
     (model,) = plan["models"]
     (a.task,) = plan["tasks"]
     a.model, a.reasoning_effort = model["key"], model["reasoning_effort"]
-    return RunSpec(**{option: plan["runtime"][option] for option in PLAN_OPTIONS})
+    # A launch file written before an option existed takes its default.
+    return RunSpec(
+        **{option: plan["runtime"][option] for option in PLAN_OPTIONS if option in plan["runtime"]}
+    )
 
 
 def main():
@@ -424,6 +438,7 @@ def main():
             task=ctask,
             env_fps=env_fps,
             interaction_mode=spec.interaction_mode,
+            action_space=spec.action_space,
         )
     except ValueError as exc:
         p.error(str(exc))
@@ -448,6 +463,7 @@ def main():
             "fps": env_fps,
             "model_input_fps": model_input_fps,
             "interaction_mode": spec.interaction_mode,
+            "action_space": spec.action_space,
             "tokens_per_frame": tokens_per_frame,
             "reasoning_effort": reasoning_effort,
             "max_minutes": spec.duration_minutes,
@@ -486,6 +502,7 @@ def main():
     # and the finally block can release resources.
     task = None
     agent = None
+    workspace = None  # gui+cli: the episode's run_script workspace (workspace/runner.py)
     agent_trace = None
     env = None
     think_budget = None
@@ -534,6 +551,7 @@ def main():
                 task,
                 clock_mode=spec.clock_mode,
                 interaction_mode=spec.interaction_mode,
+                action_space=spec.action_space,
                 tokens_per_frame=tokens_per_frame,
                 run_dir=run_dir,
                 episode_trace=episode_trace,
@@ -589,6 +607,11 @@ def main():
         # framework setup consumes the episode.  Record only after provider/environment
         # initialization; the first-frame PTS and explicit active boundaries remove the small
         # recorder startup margin.
+        if spec.action_space == "gui+cli":
+            # Its isolated instance starts here, before the scored clock does, so no script pays
+            # for it: each one only joins it (workspace/runner.py ApptainerBackend).
+            workspace = episode_workspace(run_dir, clocks.operational)
+            workspace.prepare()
         _recorder_on = R._start_screen_recording(run_dir)
         wall_start_time = None
         episode_start = None
@@ -674,6 +697,7 @@ def main():
                 clocks=clocks,
                 inputs_log=run_dir / "kernel_inputs.jsonl",
                 interaction_mode=spec.interaction_mode,
+                workspace=workspace,
             )
             timeline, error = result.timeline, result.loop_error
         finally:
@@ -877,6 +901,11 @@ def main():
                 result.drain_abandoned()
         except Exception:
             pass
+        if workspace is not None:
+            try:
+                workspace.close()
+            except Exception:
+                print("[workspace] close failed:\n" + traceback.format_exc(), flush=True)
         try:
             if agent is not None:
                 agent.close()
@@ -1268,6 +1297,7 @@ def set_up_agent(
     open_capture,
     env_fps: float,
     clock=None,
+    action_space: str = "gui",
 ) -> None:
     """Turn a model config and a provisioned task into an agent initialized on the first frame.
 
@@ -1298,6 +1328,7 @@ def set_up_agent(
         category=getattr(ctask, "category", None),
         interaction_mode=interaction_mode,
         env_fps=env_fps,
+        action_space=action_space,
     )
     setup.stage = "environment_setup"
 

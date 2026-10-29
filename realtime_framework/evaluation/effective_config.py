@@ -572,6 +572,8 @@ def _probe_harbor(request: dict) -> dict:
                 "duration_minutes": harbor_request["duration_minutes"],
                 "seed": harbor_request["seed"],
             }
+            if harbor_request.get("action_space", "gui") != "gui":
+                environment.task["action_space"] = harbor_request["action_space"]
             record["harbor_request"] = harbor_request
             record["task_json"] = environment.task
             record["override_timeout_sec"] = agent.get("override_timeout_sec")

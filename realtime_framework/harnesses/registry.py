@@ -27,7 +27,15 @@ def create_agent(
 
 
 def configure_agent(
-    agent, *, fps, tokens_per_frame, clock_mode, category, interaction_mode, env_fps=None
+    agent,
+    *,
+    fps,
+    tokens_per_frame,
+    clock_mode,
+    category,
+    interaction_mode,
+    env_fps=None,
+    action_space="gui",
 ):
     """Apply the run's prompt options, clock note, task category and scenario prompt before
     initialize(). ``fps`` is the model-input frame rate, the unit of ``tokens_per_frame``;
@@ -38,7 +46,10 @@ def configure_agent(
     from realtime_framework.harnesses.default.prompts import system_prompt_for_category
 
     options = agent.prompt_options = PromptOptions(
-        interaction_mode, clock_mode, clock_mode == "token" and tokens_per_frame is not None
+        interaction_mode,
+        clock_mode,
+        clock_mode == "token" and tokens_per_frame is not None,
+        action_space,
     )
     agent.streaming_note = budget_clock_prompt(fps, tokens_per_frame, options, env_fps)
     # Role/rules vary by scenario family; the task-specific objective is injected separately.

@@ -21,6 +21,8 @@ class PromptOptions:
     # Only a finite B charges output tokens to simulated time; the wall clock charges none, and the
     # pause clock (the token clock with B unlimited) lands each action at the tick it observed.
     finite_budget: bool
+    # "gui", or "gui+cli", which adds run_script (entity/actions.py ACTION_SPACES).
+    action_space: str = "gui"
 
 
 # Keep action examples identical across text and native-tool adapters.
@@ -241,12 +243,39 @@ REALTIME_WEB_SYSTEM_PROMPT = _scenario_prompt(
 )
 
 
+# The gui+cli action space's scripts (entity/actions.py run_script, workspace/rtact.py), in the
+# answer form of the profile that names them (harnesses/default/harness.py InteractionProfile).
+_CLI_RULES = """SCRIPTS
+Besides GUI actions, this run lets you run a script: {how}. timeout_s is optional (default 30,
+at most 300 seconds). This permission takes precedence over any instruction not to use a terminal.
+A script runs in a sandbox without network, display or browser, in /workspace, where files
+persist between scripts; processes do not. Python 3 has the standard library and Pillow.
+A script observes and acts on the task only through rtact, which executes its actions exactly like
+your GUI actions, in desktop pixels (1920x1080):
+- python: import rtact; rtact.screenshot() saves a PNG and returns its .path;
+  rtact.key(name, repeat=None), rtact.hold_key(name, duration), rtact.type_text(text),
+  rtact.click(x, y), rtact.double_click(x, y), rtact.right_click(x, y), rtact.move(x, y),
+  rtact.drag(x1, y1, x2, y2), rtact.scroll(dx, dy, x=None, y=None), rtact.act(<GUI action object>).
+  Every call returns .ok, .status, .detail and .done; stop once .done is true.
+- bash: rtact screenshot | rtact key NAME | rtact hold_key NAME SECONDS | rtact click X Y |
+  rtact type TEXT | rtact act JSON; it prints the reply as JSON and exits 2 once done.
+The world keeps running while a script runs. After it exits, is killed at timeout_s, or the episode
+ends, its EXECUTION RESULT gives its exit code, the gateway actions it took and the tail of its
+stdout and stderr."""
+TEXT_JSON_CLI_RULES = _CLI_RULES.format(
+    how='answer {"action": "run_script", "language": "python"|"bash", "code": "<source>", '
+    '"timeout_s": <seconds>} as your one action'
+)
+FUNCTION_CALL_CLI_RULES = _CLI_RULES.format(how="call the run_script function as your one action")
+
+
 def gui_system_prompt(
     task_instruction: str,
     *,
     scenario_prompt: str | None = None,
     clock_prompt: str | None = None,
     frame_reference_rules: str | None = None,
+    cli_rules: str | None = None,
 ) -> str:
     """Compose identical episode instructions for screenshot VLM and streaming models."""
     return "\n\n".join(
@@ -255,6 +284,7 @@ def gui_system_prompt(
             (
                 scenario_prompt or REALTIME_WEB_SYSTEM_PROMPT,
                 frame_reference_rules,
+                cli_rules,
                 clock_prompt,
                 f"TASK:\n{task_instruction}",
             ),

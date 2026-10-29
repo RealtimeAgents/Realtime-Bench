@@ -146,12 +146,14 @@ def build_episode(
     scene: dict | None = None,
     clock=None,
     env_fps: float | None = None,
+    action_space: str = "gui",
 ) -> Episode:
     """``model_key`` stands for the catalog key the runner records as the model identity.
     ``before_initialize(agent)`` runs on the new agent, before initialize() may open a
     connection. ``scene`` holds FrameSource's ``screenshot`` and ``probe`` for a page other
     than the form. ``clock`` is the agent's clock (real time when omitted). ``env_fps`` is the
-    environment frame rate main() passes set_up_agent, when it is not ``config.fps``."""
+    environment frame rate main() passes set_up_agent, when it is not ``config.fps``.
+    ``action_space`` is the run's (run_spec.py RunSpec), gui+cli for one with run_script."""
 
     def checked_create_agent(*args, **kwargs):
         agent = create_agent(*args, **kwargs)
@@ -169,7 +171,12 @@ def build_episode(
     clock = clock or SystemClock()
     env_fps = config.fps if env_fps is None else env_fps
     check_episode(
-        config, clock_mode=clock_mode, task=task, env_fps=env_fps, interaction_mode="turn_based"
+        config,
+        clock_mode=clock_mode,
+        task=task,
+        env_fps=env_fps,
+        interaction_mode="turn_based",
+        action_space=action_space,
     )
     # runner.main() opens the episode trace before it sets up the agent. Its attempt id leads the
     # retry jitter keys (entity/model.py RequestRetry); a fixed one keeps the baselines' backoffs.
@@ -197,6 +204,7 @@ def build_episode(
             ),
             clock=clock,
             env_fps=env_fps,
+            action_space=action_space,
         )
     return Episode(
         agent=setup.agent,

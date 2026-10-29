@@ -282,6 +282,7 @@ def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
             # --ak fps.
             "model_input_fps": runtime.get("model_input_fps"),
             "interaction_mode": spec.interaction_mode,
+            "action_space": spec.action_space,
             "tokens_per_frame": (
                 None
                 if spec.clock_mode == "wall"
@@ -323,8 +324,10 @@ from realtime_framework.evaluation.run_spec import DEFAULT_MODE
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PROTOCOLS
 from realtime_framework.evaluation.run_spec import RunSpec
+from realtime_framework.providers.preflight import check_action_space
 from realtime_framework.providers.preflight import check_streaming_options
 from realtime_framework.providers.preflight import validate_model_interaction
+from realtime_framework.entity.actions import ACTION_SPACES
 from realtime_framework.entity.actions import SOM_REPRESENTATION_VERSION
 from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 
@@ -554,8 +557,11 @@ def effective_run_config(
     seed: int = DEFAULT_TASK_SEED,
     execution_feedback: bool | None = None,
     interaction_mode: str = "turn_based",
+    action_space: str = "gui",
 ) -> dict:
-    """Capture non-secret effective settings that materially change a run."""
+    """Capture non-secret effective settings that materially change a run. A gui+cli run records
+    its action space, so its runtime-config hash, which every run identity carries, differs from
+    the GUI-only run's; a GUI-only run records none, and keeps the hash it had before."""
     streaming = getattr(model_config, "streaming", {})  # never in the dump (ModelConfig.streaming)
     if hasattr(model_config, "model_dump"):
         model_config = model_config.model_dump()
@@ -577,6 +583,7 @@ def effective_run_config(
     check_streaming_options(
         interaction_mode, think_budget_s=think_budget_s, per_move_cap_s=per_move_cap_s
     )
+    check_action_space(action_space, clock_mode=clock_mode, interaction_mode=interaction_mode)
     model_config = dict(model_config)
     model_config.pop("api_key", None)
     environment = {
@@ -681,6 +688,12 @@ def effective_run_config(
         # validate_model_interaction admits only a live API that declares streaming, and a driver
         # that declares it declares its settings (providers/registry.py _check_driver).
         config["streaming"] = merge_streaming_settings(driver, streaming)
+    if action_space != "gui":
+        from realtime_framework.sandbox.apptainer import source_fingerprint
+
+        config["action_space"] = action_space
+        # What its scripts ran in (workspace/runner.py); always isolated (check_action_space).
+        config["workspace_image_sources_sha256"] = source_fingerprint("workspace")
     if mode is not None:
         config["mode"] = mode
     if execution_feedback is not None:
@@ -716,6 +729,7 @@ def run_spec_config(spec: RunSpec, model_config) -> dict:
         think_budget_s=spec.think_budget_s,
         per_move_cap_s=spec.per_move_cap_s,
         interaction_mode=spec.interaction_mode,
+        action_space=spec.action_space,
     )
 
 
@@ -729,6 +743,7 @@ def runner_run_spec(args) -> RunSpec:
         fps=args.fps,
         model_input_fps=args.model_input_fps,
         interaction_mode=args.interaction_mode,
+        action_space=args.action_space,
         duration_minutes=args.max_minutes,
         seed=args.seed,
         protocol=args.protocol,
@@ -766,6 +781,7 @@ def identity_main(argv=None) -> int:
     parser.add_argument("--fps", type=float, required=True)
     parser.add_argument("--model-input-fps", type=float, help="default: --fps")
     parser.add_argument("--interaction-mode", choices=INTERACTION_MODES)
+    parser.add_argument("--action-space", choices=ACTION_SPACES)
     parser.add_argument("--max-minutes", type=float, required=True)
     parser.add_argument("--protocol")
     parser.add_argument("--think-budget-s", type=float)

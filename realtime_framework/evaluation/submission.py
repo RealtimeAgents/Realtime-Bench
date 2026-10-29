@@ -25,7 +25,7 @@ RUNS = 3
 # The leaderboard setting; any other value is a different benchmark condition.
 REQUIRED = {
     "suite_id": "public", "clock": "wall", "fps": 1, "model_input_fps": 1,
-    "interaction_mode": "turn_based", "duration_minutes": 5.0, "seed": 42,
+    "interaction_mode": "turn_based", "action_space": "gui", "duration_minutes": 5.0, "seed": 42,
 }
 # Fields every run of one submission must share.
 SAME = (

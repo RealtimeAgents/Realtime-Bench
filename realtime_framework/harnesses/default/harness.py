@@ -3,6 +3,7 @@ from __future__ import annotations
 # Vision
 """Shared lifecycle, logging, and action parsing for the maintained vision agents."""
 
+import hashlib as hashlib
 import json as json
 import re as re
 import threading as threading
@@ -10,9 +11,12 @@ from pathlib import Path as Path
 
 from realtime_framework.entity.harness import StreamingAgent
 from realtime_framework.harnesses.default.prompts import gui_system_prompt
+from realtime_framework.harnesses.default.parsing import _FENCE_RE
 from realtime_framework.harnesses.default.parsing import _literal_object
 from realtime_framework.harnesses.default.parsing import unique_object
+from realtime_framework.entity.actions import DEFAULT_SCRIPT_TIMEOUT
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import ActionType
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.config import ModelConfig
@@ -42,8 +46,15 @@ _KNOWN_ACTION_NAMES = frozenset(
         "done",
         "fail",
         "give_up",
+        # gui+cli only: ActionTranslator.from_json refuses it under gui.
+        "run_script",
     }
 )
+
+
+def action_space_of(agent) -> str:
+    """The run's action space (PromptOptions.action_space), gui before configure_agent."""
+    return getattr(getattr(agent, "prompt_options", None), "action_space", "gui")
 
 
 class VisionAgentBase(StreamingAgent):
@@ -624,6 +635,7 @@ class VisionAgentBase(StreamingAgent):
             "dy",
             "duration",
             "repeat",
+            "timeout_s",
         ):
             value = parameters.get(key)
             if not isinstance(value, str):
@@ -649,7 +661,9 @@ class VisionAgentBase(StreamingAgent):
 
     def _parse_action(self, content: str) -> Action | None:
         data = self._action_object(content)
-        return None if data is None else ActionTranslator.from_json(data)
+        if data is None:
+            return None
+        return ActionTranslator.from_json(data, action_space=action_space_of(self))
 
     def _parse_framed_action(self, content: str) -> tuple[Action | None, object]:
         """A streaming action, and the value of its frame field: the frame it is based on."""
@@ -657,7 +671,7 @@ class VisionAgentBase(StreamingAgent):
         if data is None:
             return None, None
         reference = data.pop("frame", None)
-        return ActionTranslator.from_json(data), reference
+        return ActionTranslator.from_json(data, action_space=action_space_of(self)), reference
 
 
 # Profiles
@@ -671,6 +685,8 @@ from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_PRO
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_OUTPUT_CONTRACT
 from realtime_framework.harnesses.default.prompts import FRAME_PROMPT
+from realtime_framework.harnesses.default.prompts import FUNCTION_CALL_CLI_RULES
+from realtime_framework.harnesses.default.prompts import TEXT_JSON_CLI_RULES
 from realtime_framework.harnesses.default.prompts import FRAME_REFERENCE_RULES
 from realtime_framework.harnesses.default.prompts import GROUNDING_FAILED_FEEDBACK
 from realtime_framework.harnesses.default.prompts import SCENARIO_ROLES
@@ -704,12 +720,16 @@ class InteractionProfile:
     frame_prompt: str = TEXT_ACTION_FRAME_PROMPT
     # A streaming profile's: how an action names its frame.
     frame_reference_rules: str | None = None
+    # How a gui+cli run's model runs a script in this profile's answer form; None for a profile
+    # that has no such form, which check_episode refuses gui+cli for.
+    cli_rules: str | None = None
 
     def system_instruction(self, agent) -> str:
         """The episode's, composed for ``agent.prompt_options`` (harnesses/registry.py
         configure_agent), for which the profile was chosen (interaction_profile)."""
         options = agent.prompt_options
         wall = options.clock_mode == "wall"
+        cli_rules = self.cli_rules if options.action_space == "gui+cli" else None
         action_space = (wall and self.wall_clock_action_space) or self.action_space
         output_contract = (
             (wall and self.wall_clock_output_contract)
@@ -722,6 +742,7 @@ class InteractionProfile:
                 scenario_prompt=getattr(agent, "system_prompt_override", None),
                 clock_prompt=agent.streaming_note,
                 frame_reference_rules=self.frame_reference_rules,
+                cli_rules=cli_rules,
             )
         return "\n\n".join(
             filter(
@@ -731,6 +752,7 @@ class InteractionProfile:
                     action_space,
                     self.frame_reference_rules,
                     output_contract,
+                    cli_rules,
                     getattr(agent, "streaming_note", None),
                     f"TASK:\n{agent.task_instruction}",
                 ),
@@ -750,9 +772,10 @@ class InteractionProfile:
         return geometry.image_size
 
 
-STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm")
+STANDARD_VLM_PROFILE = InteractionProfile("standard_vlm", cli_rules=TEXT_JSON_CLI_RULES)
 FUNCTION_CALL_PROFILE = InteractionProfile(
     "function_call",
+    cli_rules=FUNCTION_CALL_CLI_RULES,
     action_space=FUNCTION_CALL_ACTION_SPACE,
     wall_clock_action_space=WALL_CLOCK_FUNCTION_CALL_ACTION_SPACE,
     output_contract=FUNCTION_CALL_OUTPUT_CONTRACT,
@@ -904,6 +927,7 @@ from realtime_framework.harnesses.default.request import build_request
 from realtime_framework.harnesses.default.request import system_block
 from realtime_framework.harnesses.jev.observation import choice_observation
 from realtime_framework.sandbox.observation.capture import prepare_for_model
+from realtime_framework.entity.actions import cli_function_declarations
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.sandbox.observation.som import observation_prompt_with_interactables
 from realtime_framework.sandbox.observation.som import render_frame_number
@@ -1056,7 +1080,7 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
 
     def ground(body) -> _Grounded | None:
         if structured:
-            asked, reference = structured_action(body)
+            asked, reference = structured_action(body, action_space_of(agent))
         elif streaming:
             asked, reference = agent.interaction_profile.parse_framed_action(agent, body)
         else:
@@ -1076,6 +1100,8 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
             }
         return _Grounded(asked, action, frame, reference, error, resolution)
 
+    if not structured and action_space_of(agent) == "gui+cli":
+        text = script_answer_text(text)
     output = (
         resolve_structured_output(text, ground)
         if structured
@@ -1115,17 +1141,52 @@ def parse_grounded_action(agent, text, arrived_unix_s, own_frame):
     return action, action_protocol, last
 
 
-def structured_action(body: str) -> tuple[Action | None, object]:
+def script_answer_text(text: str) -> str:
+    """A gui+cli text answer, its JSON re-encoded when only its raw control characters break it.
+
+    A model writes a run_script's code into its string as it is, with literal newlines and tabs,
+    which strict JSON refuses; the whole answer (or its one fenced block) is read once without
+    that rule. Any other text is left for the text JSON parser as it came: a GUI-only run never
+    reads it so (parse_grounded_action).
+    """
+    whole = text.strip()
+    fenced = _FENCE_RE.fullmatch(whole)
+    if fenced:
+        whole = fenced.group(1).strip()
+    try:
+        json.loads(whole)
+    except ValueError:
+        try:
+            value = json.loads(whole, strict=False, object_pairs_hook=unique_object)
+        except (ValueError, RecursionError):
+            return text
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+    return text
+
+
+def structured_action(body: str, action_space: str = "gui") -> tuple[Action | None, object]:
     """The action of a function call or a Decision's choice, from the JSON action object its
     channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
     choice), and the value of its frame field."""
     data = json.loads(body)
     reference = data.pop("frame", None)
-    return ActionTranslator.from_json(data), reference
+    return ActionTranslator.from_json(data, action_space=action_space), reference
 
 
 def action_text(action: Action) -> str:
-    """An action as the action record and the feedback name it."""
+    """An action as the action record and the feedback name it. A script is named by its size and
+    digest, not its source, which the record's raw output already holds and the feedback would
+    otherwise repeat every turn."""
+    if action.action_type == ActionType.RUN_SCRIPT:
+        code = action.parameters.get("code", "")
+        summary = {
+            "language": action.parameters.get("language"),
+            "timeout_s": action.parameters.get("timeout_s", DEFAULT_SCRIPT_TIMEOUT),
+            "code_lines": len(code.splitlines()),
+            "code_sha256": hashlib.sha256(code.encode()).hexdigest()[:12],
+        }
+        return f"{action.action_type.value} {summary}"
     return action.action_type.value + (f" {action.parameters}" if action.parameters else "")
 
 
@@ -1323,6 +1384,11 @@ class DefaultHarness(VisionAgentBase):
             format_profile=self.interaction_profile.name,
             function_declarations=(
                 tuple(gui_function_declarations(clock_mode=self.prompt_options.clock_mode))
+                + (
+                    tuple(cli_function_declarations())
+                    if self.prompt_options.action_space == "gui+cli"
+                    else ()
+                )
                 if channel == "function_call"
                 else ()
             ),

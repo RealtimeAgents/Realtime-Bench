@@ -12,6 +12,14 @@ from typing import Optional as Optional
 # A single action is deliberately bounded: long holds make the synchronous guest
 # endpoint unresponsive and can leave a game key stuck if the caller times out.
 MAX_ACTION_DURATION = 10.0
+# The run's action space: "gui" alone, or "gui+cli", which adds run_script. A script runs in the
+# network-less workspace and acts on the task only through the action gateway, so it is bounded
+# by its source size and its own run time, not by MAX_ACTION_DURATION.
+ACTION_SPACES = ("gui", "gui+cli")
+SCRIPT_LANGUAGES = ("python", "bash")
+MAX_SCRIPT_CODE_CHARS = 64_000
+DEFAULT_SCRIPT_TIMEOUT = 30.0
+MAX_SCRIPT_TIMEOUT = 300.0
 
 
 class ActionType(str, Enum):
@@ -30,6 +38,8 @@ class ActionType(str, Enum):
     WAIT = "wait"
     DONE = "done"
     FAIL = "fail"
+    # gui+cli only; the environment never executes it (the kernel runs the script).
+    RUN_SCRIPT = "run_script"
 
 
 @dataclass
@@ -102,6 +112,7 @@ def validate_action(action: Optional["Action"]) -> tuple[bool, str]:
         ActionType.WAIT: {"duration"},
         ActionType.DONE: set(),
         ActionType.FAIL: set(),
+        ActionType.RUN_SCRIPT: {"language", "code", "timeout_s"},
     }
     if t not in allowed_parameters:
         return False, f"unsupported action type: {t!r}"
@@ -196,6 +207,17 @@ def validate_action(action: Optional["Action"]) -> tuple[bool, str]:
         ok, reason = _valid_duration()
         if not ok:
             return False, reason
+    elif t == ActionType.RUN_SCRIPT:
+        if p.get("language") not in SCRIPT_LANGUAGES:
+            return False, "run_script language must be python or bash"
+        code = p.get("code")
+        if not isinstance(code, str) or not code.strip():
+            return False, "run_script requires non-empty string code"
+        if len(code) > MAX_SCRIPT_CODE_CHARS:
+            return False, f"run_script code must be at most {MAX_SCRIPT_CODE_CHARS} characters"
+        timeout_ok = _num("timeout_s") and 0 < p["timeout_s"] <= MAX_SCRIPT_TIMEOUT
+        if "timeout_s" in p and not timeout_ok:
+            return False, f"run_script timeout_s must be in (0, {MAX_SCRIPT_TIMEOUT:g}] seconds"
     if "button" in p and (not isinstance(p["button"], str) or p["button"] not in allowed_buttons):
         return False, "button must be left, middle, or right"
     if "modifier" in p:
@@ -510,7 +532,8 @@ class ActionTranslator:
     """Convert the shared JSON action vocabulary to the core action schema."""
 
     @staticmethod
-    def from_json(data: dict) -> Action | None:
+    def from_json(data: dict, *, action_space: str = "gui") -> Action | None:
+        """``action_space`` "gui+cli" also admits run_script; under "gui" it is an unknown verb."""
         action_name = data.get("action", "wait")
         type_map = {
             "click": ActionType.CLICK,
@@ -535,6 +558,8 @@ class ActionTranslator:
             "fail": ActionType.FAIL,
             "give_up": ActionType.FAIL,
         }
+        if action_space == "gui+cli":
+            type_map["run_script"] = ActionType.RUN_SCRIPT
 
         action_type = type_map.get(action_name)
         if action_type is None:
@@ -821,15 +846,60 @@ def gui_function_declarations(*, clock_mode: str, frame_reference: bool = False)
     ]
 
 
+CLI_FUNCTION_SCRIPT_DESCRIPTION = (
+    "Run a one-shot python or bash script in the network-less /workspace sandbox. The script has "
+    "no display or browser; it observes and acts on the task only through the rtact module "
+    "(python) or the rtact command (bash), whose actions are executed exactly like GUI actions. "
+    "The world keeps running while the script runs. Files under /workspace persist between "
+    "scripts; processes do not. Its exit code and truncated stdout/stderr are returned."
+)
+
+
+def cli_function_declarations():
+    """run_script, the one function the gui+cli action space adds to the GUI functions. Only the
+    turn-based wall clock admits gui+cli (providers/preflight.py check_action_space), so it has
+    no clock or frame variants."""
+    properties = {
+        "language": {"type": "string", "enum": list(SCRIPT_LANGUAGES)},
+        # The size limit is the validator's alone: not every provider takes maxLength.
+        "code": {
+            "type": "string",
+            "description": (
+                "Complete script source, passed verbatim; no shell quoting needed. At most "
+                f"{MAX_SCRIPT_CODE_CHARS} characters."
+            ),
+        },
+        "timeout_s": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": MAX_SCRIPT_TIMEOUT,
+            "description": (
+                f"Optional wall-clock limit in seconds, defaults to {DEFAULT_SCRIPT_TIMEOUT:g}; "
+                "the script is killed when it is reached or when the episode ends."
+            ),
+        },
+    }
+    return [
+        {
+            "name": ActionType.RUN_SCRIPT.value,
+            "description": CLI_FUNCTION_SCRIPT_DESCRIPTION,
+            "parameters_json_schema": _parameters(properties, ("language", "code")),
+        }
+    ]
+
+
 def canonical_function_action(
-    name: str, arguments: dict, *, frame_reference: bool = False
+    name: str, arguments: dict, *, frame_reference: bool = False, action_space: str = "gui"
 ) -> dict:
-    """The call as a JSON action object; a streaming call's frame stays in it for grounding."""
+    """The call as a JSON action object; a streaming call's frame stays in it for grounding.
+    ``action_space`` "gui+cli" also admits run_script (cli_function_declarations)."""
     # Only the schemas are read, which are the same on either clock.
     declarations = {
         item["name"]: item
         for item in gui_function_declarations(clock_mode="wall", frame_reference=frame_reference)
     }
+    if action_space == "gui+cli":
+        declarations.update((item["name"], item) for item in cli_function_declarations())
     if name not in declarations or not isinstance(arguments, dict):
         raise ValueError("unknown GUI function or invalid arguments")
     schema = declarations[name]["parameters_json_schema"]
