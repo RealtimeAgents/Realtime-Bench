@@ -121,6 +121,18 @@ then a lower bound), and `invalid_known_spend_usd`, the known spend of its inval
 `mean_cost_usd` stays the mean over the tasks whose cost is complete. Archived retry attempts
 list theirs under `retry_attempts`.
 
+A turn-based trial's `run_summary.json` also counts the past reasoning its requests sent back
+(the [context setting](model_configuration.md#context-settings) `reasoning_replay`), in
+`reasoning_replay`: `requests`, the generation requests recorded as sent, each attempt and resend
+its own, including one that failed to connect, since a request is recorded before it is sent;
+`requests_with_reasoning`, those that carried at least one past reasoning; and
+`replayed_reasoning`, the past reasonings over all of them. Each request's own count is its
+`ModelRequestSent` record's `replayed_reasoning` in the episode trace. `exact_wire` is false where
+the counts are of LiteLLM's final request dict rather than the bytes sent (the generic `litellm`
+API, as `-m provider/model-id` runs), and those counts miss a resend LiteLLM's own HTTP handler
+makes after a connection error. Only LiteLLM's APIs record these counts; for the others the
+section is null.
+
 ## Streaming runs
 
 A streaming trial's `run_summary.json`, and each streaming group of the job's report, carry a

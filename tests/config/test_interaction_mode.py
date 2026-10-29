@@ -212,6 +212,37 @@ def test_a_streaming_trace_its_summary_cannot_read_invalidates_the_run_alone(
     assert summary["streaming"] is None
 
 
+def test_a_turn_based_trace_its_summary_cannot_read_invalidates_the_run(tmp_path, monkeypatch):
+    """As for a streaming run's: a trace record written in part keeps the rows of a turn-based
+    run's trace from being read for the past reasonings its requests carried
+    (reporting.summarize_reasoning_replay), and the run is invalid for it."""
+    termination = {"stop_reason": "time_limit", "end_s": 300.0, "snapshot_s": 300.5,
+                   "snapshot_delay_s": 0.5}  # fmt: skip
+
+    def loop(env, trace):
+        with trace.path.open("a") as cut:
+            cut.write('{"event": "KernelRecord", "payload": ')
+        snapshot = {
+            "state": {"ok": True}, "evaluation": {"resolved": True, "evaluation_version": 1},
+        }  # fmt: skip
+        end = EpisodeEnd(
+            stop_reason="time_limit",
+            termination_record=termination,
+            snapshot_captured=True,
+            snapshot=snapshot,
+        )
+        return end.result(env, [])
+
+    summary = run_main(tmp_path, monkeypatch, loop=loop)
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == (
+        "harness", "reasoning_replay_summary_failed",
+    )  # fmt: skip
+    assert "JSONDecodeError" in invalid["detail"]
+    assert summary["stop_reason"] == "invalid_run" and summary["solved"] is None
+    assert summary["reasoning_replay"] is None
+
+
 def test_a_streaming_run_saves_its_mode_with_its_state(tmp_path, monkeypatch):
     """The generation artifact main() saves with the snapshot the shell froze records the run's
     mode, which reevaluate --replace-summary compares with the run summary's

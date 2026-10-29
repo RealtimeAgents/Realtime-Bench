@@ -610,6 +610,8 @@ def test_generic_litellm_hands_a_kept_provider_the_past_reasoning(tmp_path):
     assert [m.get("reasoning_content") for m in body["messages"] if m["role"] == "assistant"] == (
         replayed
     )
+    # The count is of LiteLLM's final request dict, the record's body, which is not the wire's.
+    assert (sent["replayed_reasoning"], sent["exact_wire"]) == (2, False)
 
 
 def _child_config(case: str, origin: str) -> ModelConfig:

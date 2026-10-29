@@ -22,6 +22,7 @@ from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation import episode_records
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.clock import TokenAccounting, token_record
+from realtime_framework.providers.capture import reasoning_messages
 from realtime_framework.providers.preflight import check_episode
 
 from . import baseline
@@ -227,6 +228,13 @@ def test_reasoning_replay_sends_past_reasoning(stream, tmp_path):
         if step.reasoning:
             expected["reasoning_content"] = step.reasoning
         assert replayed == expected, f"request {k + 1}"
+    # Each request records the past reasonings it carried on the wire.
+    events = [json.loads(line) for line in (tmp_path / "episode_trace.jsonl").open()]
+    sent = [e["payload"] for e in events if e["event"] == "ModelRequestSent"]
+    assert [p["replayed_reasoning"] for p in sent] == [
+        reasoning_messages(_messages(record)) for record in records
+    ]
+    assert sum(p["replayed_reasoning"] for p in sent) > 0
 
 
 # (context_window_tokens, context_reserve_tokens) that hold the system text and the current frame

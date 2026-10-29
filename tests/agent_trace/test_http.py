@@ -33,9 +33,19 @@ from realtime_framework.entity.request import (
     SelectionMaterial,
 )
 from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
-from realtime_framework.evaluation.reporting import EpisodeTrace
+from realtime_framework.evaluation.reporting import (
+    REASONING_REPLAY_DEFINITION,
+    EpisodeTrace,
+    summarize_reasoning_replay,
+)
 from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
-from realtime_framework.providers.capture import REDACTED, header_kept
+from realtime_framework.providers.capture import (
+    REDACTED,
+    HttpCapture,
+    header_kept,
+    reasoning_messages,
+    replayed_reasoning,
+)
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.jev.decisions import JevDecisionsClient
@@ -396,6 +406,7 @@ def test_vllm_tokenize_is_recorded(status, tmp_path, monkeypatch):
     (received,) = _payloads(events, "ModelResponseReceived")
     (wire,) = stub.requests
     assert sent["channel"] == "vllm.tokenize" and sent["purpose"] == "context_count"
+    assert "replayed_reasoning" not in sent  # an estimate, not a generation request
     assert urlsplit(sent["url"]).path == wire.path == "/tokenize"
     assert dict(sent["headers"])["authorization"] == REDACTED
     assert load_body(tmp_path / "episode_blobs.pack", sent["body"]) == wire.body
@@ -779,7 +790,7 @@ def test_an_abandoned_generation_records_only_the_responses_it_left_open():
             return stream
 
         driver._sdk = SimpleNamespace(acompletion=acompletion)
-        driver._request_kwargs = lambda request: {}
+        driver._request_kwargs = lambda request: {"messages": []}
         abandoned = await driver.start_generation(SimpleNamespace(generation_id="gen-a"))
         left_open, open_stream = await _served(driver._http_capture, [b"a1", b"a2"])
         assert await anext(open_stream.__aiter__()) == b"a1"
@@ -835,7 +846,7 @@ def test_a_generation_aborted_during_its_request_records_only_its_own_clients_re
             return _HeldStream(released)
 
         driver._sdk = SimpleNamespace(acompletion=acompletion)
-        driver._request_kwargs = lambda request: {}
+        driver._request_kwargs = lambda request: {"messages": []}
         starting = asyncio.create_task(
             driver.start_generation(SimpleNamespace(generation_id="gen-a"))
         )
@@ -858,3 +869,149 @@ def test_a_generation_aborted_during_its_request_records_only_its_own_clients_re
     early, next_generation = asyncio.run(scenario())
     assert early == []
     assert next_generation == [(True, b"b1b2")]
+
+
+# The past reasonings each generation request carried as it was sent (replayed_reasoning)
+
+
+def _assistant(reasoning=None) -> dict:
+    message = {"role": "assistant", "content": "A"}
+    if reasoning is not None:
+        message["reasoning_content"] = reasoning
+    return message
+
+
+def _replayed(body: bytes) -> int:
+    """The past reasonings of a chat request as the stub received it."""
+    return reasoning_messages(json.loads(body)["messages"])
+
+
+def test_a_request_counts_the_past_reasonings_it_carries():
+    """Assistant messages whose reasoning_content has more than whitespace: not a user message's,
+    nor the space DeepSeek's LiteLLM conversion puts in a missing one in thinking mode
+    (llms/deepseek/chat/transformation.py _fill_reasoning_content), nor one that is not text."""
+    messages = [
+        {"role": "user", "content": "F", "reasoning_content": "not the model's"},
+        _assistant("r0"),
+        _assistant(" "),
+        _assistant(),
+        _assistant(["r"]),
+        _assistant("r1"),
+    ]
+    assert reasoning_messages(messages) == 2
+
+
+class _Owner:
+    """What HttpCapture records for: a driver's trace and clock."""
+
+    def __init__(self):
+        self.clock = SystemClock()
+        self._trace = self
+        self.sent = []
+
+    def capture(self, event, payload, *, body=None, classify=None):
+        if event == TraceEvent.MODEL_REQUEST_SENT:
+            self.sent.append(payload)
+        return len(self.sent)
+
+
+def test_each_send_records_its_own_past_reasonings():
+    """The count a send hands its client's hooks is that send's alone (providers/capture.py
+    replayed_reasoning): two sends under way at once each record theirs, and none outlives a send
+    that failed or was cancelled, so a request sent afterwards outside a send records none."""
+    owner = _Owner()
+    capture = HttpCapture(owner, "litellm.openai_sdk", "generation")
+
+    def handler(request):
+        if request.url.path == "/refused":
+            raise httpx.ConnectError("refused", request=request)
+        return httpx.Response(200)
+
+    async def scenario():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport, event_hooks=capture.hooks) as client:
+            gate = asyncio.Event()
+
+            async def send(path, messages):
+                with replayed_reasoning(messages):
+                    await gate.wait()
+                    await client.post("http://stub" + path)
+
+            both = [
+                asyncio.create_task(send("/one", [_assistant("r")])),
+                asyncio.create_task(send("/two", [_assistant("r"), _assistant("s")])),
+            ]
+            await asyncio.sleep(0)
+            gate.set()
+            await asyncio.gather(*both)
+            with pytest.raises(httpx.ConnectError), replayed_reasoning([_assistant("r")]):
+                await client.post("http://stub/refused")
+            await client.post("http://stub/after-failure")
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.01):
+                    with replayed_reasoning([_assistant("r")]):
+                        await asyncio.Event().wait()
+            await client.post("http://stub/after-cancellation")
+
+    asyncio.run(scenario())
+    counts = {urlsplit(sent["url"]).path: sent.get("replayed_reasoning") for sent in owner.sent}
+    assert counts == {
+        "/one": 1, "/two": 2, "/refused": 1, "/after-failure": None, "/after-cancellation": None,
+    }  # fmt: skip
+
+
+def test_a_retried_request_records_the_past_reasonings_of_each_attempt(tmp_path, monkeypatch):
+    """A request the harness retries is sent again with the same past reasonings, and each
+    attempt records them; the counts are those of the bytes the stub received."""
+    monkeypatch.setattr(model_module, "_backoff", lambda clock, cancel, seconds: None)
+    unavailable = Answer(503, json.dumps({"error": {"message": "busy", "code": 503}}).encode())
+
+    def answer(index, received):
+        return unavailable if index == 1 else _openai_answer(min(index, 1), received)
+
+    _, _, fields = HOOKED["chat_completions-stream"]
+    with HttpStub(answer) as stub:
+        config = _config(stub, fields, monkeypatch).model_copy(
+            update={"context": row_context("chat_completions", run={"reasoning_replay": True})}
+        )
+        events = _run(config, stub, tmp_path)
+    sent = _payloads(events, "ModelRequestSent")
+    assert len(sent) == len(stub.requests) == 3
+    assert [r["scope"]["attempt"] for r in sent] == [1, 1, 2]
+    assert [r["replayed_reasoning"] for r in sent] == [_replayed(w.body) for w in stub.requests]
+    assert [r["replayed_reasoning"] for r in sent] == [0, 1, 1]  # step 0 replied with reasoning
+    assert summarize_reasoning_replay(tmp_path / "episode_trace.jsonl", attempt_id="replay") == {
+        "requests": 3,
+        "requests_with_reasoning": 2,
+        "replayed_reasoning": 2,
+        "exact_wire": True,
+        "definition": REASONING_REPLAY_DEFINITION,
+    }
+
+
+def test_a_request_estimate_is_not_a_sent_request(tmp_path, monkeypatch):
+    """chat_completions estimates each request against its window from the same request it would
+    send (ChatCompletionsDriver.request_context_status calls _request_kwargs), and pressure
+    archiving estimates candidates it does not send: only sent requests record a count."""
+    built = []
+    request_kwargs = ChatCompletionsDriver._request_kwargs
+
+    def counted(self, request):
+        built.append(request)
+        return request_kwargs(self, request)
+
+    monkeypatch.setattr(ChatCompletionsDriver, "_request_kwargs", counted)
+    _, _, fields = HOOKED["chat_completions-stream"]
+    with HttpStub(_openai_answer) as stub:
+        config = _config(stub, fields, monkeypatch).model_copy(
+            update={
+                "context_window_tokens": 100_000,
+                "context": row_context("chat_completions", run={"reasoning_replay": True}),
+            }
+        )
+        events = _run(config, stub, tmp_path)
+    sent = _payloads(events, "ModelRequestSent")
+    assert len(built) > len(sent) == len(stub.requests) == len(STEPS)
+    assert [r["replayed_reasoning"] for r in sent] == [_replayed(w.body) for w in stub.requests]
+    summary = summarize_reasoning_replay(tmp_path / "episode_trace.jsonl", attempt_id="replay")
+    assert summary["requests"] == len(stub.requests)

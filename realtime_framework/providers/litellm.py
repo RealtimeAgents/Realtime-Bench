@@ -48,6 +48,7 @@ from realtime_framework.entity.model import StatelessEncoder
 from realtime_framework.entity.records import TraceEvent
 from realtime_framework.providers.capture import HttpCapture
 from realtime_framework.providers.capture import LoggerCapture
+from realtime_framework.providers.capture import replayed_reasoning
 from realtime_framework.providers.capture import response_statuses
 from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
@@ -665,7 +666,8 @@ class LiteLLMDriver(StatelessEncoder):
         kwargs.update(self._transport_kwargs())
         # An abort can replace the client, and its capture, before the request or these events end.
         capture = self._http_capture
-        response = await self._sdk.acompletion(**kwargs)
+        with replayed_reasoning(kwargs["messages"]):
+            response = await self._sdk.acompletion(**kwargs)
         audit = {
             "usage": None,
             "usage_revision": 0,
@@ -933,7 +935,7 @@ class LiteLLMDriver(StatelessEncoder):
         kwargs = self._request_kwargs(request)
         kwargs.update(self._transport_kwargs())
         kwargs["logger_fn"] = observe
-        with response_statuses() as statuses:
+        with response_statuses() as statuses, replayed_reasoning(kwargs["messages"]):
             response = await self._sdk.acompletion(**kwargs)
         if not response.choices:
             raise RuntimeError("LiteLLM returned no response choices")

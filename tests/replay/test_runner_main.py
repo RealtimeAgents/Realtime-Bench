@@ -32,6 +32,7 @@ from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import reporting, runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
 from realtime_framework.evaluation.kernel.turns import TurnConfig
+from realtime_framework.evaluation.reporting import REASONING_REPLAY_DEFINITION
 
 from ..launch import trial_launch
 from ..shell.test_inputs import kernel_log, replay_inputs
@@ -336,6 +337,44 @@ class RecordingAgent(FakeAgent):
         while self.sink._written < 1:
             time.sleep(0.001)
         return super().reply(decision)
+
+
+class ReplayingAgent(FakeAgent):
+    """Records a generation request that carried two past reasonings back, as a LiteLLM driver's
+    capture does (providers/capture.py HttpCapture)."""
+
+    def reply(self, decision: int) -> dict:
+        self.sink.capture(
+            TraceEvent.MODEL_REQUEST_SENT,
+            {"channel": "litellm.openai_sdk", "purpose": "generation", "exact_wire": True,
+             "replayed_reasoning": 2},
+        )  # fmt: skip
+        while self.sink._written < 1:
+            time.sleep(0.001)
+        return super().reply(decision)
+
+
+def test_main_summarizes_the_past_reasonings_its_requests_carried(tmp_path):
+    """The run summary's reasoning_replay: the generation requests of this attempt that recorded
+    the past reasonings they carried (reporting.summarize_reasoning_replay); none where no
+    request recorded them."""
+    clock = FakeClock(1_000_000.0)
+    guest = FakeGuest()
+    task = FakeTask(clock, guest, "task_success", True)
+    summary = run_main(tmp_path, task, ReplayingAgent(clock), clock, guest, agent_trace=True)
+    assert summary["invalid_run"] is None and scored(tmp_path)
+    assert summary["reasoning_replay"] == {
+        "requests": 1,
+        "requests_with_reasoning": 1,
+        "replayed_reasoning": 2,
+        "exact_wire": True,
+        "definition": REASONING_REPLAY_DEFINITION,
+    }
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    clock = FakeClock(1_000_000.0)
+    task = FakeTask(clock, guest, "task_success", True)
+    assert run_main(plain, task, FakeAgent(clock), clock, guest)["reasoning_replay"] is None
 
 
 def test_main_has_the_kernel_number_the_agent_s_records(tmp_path):

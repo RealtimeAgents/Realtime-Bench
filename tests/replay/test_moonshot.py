@@ -17,8 +17,13 @@ from pathlib import Path
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import resolve_context
+from realtime_framework.evaluation.reporting import (
+    REASONING_REPLAY_DEFINITION,
+    summarize_reasoning_replay,
+)
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
+from realtime_framework.providers.capture import reasoning_messages
 from realtime_framework.providers.litellm import DEFAULT_MOONSHOT_BASE_URL
 from realtime_framework.providers.preflight import check_episode
 
@@ -94,6 +99,10 @@ def _run(tmp_path, monkeypatch, steps, *, tokens_per_frame, **changes):
     assert [(r["channel"], r["url"]) for r in sent] == [
         ("litellm.openai_sdk", ENDPOINT)
     ] * len(stub.requests)
+    # Each request records the past reasonings it carried on the wire.
+    assert [
+        e["payload"]["replayed_reasoning"] for e in events if e["event"] == "ModelRequestSent"
+    ] == [reasoning_messages(json.loads(received.body)["messages"]) for received in stub.requests]
     sent = iter(zip(transport.urls, stub.requests))
     for record in records:
         for request in record["requests"]:
@@ -208,6 +217,16 @@ def test_long_scenario_finite_token_clock(tmp_path, monkeypatch):
     assert caps[0] == native > caps[-1] > 0
     _check_history_changes(records)
     _check_reasoning_replay(records, LONG_SCENARIO)
+    # The run's summary of them, from the requests as sent.
+    counts = [reasoning_messages(_messages(r)) for r in records]
+    assert sum(count > 0 for count in counts) > 0
+    assert summarize_reasoning_replay(tmp_path / "episode_trace.jsonl", attempt_id="replay") == {
+        "requests": len(records),
+        "requests_with_reasoning": sum(count > 0 for count in counts),
+        "replayed_reasoning": sum(counts),
+        "exact_wire": True,
+        "definition": REASONING_REPLAY_DEFINITION,
+    }
     _check_kimi_usage(records)
     _compare_or_record(
         BASELINES / "moonshot-token-long.jsonl",
@@ -258,9 +277,8 @@ def test_kimi_usage_at_another_address(monkeypatch):
 def test_model_without_reasoning_replay(tmp_path, monkeypatch):
     """Another moonshot model, whose YAML sets no context, takes the standard values
     (realtime_framework/context_defaults.yaml): each request replays the earlier replies without
-    their reasoning,
-    and the pre-run checks accept it. Its YAML sets no reasoning_effort either: LiteLLM refuses
-    one for a moonshot model its map does not list."""
+    their reasoning, and the pre-run checks accept it. Its YAML sets no reasoning_effort either:
+    LiteLLM refuses one for a moonshot model its map does not list."""
     config, records = _run(
         tmp_path,
         monkeypatch,
@@ -272,6 +290,8 @@ def test_model_without_reasoning_replay(tmp_path, monkeypatch):
     )
     check_episode(config, clock_mode="token", task=ReplayTask(), env_fps=config.fps)
     assert all(_body(r)["model"] == "kimi-other" for r in records)
+    summary = summarize_reasoning_replay(tmp_path / "episode_trace.jsonl", attempt_id="replay")
+    assert (summary["requests"], summary["requests_with_reasoning"]) == (len(records), 0)
     assert not any("reasoning_content" in m for r in records for m in _messages(r))
     for k, step in enumerate(PAUSE_SCENARIO[:-1]):
         # Turn k is the newest turn of request k + 1, so its assistant message comes last.
