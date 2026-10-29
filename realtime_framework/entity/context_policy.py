@@ -32,14 +32,16 @@ fingerprint (or an external driver's identity) covers, and so does the model con
 run hash covers.
 """
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from functools import lru_cache
+from pathlib import Path
+from types import MappingProxyType
 from typing import Literal
 
-from realtime_framework.entity.config import (
-    effective_detailed_history_policy,
-    effective_visual_fold_policy,
-)
+import yaml
+
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER, FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.records import _jsonable
 
@@ -140,6 +142,174 @@ FIXED_TEXTS = FixedTexts(
     gemini_tool_history_header=GEMINI_TOOL_HISTORY_HEADER,
     gemini_queued_tool_response=GEMINI_QUEUED_TOOL_RESPONSE,
 )
+
+
+# Context settings
+# The configurable items, their kinds of value, the API rows they apply to (None: every row),
+# what kind of setting each is and whether a model's YAML may set it. Their values come from the
+# defaults file alone (DEFAULTS_FILE): the standard of this harness version.
+@dataclass(frozen=True)
+class Setting:
+    # int: a positive count; bool; or the strings allowed
+    values: type | tuple[str, ...]
+    applies: tuple[str, ...] | None
+    # condition: an evaluation condition, the same for every model; protocol: what a model's
+    # protocol may need (an approved deviation); capability: what an API's channel can render
+    kind: Literal["condition", "protocol", "capability"]
+    model: bool  # a model's YAML may set it
+    about: str
+
+
+SETTINGS = {
+    "screenshots_kept": Setting(
+        int, None, "condition", False,
+        "Screenshots kept in the history; one more folds the oldest screenshot_fold_block",
+    ),
+    "screenshot_fold_block": Setting(
+        int, None, "condition", False, "Screenshots folded together into a fixed text",
+    ),
+    "turns_kept": Setting(
+        int, None, "condition", False,
+        "Turns kept verbatim; one more archives the oldest turn_archive_block into the ledger",
+    ),
+    "turn_archive_block": Setting(
+        int, None, "condition", False,
+        "Turns archived together, also under context pressure, and archived actions left out "
+        "together from a request that still does not fit",
+    ),
+    "execution_feedback": Setting(
+        ("separate_message", "digest"), None, "capability", True,
+        "Where each action's execution feedback goes: its own message, or the action digest",
+    ),
+    "observation": Setting(
+        ("som_screenshot", "observation_json_screenshot", "observation_json_text"),
+        None, "capability", True,
+        "What one observation carries: the SoM screenshot, or the observation JSON with or "
+        "without the screenshot",
+    ),
+    "reasoning_replay": Setting(
+        bool, None, "protocol", True, "Send the model's past reasoning back in later requests",
+    ),
+    "archive_over_window": Setting(
+        bool, None, "condition", False,
+        "Archive the oldest turns while a request exceeds the declared context window",
+    ),
+    "tool_call_history": Setting(
+        ("native_tools", "tool_transcript"), ("gemini_live",), "protocol", True,
+        "How a rebuilt live session replays past tool calls: as native calls or as a transcript",
+    ),
+    "decision_history": Setting(
+        ("turns", "action_digest"), ("openai_decisions", "jev_decisions"), "capability", True,
+        "How a Decision request replays history: as turns or as an action digest",
+    ),
+}  # fmt: skip
+DEFAULTS_FILE = Path(__file__).resolve().parents[1] / "context_defaults.yaml"
+# Each block against the count it folds or archives from.
+_BLOCKS = (("screenshot_fold_block", "screenshots_kept"), ("turn_archive_block", "turns_kept"))
+
+
+def setting_error(key: str, value) -> str | None:
+    """What is wrong with ``value`` for setting ``key``, if anything."""
+    allowed = SETTINGS[key].values
+    if allowed is int:
+        if type(value) is not int or value <= 0:
+            return f"{key} must be a positive integer, got {value!r}"
+    elif allowed is bool:
+        if type(value) is not bool:
+            return f"{key} must be true or false, got {value!r}"
+    elif type(value) is not str or value not in allowed:
+        return f"{key} must be one of {list(allowed)}, got {value!r}"
+    return None
+
+
+def blocks_error(values: Mapping) -> str | None:
+    """A block larger than the count it folds or archives from, if any."""
+    for block, kept in _BLOCKS:
+        if values[block] > values[kept]:
+            return f"{block} ({values[block]}) must be at most {kept} ({values[kept]})"
+    return None
+
+
+def load_context_defaults(path) -> dict:
+    """The defaults file at ``path``, checked: every setting's standard value, and nothing else."""
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"The context defaults file is missing: {path}")
+    data = yaml.safe_load(path.read_text())
+    name = path.name
+    if not isinstance(data, dict) or not isinstance(data.get("standard"), dict):
+        raise ValueError(  # noqa: TRY004 - a malformed file, as the catalog's YAMLs
+            f"{name}: the file needs a standard section, a mapping of the settings"
+        )
+    others = sorted(set(data) - {"standard"})
+    if others:
+        raise ValueError(f"{name}: the file holds standard alone; got {others}")
+    standard = data["standard"]
+    for key in SETTINGS:
+        if key not in standard:
+            raise ValueError(f"{name}: standard lacks {key}")
+    unknown = sorted(set(standard) - set(SETTINGS))
+    if unknown:
+        raise ValueError(f"{name}: standard has unknown settings {unknown}")
+    for key in SETTINGS:
+        error = setting_error(key, standard[key])
+        if error:
+            raise ValueError(f"{name}: standard {error}")
+    error = blocks_error(standard)
+    if error:
+        raise ValueError(f"{name}: standard {error}")
+    return {"standard": MappingProxyType({key: standard[key] for key in SETTINGS})}
+
+
+@lru_cache(maxsize=1)
+def context_defaults() -> dict:
+    """The package's defaults file (DEFAULTS_FILE), read once per process."""
+    return load_context_defaults(DEFAULTS_FILE)
+
+
+def effective_detailed_history_policy() -> tuple[int, int]:
+    """Return the verbatim text-history window and block-archive size.
+
+    At ``window + 1`` turns, the oldest ``drop_block_size`` complete detailed turns are archived
+    together. With the maintained defaults, verbatim text/action context therefore cycles between
+    41 and 50 turns while older executed actions remain available through the compact ledger,
+    unless a request that does not fit leaves the earliest of them out.
+    """
+    standard = context_defaults()["standard"]
+    window = int(os.environ.get("STREAM_DETAILED_HISTORY_TURNS", str(standard["turns_kept"])))
+    drop_block_size = int(
+        os.environ.get(
+            "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
+            str(standard["turn_archive_block"]),
+        )
+    )
+    if window <= 0:
+        raise ValueError("detailed history turns must be positive")
+    if drop_block_size <= 0 or drop_block_size > window:
+        raise ValueError("detailed history drop block size must be in [1, detailed history turns]")
+    return window, drop_block_size
+
+
+def effective_visual_fold_policy() -> tuple[int, int]:
+    """Return the independent active-image budget and visual folding block size.
+
+    At ``budget + 1`` active visual observations, the oldest ``block_size`` screenshots and their
+    bound interactables are replaced together by fixed text. The matching text/action turns remain
+    until the separate detailed-history policy archives them.
+    """
+    standard = context_defaults()["standard"]
+    budget = int(os.environ.get("STREAM_ACTIVE_VISUAL_BUDGET", str(standard["screenshots_kept"])))
+    block_size = int(
+        os.environ.get(
+            "STREAM_VISUAL_FOLD_BLOCK_SIZE",
+            str(standard["screenshot_fold_block"]),
+        )
+    )
+    if budget <= 0:
+        raise ValueError("active visual budget must be positive")
+    if block_size <= 0 or block_size > budget:
+        raise ValueError("visual fold block size must be in [1, active visual budget]")
+    return budget, block_size
 
 
 @dataclass(frozen=True)
@@ -247,16 +417,19 @@ PROMPT_CHANNELS = {
 }
 _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"}
 # The standard values of the items that come neither from the environment (items 1 and 2) nor
-# from FIXED_TEXTS (item 5).
+# from FIXED_TEXTS (item 5): the defaults file's, but for items 9 and 10, which apply only to the
+# rows that name their own (the Decision rows, gemini_live), and items 4 and 11, which the code
+# decides.
+_DEFAULT = context_defaults()["standard"]
 STANDARD = {
-    "execution_feedback": "separate_message",
+    "execution_feedback": _DEFAULT["execution_feedback"],
     "ledger_role": "input",
-    "reasoning_replay": False,
-    "archive_over_window": True,
+    "reasoning_replay": _DEFAULT["reasoning_replay"],
+    "archive_over_window": _DEFAULT["archive_over_window"],
     "decision_history": None,
     "tool_call_history": None,
     "prompts": _TEXT_JSON_PROMPTS,
-    "observation": "som_screenshot",
+    "observation": _DEFAULT["observation"],
 }
 # What a model takes instead of the standard values, by preset name: through its API row (Luna,
 # JEV) or through its model config (Kimi K3).
@@ -311,13 +484,13 @@ def current_context_policy() -> ContextPolicy:
         path("openai_realtime"),
         path(
             "gemini_live",
-            tool_call_history="native_tools",
+            tool_call_history=_DEFAULT["tool_call_history"],
             prompts={"realtime": "function_call", "browser_game": "function_call"},
         ),
         path(
             "openai_decisions",
             "luna",
-            decision_history=DecisionHistory("turns"),
+            decision_history=DecisionHistory(_DEFAULT["decision_history"]),
             prompts={
                 "realtime": "multimodal_decisions",
                 "browser_game": "multimodal_game_decisions",

@@ -38,7 +38,7 @@ from cryptography.x509.oid import NameOID
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
-from realtime_framework.entity.config import DEFAULT_ACTIVE_VISUAL_BUDGET
+from realtime_framework.entity.context_policy import context_defaults
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 
 from . import baseline
@@ -278,7 +278,7 @@ class LiveStub:
             # The session keeps every screenshot it was sent: the seed's and one per observation.
             images += 1
             self._check(
-                images <= DEFAULT_ACTIVE_VISUAL_BUDGET,
+                images <= context_defaults()["standard"]["screenshots_kept"],
                 f"conn {conn}: {images} screenshots in one session",
             )
             if not self._turns:

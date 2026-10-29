@@ -31,63 +31,6 @@ def task_seed(value) -> int:
 
 
 DEFAULT_FRAME_MAX_DIM = 768
-DEFAULT_ACTIVE_VISUAL_BUDGET = 20
-DEFAULT_VISUAL_FOLD_BLOCK_SIZE = 10
-DEFAULT_DETAILED_HISTORY_TURNS = 50
-DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE = 10
-
-
-def effective_detailed_history_policy() -> tuple[int, int]:
-    """Return the verbatim text-history window and block-archive size.
-
-    At ``window + 1`` turns, the oldest ``drop_block_size`` complete detailed turns are archived
-    together. With the maintained defaults, verbatim text/action context therefore cycles between
-    41 and 50 turns while older executed actions remain available through the compact ledger,
-    unless a request that does not fit leaves the earliest of them out.
-    """
-    window = int(
-        os.environ.get(
-            "STREAM_DETAILED_HISTORY_TURNS",
-            str(DEFAULT_DETAILED_HISTORY_TURNS),
-        )
-    )
-    drop_block_size = int(
-        os.environ.get(
-            "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
-            str(DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE),
-        )
-    )
-    if window <= 0:
-        raise ValueError("detailed history turns must be positive")
-    if drop_block_size <= 0 or drop_block_size > window:
-        raise ValueError("detailed history drop block size must be in [1, detailed history turns]")
-    return window, drop_block_size
-
-
-def effective_visual_fold_policy() -> tuple[int, int]:
-    """Return the independent active-image budget and visual folding block size.
-
-    At ``budget + 1`` active visual observations, the oldest ``block_size`` screenshots and their
-    bound interactables are replaced together by fixed text. The matching text/action turns remain
-    until the separate detailed-history policy archives them.
-    """
-    budget = int(
-        os.environ.get(
-            "STREAM_ACTIVE_VISUAL_BUDGET",
-            str(DEFAULT_ACTIVE_VISUAL_BUDGET),
-        )
-    )
-    block_size = int(
-        os.environ.get(
-            "STREAM_VISUAL_FOLD_BLOCK_SIZE",
-            str(DEFAULT_VISUAL_FOLD_BLOCK_SIZE),
-        )
-    )
-    if budget <= 0:
-        raise ValueError("active visual budget must be positive")
-    if block_size <= 0 or block_size > budget:
-        raise ValueError("visual fold block size must be in [1, active visual budget]")
-    return budget, block_size
 
 
 @dataclass(frozen=True)

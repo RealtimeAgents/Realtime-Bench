@@ -12,12 +12,6 @@ from dataclasses import fields, replace
 import pytest
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.entity.config import (
-    DEFAULT_ACTIVE_VISUAL_BUDGET,
-    DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE,
-    DEFAULT_DETAILED_HISTORY_TURNS,
-    DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
-)
 from realtime_framework.entity.context_policy import (
     FIXED_TEXTS,
     MODEL_PRESETS,
@@ -25,6 +19,7 @@ from realtime_framework.entity.context_policy import (
     PROMPT_CHANNELS,
     DecisionHistory,
     PathPolicy,
+    context_defaults,
     current_context_policy,
 )
 from realtime_framework.entity.model import implements
@@ -70,15 +65,17 @@ def test_policy_fields():
 
 
 def test_retention_and_texts_are_shared():
-    # entity/config.py:35-38; hermetic.py clears the STREAM_* overrides.
+    # The defaults file's (realtime_framework/context_defaults.yaml); hermetic.py clears the
+    # STREAM_* overrides.
+    standard = context_defaults()["standard"]
     for path in POLICY.paths.values():
         assert (path.screenshots_kept, path.screenshot_fold_block) == (
-            DEFAULT_ACTIVE_VISUAL_BUDGET,
-            DEFAULT_VISUAL_FOLD_BLOCK_SIZE,
+            standard["screenshots_kept"],
+            standard["screenshot_fold_block"],
         )
         assert (path.turns_kept, path.turn_archive_block) == (
-            DEFAULT_DETAILED_HISTORY_TURNS,
-            DEFAULT_DETAILED_HISTORY_DROP_BLOCK_SIZE,
+            standard["turns_kept"],
+            standard["turn_archive_block"],
         )
         assert path.texts == FIXED_TEXTS
 

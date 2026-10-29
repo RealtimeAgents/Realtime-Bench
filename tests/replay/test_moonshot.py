@@ -47,7 +47,7 @@ MAX_TICKS = 60
 # B the native limit applies through
 # decision 56 and the remaining clock from decision 57 (98304) down to decision 59 (32768).
 TOKENS_PER_FRAME = 32768
-# As for chat_completions: the default policies (entity/config.py effective_visual_fold_policy,
+# As for chat_completions: the default policies (entity/context_policy.py effective_visual_fold_policy,
 # effective_detailed_history_policy) fold the oldest 10 screenshots of a request holding 21
 # (harnesses/default/history.py apply_active_visual_budget) and archive the oldest 10 turns of one
 # holding 51 (history.py History._retain). Decision k carries k earlier turns.

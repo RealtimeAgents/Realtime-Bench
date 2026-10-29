@@ -91,6 +91,7 @@ extend-select = ["TID251"]
 
 [tool.setuptools.package-data]
 "realtime_tasks" = ["**/*"]
+"realtime_framework" = ["context_defaults.yaml"]
 "realtime_framework.sandbox" = ["images/**/*", "guest_server/requirements.txt"]
 "realtime_framework.evaluation" = ["viewer/*.js"]
 

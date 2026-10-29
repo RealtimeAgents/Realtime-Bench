@@ -1,0 +1,14 @@
+# The standard context settings of this harness version: what every model is shown at each step,
+# and where. Each setting is defined in realtime_framework/entity/context_policy.py SETTINGS;
+# this file is the only source of their values.
+standard:
+  screenshots_kept: 20
+  screenshot_fold_block: 10
+  turns_kept: 50
+  turn_archive_block: 10
+  execution_feedback: separate_message
+  observation: som_screenshot
+  reasoning_replay: false
+  archive_over_window: true
+  tool_call_history: native_tools
+  decision_history: turns

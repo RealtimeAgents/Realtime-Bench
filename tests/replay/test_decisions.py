@@ -57,7 +57,7 @@ APIS = {
     "jev_decisions": ("jev-1.13", "typesafe"),
 }
 
-# With the default policies (entity/config.py effective_visual_fold_policy,
+# With the default policies (entity/context_policy.py effective_visual_fold_policy,
 # effective_detailed_history_policy) a request holding 21 screenshots folds the oldest 10
 # (harnesses/default/history.py apply_active_visual_budget), and one holding 51 turns archives the
 # oldest 10 (history.py History._retain). Decision k carries k earlier turns plus its own

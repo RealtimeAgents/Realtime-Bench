@@ -73,7 +73,7 @@ MODEL_KEY = "gpt-realtime-2"  # configs/models/gpt-realtime-2.yaml
 STUB_API_KEY = "sk-replay-stub"  # a placeholder; every handshake must carry it
 TOKENS_PER_FRAME, MAX_TICKS = 1024, 61
 
-# With the default policies (entity/config.py effective_visual_fold_policy,
+# With the default policies (entity/context_policy.py effective_visual_fold_policy,
 # effective_detailed_history_policy) a decision that would hold 21 screenshots folds the oldest 10
 # (harnesses/default/history.py apply_active_visual_budget), and one that would hold 51 turns
 # archives the oldest 10 (history.py History._retain). Decision k holds k earlier turns
