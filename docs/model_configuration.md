@@ -329,7 +329,7 @@ declarations, so a broken driver stops every run until its preset is fixed or re
 configuration records the module, the class, a digest of every file in the package and the
 context policy row (`chat_completions`), so results from different driver code are never mixed.
 
-`tests/replay/external_template/rtb_ext/chat.py` is a complete example of a stateless chat
-driver, a `StatelessEncoder`.
+`examples/external_driver/rtb_ext/chat.py` is a complete example of a stateless chat driver, a
+`StatelessEncoder`.
 
 If your model cannot be reached through any of these, [contact us](submit.md#contact).
