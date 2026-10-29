@@ -23,7 +23,12 @@ import pytest
 from realtime_framework.clock import Clocks, FrameClock, SystemClock
 from realtime_framework.entity.actions import Action, Observation
 from realtime_framework.entity.harness import StreamingAgent
-from realtime_framework.entity.model import PendingDecision
+from realtime_framework.entity.model import (
+    QUOTA_EXHAUSTED,
+    PendingDecision,
+    TransportFailure,
+    TransportFailureError,
+)
 from realtime_framework.entity.records import TraceEvent, validate_episode_trace
 from realtime_framework.evaluation import reporting, runner
 from realtime_framework.evaluation.agent_trace import AgentTraceSink
@@ -177,6 +182,7 @@ def run_main(
     emergency=False,
     scene_capture=None,
     model_args=("--model", "fake-model", "--adapter", "anthropic_messages"),
+    setup_error=None,
 ) -> dict:
     """Run main() for ``task`` and return its run_summary.json. ``clock`` is the operational
     clock; on the wall clock it is world time too, and under the token clock (in pause mode)
@@ -186,7 +192,8 @@ def run_main(
     arguments it calls run_stream with, and the code main() exits with (None when it returns).
     With ``emergency`` an exception main() lets out goes to the emergency summary, as the
     __main__ block hands it over, and ``seen["escaped"]`` gets its traceback. ``scene_capture``
-    is the one set_up_agent opens, and ``model_args`` name the model."""
+    is the one set_up_agent opens, and ``model_args`` name the model. ``setup_error`` is raised
+    by set_up_agent where agent.initialize() raises, in the provider's setup."""
     seen = {} if seen is None else seen
 
     def episode_clocks(clock_mode, fps):
@@ -202,6 +209,8 @@ def run_main(
             pack = kwargs["run_dir"] / "episode_blobs.pack"
             sink = AgentTraceSink(kwargs["episode_trace"], pack, clock=kwargs["clock"])
             setup.agent_trace = agent.sink = sink
+        if setup_error is not None:
+            raise setup_error
         setup.stage = "environment_setup"
 
     def run_stream(adapter, env, **kwargs):
@@ -743,6 +752,30 @@ def test_a_generation_that_raises_is_its_generation_error(tmp_path):
         "snapshot_s": QUERY_S + SNAPSHOT_S,
         "snapshot_delay_s": SNAPSHOT_S,
     }
+
+
+def test_a_live_session_that_fails_to_open_is_invalid_for_its_failure_s_kind(tmp_path):
+    """agent.initialize() opens the live session, and its connect raises the failure it was
+    classified as, as OpenAI Realtime's retried connect and a streaming session's readying do,
+    here an exhausted quota: the run is invalid for that failure, as a generation's would be,
+    not as the runner's run_exception."""
+    clock, guest = FakeClock(1_000_000.0), FakeGuest()
+    cause = RuntimeError("1011 None. You exceeded your current quota")
+    failure = TransportFailureError(TransportFailure(QUOTA_EXHAUSTED), cause, 0)
+    seen = {}
+    summary = run_main(
+        tmp_path,
+        FakeTask(clock, guest, "task_success", True),
+        FakeAgent(clock),
+        clock,
+        guest,
+        seen=seen,
+        setup_error=failure,
+    )
+    invalid = summary["invalid_run"]
+    assert (invalid["category"], invalid["reason"]) == ("provider", "provider_quota_exhausted")
+    assert "quota_exhausted after 0 transport retries" in invalid["detail"]
+    assert seen["exit_code"] == 1 and not scored(tmp_path)
 
 
 def test_a_summary_main_fails_to_build_is_written_as_the_run_s_failure(tmp_path, monkeypatch):
