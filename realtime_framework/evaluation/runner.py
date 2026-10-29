@@ -791,10 +791,13 @@ def main():
         # The stop reason and the end time are LATCHED by the shell at loop exit (EpisodeResult
         # stop_reason, termination_record), so cleanup that crosses the deadline rewrites
         # neither a real environment terminal state into time_limit nor the episode's length.
-        # Any invalid run reports "invalid_run"; "setup_error" if we never reached the loop.
+        # Any invalid run reports "invalid_run" (reporting.conclude), one that failed in the
+        # setup above too: a run without a failure ran its episode. Only a failure to set up
+        # that main() lets out reports "setup_error", in the emergency summary
+        # (_write_emergency_setup_summary).
         latched = result.stop_reason if result is not None else None
         termination = result.termination_record if result is not None else None
-        stopped = latched or ("setup_error" if env is None else "unknown")
+        stopped = latched or "unknown"
         world_time_s = termination["end_s"] if termination is not None else None
         # The trace holds every record the episode wrote, checkpointed above. A section read from
         # it, a streaming run's streaming section or a turn-based run's reasoning replay, that

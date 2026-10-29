@@ -960,6 +960,8 @@ def test_a_live_session_that_fails_to_open_is_invalid_for_its_failure_s_kind(tmp
     invalid = summary["invalid_run"]
     assert (invalid["category"], invalid["reason"]) == ("provider", "provider_quota_exhausted")
     assert "quota_exhausted after 0 transport retries" in invalid["detail"]
+    # It failed in main()'s setup, before any environment: invalid_run, as any invalid run.
+    assert (summary["stop_reason"], summary["loop_stop_reason"]) == ("invalid_run", None)
     assert seen["exit_code"] == 1 and not scored(tmp_path)
 
 
