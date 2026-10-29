@@ -7,20 +7,19 @@ Version 1 copied what each code path did before the policy existed; every later 
 one change (see CONTEXT_POLICY_VERSION), to one item, except version 2, which changed generic
 LiteLLM's reasoning and verbatim replay (items 6 and 7) together. Item 7, which no encoder could
 apply, has since been dropped. A change that alters what some model is shown bumps the version
-(in phase 2 once, at its release: see CONTEXT_POLICY_VERSION); moving a preset from an API row
+(in phase 2 once, at its release: see CONTEXT_POLICY_VERSION); moving a setting from an API row
 to the model that needs it alters nothing shown and keeps it. The values count in the effective
 run config and therefore in its hash. Every item is read from here: retention, feedback
 placement, the ledger role, reasoning replay, pressure archiving, the Decision history form, the
 tool-call replay format, the prompts (item 11) and the observation form (item 12); the encoders
-take their fixed texts (item 5) from here, and ContextPolicy.for_path takes Gemini's tool-call
-replay format from the model's provider_options.
+take their fixed texts (item 5) from here.
 
-An API row takes the standard values, then the items of its preset, if it has one (PRESETS),
-then its own. A preset comes from one of two places. A row's applies to every model of its API:
-Luna's (openai_decisions) and JEV's (jev_decisions). A model config's (ModelConfig.context_preset,
-from its YAML, one of MODEL_PRESETS) applies to that model alone and takes the place of its row's:
-Kimi K3's, so other moonshot models keep the standard values. The pre-run checks hold each
-resolved policy against what the API declares (providers/preflight.py check_context_policy).
+A model configuration's policy (path_policy) takes the items that are context settings (SETTINGS)
+from its resolved context settings (ModelConfig.context, resolve_context): the defaults file's
+standard values (realtime_framework/context_defaults.yaml), then those of the model's YAML, then
+the run's. Its API row adds what the code decides: the prompts, the ledger role and the fixed
+texts. The pre-run checks hold each policy against what the API declares
+(providers/preflight.py check_context_policy).
 
 Two values say what the policy allows, not what a run does. Pressure archiving (item 8) is on for
 every API, and it acts only where the encoder estimates its requests and the model config has a
@@ -34,19 +33,20 @@ run hash covers.
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
 import yaml
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictInt, StrictStr
 
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER, FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.records import _jsonable
 
 # 2: generic LiteLLM rebuilds its replies from the model output and replays no reasoning; Kimi
-#    K3 keeps its reasoning through its preset.
+#    K3 keeps its reasoning through its own settings.
 # 3: the action ledger is an input wherever there are roles; OpenAI Realtime sent it as an
 #    instruction (a system item), and Decisions state places it by position and header.
 # 4: the fold placeholder says only what it removed; it claimed that the step's reasoning and
@@ -147,7 +147,8 @@ FIXED_TEXTS = FixedTexts(
 # Context settings
 # The configurable items, their kinds of value, the API rows they apply to (None: every row),
 # what kind of setting each is and whether a model's YAML may set it. Their values come from the
-# defaults file alone (DEFAULTS_FILE): the standard of this harness version.
+# defaults file alone (DEFAULTS_FILE): the standard of this harness version, and the deviations
+# from it that some models are approved to take.
 @dataclass(frozen=True)
 class Setting:
     # int: a positive count; bool; or the strings allowed
@@ -208,6 +209,16 @@ DEFAULTS_FILE = Path(__file__).resolve().parents[1] / "context_defaults.yaml"
 _BLOCKS = (("screenshot_fold_block", "screenshots_kept"), ("turn_archive_block", "turns_kept"))
 
 
+@dataclass(frozen=True)
+class ApprovedDeviation:
+    """Settings a model of an API is approved to take instead of the standard values, and why."""
+
+    api: str
+    model: str  # ModelConfig.model_name
+    settings: Mapping[str, bool | int | str]
+    reason: str
+
+
 def setting_error(key: str, value) -> str | None:
     """What is wrong with ``value`` for setting ``key``, if anything."""
     allowed = SETTINGS[key].values
@@ -230,8 +241,39 @@ def blocks_error(values: Mapping) -> str | None:
     return None
 
 
+def _settings_error(settings) -> str | None:
+    """What is wrong with a mapping of some settings to values, if anything."""
+    if not isinstance(settings, Mapping):
+        return "must be a mapping of settings to values"
+    unknown = sorted(set(settings) - set(SETTINGS))
+    if unknown:
+        return f"has unknown settings {unknown}"
+    for key, value in settings.items():
+        error = setting_error(key, value)
+        if error:
+            return error
+    return None
+
+
+def _approved_deviation(name: str, entry) -> ApprovedDeviation:
+    if not isinstance(entry, dict) or set(entry) != {"api", "model", "settings", "reason"}:
+        raise ValueError(
+            f"{name}: each approved deviation has api, model, settings and reason; got {entry!r}"
+        )
+    where = f"{name}: the approved deviation of {entry['api']} {entry['model']}"
+    error = _settings_error(entry["settings"])
+    if error or not entry["settings"]:
+        raise ValueError(f"{where}: settings {error or 'name no setting'}")
+    if not isinstance(entry["reason"], str) or not entry["reason"].strip():
+        raise ValueError(f"{where}: give its reason")
+    return ApprovedDeviation(
+        entry["api"], entry["model"], MappingProxyType(dict(entry["settings"])), entry["reason"]
+    )
+
+
 def load_context_defaults(path) -> dict:
-    """The defaults file at ``path``, checked: every setting's standard value, and nothing else."""
+    """The defaults file at ``path``, checked: every setting's standard value, and the deviations
+    approved for some models."""
     path = Path(path)
     if not path.is_file():
         raise ValueError(f"The context defaults file is missing: {path}")
@@ -241,9 +283,9 @@ def load_context_defaults(path) -> dict:
         raise ValueError(  # noqa: TRY004 - a malformed file, as the catalog's YAMLs
             f"{name}: the file needs a standard section, a mapping of the settings"
         )
-    others = sorted(set(data) - {"standard"})
+    others = sorted(set(data) - {"standard", "approved_deviations"})
     if others:
-        raise ValueError(f"{name}: the file holds standard alone; got {others}")
+        raise ValueError(f"{name}: the file holds standard and approved_deviations; got {others}")
     standard = data["standard"]
     for key in SETTINGS:
         if key not in standard:
@@ -258,7 +300,16 @@ def load_context_defaults(path) -> dict:
     error = blocks_error(standard)
     if error:
         raise ValueError(f"{name}: standard {error}")
-    return {"standard": MappingProxyType({key: standard[key] for key in SETTINGS})}
+    approved = {}
+    for entry in data.get("approved_deviations") or ():
+        deviation = _approved_deviation(name, entry)
+        if (deviation.api, deviation.model) in approved:
+            raise ValueError(f"{name}: {deviation.api} {deviation.model} is approved twice")
+        approved[deviation.api, deviation.model] = deviation
+    return {
+        "standard": MappingProxyType({key: standard[key] for key in SETTINGS}),
+        "approved_deviations": MappingProxyType(approved),
+    }
 
 
 @lru_cache(maxsize=1)
@@ -267,49 +318,186 @@ def context_defaults() -> dict:
     return load_context_defaults(DEFAULTS_FILE)
 
 
-def effective_detailed_history_policy() -> tuple[int, int]:
-    """Return the verbatim text-history window and block-archive size.
+# The resolved context settings
+Source = Literal["default", "model", "run"]
+# A setting's value as its definition takes it (setting_error), never coerced from another type.
+Value = StrictBool | StrictInt | StrictStr
+_FROZEN = ConfigDict(frozen=True, extra="forbid")
 
-    At ``window + 1`` turns, the oldest ``drop_block_size`` complete detailed turns are archived
-    together. With the maintained defaults, verbatim text/action context therefore cycles between
-    41 and 50 turns while older executed actions remain available through the compact ledger,
-    unless a request that does not fit leaves the earliest of them out.
-    """
-    standard = context_defaults()["standard"]
-    window = int(os.environ.get("STREAM_DETAILED_HISTORY_TURNS", str(standard["turns_kept"])))
-    drop_block_size = int(
-        os.environ.get(
-            "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE",
-            str(standard["turn_archive_block"]),
+
+class Overridden(BaseModel):
+    """A value a higher layer replaced, and the layer that gave it."""
+
+    model_config = _FROZEN
+
+    source: Source
+    value: Value
+
+
+class ContextItem(BaseModel):
+    """One setting as resolved: its value and where it came from, the values it replaced, lowest
+    layer first, whether it applies to the API, and how it stands against the standard: standard,
+    approved (an approved deviation of the model) or nonstandard; None where it does not apply."""
+
+    model_config = _FROZEN
+
+    key: str
+    value: Value
+    source: Source
+    overridden: tuple[Overridden, ...]
+    applies: bool
+    category: Literal["standard", "approved", "nonstandard"] | None
+
+
+class Deviation(BaseModel):
+    """An applicable setting away from its standard value."""
+
+    model_config = _FROZEN
+
+    key: str
+    standard: Value
+    value: Value
+    source: Source
+    category: Literal["approved", "nonstandard"]
+
+
+class ContextSettings(BaseModel):
+    """A model configuration's context settings, resolved once (resolve_context): every setting
+    in SETTINGS order, and whether the run is on the standard context, which takes every
+    applicable setting standard or approved for the model. Immutable all the way down, and the
+    same after a dump and a validation, which read it back rather than resolve it again."""
+
+    model_config = _FROZEN
+
+    api: str  # ModelConfig.adapter_type
+    model: str  # ModelConfig.model_name, which approved deviations name
+    items: tuple[ContextItem, ...]
+    standard: bool
+    deviations: tuple[Deviation, ...]
+
+    def values(self) -> dict:
+        """Each setting's value, the part of the record the configuration hashes take."""
+        return {item.key: item.value for item in self.items}
+
+    def item(self, key: str) -> ContextItem:
+        return next(item for item in self.items if item.key == key)
+
+
+def context_values(record: Mapping) -> dict:
+    """Each setting's value in a dumped ContextSettings ``record`` (ModelConfig.model_dump), the
+    part of it the configuration hashes take (evaluation/config.py configuration_sha256,
+    effective_run_config): not where a value came from or how it stands."""
+    return {item["key"]: item["value"] for item in record["items"]}
+
+
+def _row_name(api: str) -> str:
+    """The row an API takes for applicability: an external driver ("package.module:Class") the
+    plain chat row, any other its own name."""
+    return EXTERNAL_DRIVER_ROW if ":" in api else api
+
+
+def layer_error(source: Source, api: str, layer: Mapping) -> str | None:
+    """What a layer may not set, if anything: a model's YAML only the settings a model may set
+    (Setting.model), and only those that apply to its API; the command line any setting."""
+    error = _settings_error(layer)
+    if error:
+        return error
+    if source == "model":
+        for key in layer:
+            if not SETTINGS[key].model:
+                allowed = [key for key, setting in SETTINGS.items() if setting.model]
+                return f"a model may set only {allowed}, not {key}"
+            applies = SETTINGS[key].applies
+            if applies is not None and _row_name(api) not in applies:
+                return f"{key} does not apply to the {api} API"
+    return None
+
+
+# Transitional, until the trial worker's command line takes context settings: the STREAM_*
+# retention variables, as settings of the run.
+_STREAM_RETENTION = {
+    "STREAM_ACTIVE_VISUAL_BUDGET": "screenshots_kept",
+    "STREAM_VISUAL_FOLD_BLOCK_SIZE": "screenshot_fold_block",
+    "STREAM_DETAILED_HISTORY_TURNS": "turns_kept",
+    "STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE": "turn_archive_block",
+}
+
+
+def _stream_retention() -> dict:
+    return {
+        key: int(os.environ[variable])
+        for variable, key in _STREAM_RETENTION.items()
+        if variable in os.environ
+    }
+
+
+def resolve_context(
+    api: str, model: str, *, model_layer: Mapping = MappingProxyType({}), run: Mapping | None = None
+) -> ContextSettings:
+    """The context settings of model ``model`` of API ``api``: the defaults file's standard
+    values, then the model YAML's (``model_layer``), then the run's (``run``), each layer checked
+    for what it may set (layer_error). Each setting applies to the rows SETTINGS names; an
+    external driver takes the plain chat row's. Values that do not apply are kept, and take no
+    part in whether the run is on the standard context."""
+    if run is None:
+        run = _stream_retention()
+    layers = (("model", model_layer), ("run", run))
+    for source, layer in layers:
+        error = layer_error(source, api, layer)
+        if error:
+            raise ValueError(f"The {source} context settings of {model}: {error}")
+    defaults = context_defaults()
+    standard = defaults["standard"]
+    deviation = defaults["approved_deviations"].get((api, model))
+    approved = deviation.settings if deviation is not None else {}
+    items, deviations = [], []
+    for key, setting in SETTINGS.items():
+        value, source, overridden = standard[key], "default", []
+        for name, layer in layers:
+            if key in layer:
+                overridden.append(Overridden(source=source, value=value))
+                value, source = layer[key], name
+        applies = setting.applies is None or _row_name(api) in setting.applies
+        category = None
+        if applies:
+            category = (
+                "standard"
+                if value == standard[key]
+                else "approved"
+                if key in approved and approved[key] == value
+                else "nonstandard"
+            )
+            if category != "standard":
+                deviations.append(
+                    Deviation(
+                        key=key,
+                        standard=standard[key],
+                        value=value,
+                        source=source,
+                        category=category,
+                    )
+                )
+        items.append(
+            ContextItem(
+                key=key,
+                value=value,
+                source=source,
+                overridden=tuple(overridden),
+                applies=applies,
+                category=category,
+            )
         )
+    values = {item.key: item.value for item in items}
+    error = blocks_error(values)
+    if error:
+        raise ValueError(f"The context settings of {model}: {error}")
+    return ContextSettings(
+        api=api,
+        model=model,
+        items=tuple(items),
+        standard=all(item.category != "nonstandard" for item in items),
+        deviations=tuple(deviations),
     )
-    if window <= 0:
-        raise ValueError("detailed history turns must be positive")
-    if drop_block_size <= 0 or drop_block_size > window:
-        raise ValueError("detailed history drop block size must be in [1, detailed history turns]")
-    return window, drop_block_size
-
-
-def effective_visual_fold_policy() -> tuple[int, int]:
-    """Return the independent active-image budget and visual folding block size.
-
-    At ``budget + 1`` active visual observations, the oldest ``block_size`` screenshots and their
-    bound interactables are replaced together by fixed text. The matching text/action turns remain
-    until the separate detailed-history policy archives them.
-    """
-    standard = context_defaults()["standard"]
-    budget = int(os.environ.get("STREAM_ACTIVE_VISUAL_BUDGET", str(standard["screenshots_kept"])))
-    block_size = int(
-        os.environ.get(
-            "STREAM_VISUAL_FOLD_BLOCK_SIZE",
-            str(standard["screenshot_fold_block"]),
-        )
-    )
-    if budget <= 0:
-        raise ValueError("active visual budget must be positive")
-    if block_size <= 0 or block_size > budget:
-        raise ValueError("visual fold block size must be in [1, active visual budget]")
-    return budget, block_size
 
 
 @dataclass(frozen=True)
@@ -318,7 +506,6 @@ class PathPolicy:
 
     version: int
     api: str
-    preset: str | None  # the PRESETS entry in effect: the model config's, else the row's
     # 1 screenshot retention: at screenshots_kept + 1 active screenshots, the oldest
     # screenshot_fold_block are folded
     screenshots_kept: int
@@ -343,10 +530,11 @@ class PathPolicy:
     # API's driver estimates its requests (it overrides StatelessEncoder.request_context_status)
     # and the model config has a window
     archive_over_window: bool
-    # 9 Decision history form; the pre-run checks take only the form the API replays
-    # (RealtimeCapabilities.history_replay)
+    # 9 Decision history form, None where it does not apply; the pre-run checks take only the
+    # form the API replays (RealtimeCapabilities.history_replay)
     decision_history: DecisionHistory | None
-    tool_call_history: Literal["native_tools", "tool_transcript"] | None  # 10 past live tool calls
+    # 10 past live tool calls, None where it does not apply
+    tool_call_history: Literal["native_tools", "tool_transcript"] | None
     # 11 task category -> InteractionProfile.name; None: no profile for the category. The pre-run
     # checks reject the one such pairing, a text-only choice model on a browser game, from the
     # capabilities (providers/preflight.py check_choice_task), and take only profiles that ask for
@@ -362,50 +550,6 @@ class PathPolicy:
 
 # The row an external driver ("package.module:Class") uses: the plain stateless chat values.
 EXTERNAL_DRIVER_ROW = "chat_completions"
-
-
-@dataclass(frozen=True)
-class ContextPolicy:
-    version: int
-    paths: Mapping[str, PathPolicy]  # one per registered API
-    own_values: Mapping[str, Mapping]  # each row's own values, which win over any preset
-
-    def for_path(
-        self, adapter_type: str, provider_options: Mapping, context_preset: str | None
-    ) -> PathPolicy:
-        """Resolve one API's policy for a model config, before any driver exists.
-
-        A registered API has its own row; an external driver gets EXTERNAL_DRIVER_ROW. Registered
-        names contain no colon and external ones are "package.module:Class"
-        (providers/registry.py), so a name with no row and no colon is a registered API whose row
-        is missing. The model config's preset (ModelConfig.context_preset) takes the place of the
-        row's: the standard values, then the preset's items, then the row's own.
-        """
-        if adapter_type in self.paths:
-            path = self.paths[adapter_type]
-        elif ":" in adapter_type:
-            path = self.paths[EXTERNAL_DRIVER_ROW]
-        else:
-            raise ValueError(
-                f"API {adapter_type!r} has no context-policy row; add one in "
-                "current_context_policy() (realtime_framework/entity/context_policy.py)"
-            )
-        if context_preset is not None:
-            path = replace(
-                path,
-                preset=context_preset,
-                **{**STANDARD, **PRESETS[context_preset], **self.own_values[path.api]},
-            )
-        if path.tool_call_history is None:
-            return path
-        # Gemini Live takes the format from the model YAML's provider_options; a model that sets
-        # none keeps the row's.
-        return replace(
-            path,
-            tool_call_history=provider_options.get("history_format", path.tool_call_history),
-        )
-
-
 # The action channel (RealtimeCapabilities.action_channel) each profile item 11 names asks the
 # model to answer in (harnesses/default/harness.py INTERACTION_PROFILES).
 PROMPT_CHANNELS = {
@@ -416,90 +560,64 @@ PROMPT_CHANNELS = {
     "multimodal_game_decisions": "choice",
 }
 _TEXT_JSON_PROMPTS = {"realtime": "standard_vlm", "browser_game": "standard_vlm"}
-# The standard values of the items that come neither from the environment (items 1 and 2) nor
-# from FIXED_TEXTS (item 5): the defaults file's, but for items 9 and 10, which apply only to the
-# rows that name their own (the Decision rows, gemini_live), and items 4 and 11, which the code
-# decides.
-_DEFAULT = context_defaults()["standard"]
-STANDARD = {
-    "execution_feedback": _DEFAULT["execution_feedback"],
-    "ledger_role": "input",
-    "reasoning_replay": _DEFAULT["reasoning_replay"],
-    "archive_over_window": _DEFAULT["archive_over_window"],
-    "decision_history": None,
-    "tool_call_history": None,
-    "prompts": _TEXT_JSON_PROMPTS,
-    "observation": _DEFAULT["observation"],
-}
-# What a model takes instead of the standard values, by preset name: through its API row (Luna,
-# JEV) or through its model config (Kimi K3).
-PRESETS = {
-    # Luna's candidates are listed by the harness, so it is not compared with the chat models:
-    # it keeps the observation JSON beside the screenshot.
-    "luna": {"observation": "observation_json_screenshot"},
-    # JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and
-    # the observation JSON without a screenshot.
-    "jev": {
-        "execution_feedback": "digest",
-        "decision_history": DecisionHistory("action_digest"),
-        "observation": "observation_json_text",
+# What the code decides for each registered API's row, beside the fixed texts and the ledger role
+# (input everywhere): the profile each task category is prompted with (item 11).
+ROW_PROMPTS = {
+    "litellm": _TEXT_JSON_PROMPTS,
+    "chat_completions": _TEXT_JSON_PROMPTS,
+    "openrouter": _TEXT_JSON_PROMPTS,
+    "anthropic_messages": _TEXT_JSON_PROMPTS,
+    "moonshot": _TEXT_JSON_PROMPTS,
+    "openai_realtime": _TEXT_JSON_PROMPTS,
+    "gemini_live": {"realtime": "function_call", "browser_game": "function_call"},
+    "openai_decisions": {
+        "realtime": "multimodal_decisions",
+        "browser_game": "multimodal_game_decisions",
     },
-    # Kimi's thinking-model guide requires K3's past reasoning_content in multi-turn
-    # conversations. The requirement is K3's, so K3's YAML names this preset
-    # (configs/models/kimi-k3.yaml), on moonshot or behind a chat_completions endpoint, and
-    # other models of either API send no reasoning back.
-    "kimi_k3": {"reasoning_replay": True},
+    "jev_decisions": {"realtime": "jev_decisions", "browser_game": None},
 }
-# The presets a model config may name; Luna's and JEV's belong to their API rows.
-MODEL_PRESETS = ("kimi_k3",)
 
 
-def current_context_policy() -> ContextPolicy:
-    """The values at CONTEXT_POLICY_VERSION; history windows keep their STREAM_* environment
-    overrides."""
-    screenshots_kept, screenshot_fold_block = effective_visual_fold_policy()
-    turns_kept, turn_archive_block = effective_detailed_history_policy()
-    own_values = {}
+def context_row(api: str) -> str:
+    """The row API ``api`` takes: its own, or EXTERNAL_DRIVER_ROW for an external driver.
 
-    def path(api, preset=None, **values) -> PathPolicy:
-        own_values[api] = values
-        return PathPolicy(
-            version=CONTEXT_POLICY_VERSION,
-            api=api,
-            preset=preset,
-            screenshots_kept=screenshots_kept,
-            screenshot_fold_block=screenshot_fold_block,
-            turns_kept=turns_kept,
-            turn_archive_block=turn_archive_block,
-            texts=FIXED_TEXTS,
-            **{**STANDARD, **(PRESETS[preset] if preset else {}), **values},
-        )
-
-    paths = (
-        path("litellm"),
-        path("chat_completions"),
-        path("openrouter"),
-        path("anthropic_messages"),
-        path("moonshot"),
-        path("openai_realtime"),
-        path(
-            "gemini_live",
-            tool_call_history=_DEFAULT["tool_call_history"],
-            prompts={"realtime": "function_call", "browser_game": "function_call"},
-        ),
-        path(
-            "openai_decisions",
-            "luna",
-            decision_history=DecisionHistory(_DEFAULT["decision_history"]),
-            prompts={
-                "realtime": "multimodal_decisions",
-                "browser_game": "multimodal_game_decisions",
-            },
-        ),
-        path(
-            "jev_decisions",
-            "jev",
-            prompts={"realtime": "jev_decisions", "browser_game": None},
-        ),
+    Registered names contain no colon and external ones are "package.module:Class"
+    (providers/registry.py), so a name with no row and no colon is a registered API whose row is
+    missing.
+    """
+    if api in ROW_PROMPTS:
+        return api
+    if ":" in api:
+        return EXTERNAL_DRIVER_ROW
+    raise ValueError(
+        f"API {api!r} has no context-policy row; add one in ROW_PROMPTS "
+        "(realtime_framework/entity/context_policy.py)"
     )
-    return ContextPolicy(CONTEXT_POLICY_VERSION, {value.api: value for value in paths}, own_values)
+
+
+def path_policy(config) -> PathPolicy:
+    """The policy a model configuration runs under, before any driver exists: its resolved
+    context settings (ModelConfig.context) on its API's row, with None for the items that do not
+    apply to it."""
+    row = context_row(config.adapter_type)
+    context = config.context
+    values = context.values()
+    history = context.item("decision_history")
+    tools = context.item("tool_call_history")
+    return PathPolicy(
+        version=CONTEXT_POLICY_VERSION,
+        api=row,
+        screenshots_kept=values["screenshots_kept"],
+        screenshot_fold_block=values["screenshot_fold_block"],
+        turns_kept=values["turns_kept"],
+        turn_archive_block=values["turn_archive_block"],
+        execution_feedback=values["execution_feedback"],
+        ledger_role="input",
+        texts=FIXED_TEXTS,
+        reasoning_replay=values["reasoning_replay"],
+        archive_over_window=values["archive_over_window"],
+        decision_history=DecisionHistory(history.value) if history.applies else None,
+        tool_call_history=tools.value if tools.applies else None,
+        prompts=ROW_PROMPTS[row],
+        observation=values["observation"],
+    )

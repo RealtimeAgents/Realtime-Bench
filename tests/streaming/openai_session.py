@@ -14,7 +14,7 @@ import io
 from PIL import Image
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.model import (
     CanonicalTurn,
@@ -66,9 +66,7 @@ def driver_for(port: int, clock, trace, *, streaming: bool = False) -> OpenAIRea
 async def run_turns(driver: OpenAIRealtimeDriver, turns: int) -> list[tuple[str, float]]:
     """Run ``turns`` turns; return each text delta with the clock's monotonic time it arrived."""
     config = driver.config
-    policy = current_context_policy().for_path(
-        config.adapter_type, config.provider_options, config.context_preset
-    )
+    policy = path_policy(config)
     answer = AnswerRequirements(driver.capabilities.action_channel, "standard_vlm", ())
     seed = SessionSeed(SYSTEM_INSTRUCTION, config.model_name, None, 1.0, answer)
     system = system_block(seed.system_instruction, None)

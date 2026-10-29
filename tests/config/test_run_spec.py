@@ -5,6 +5,7 @@ entry points differ on purpose (ENTRY_DEFAULTS)."""
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 
 import pytest
@@ -203,6 +204,31 @@ def test_the_runner_runs_the_model_configuration_its_launch_file_holds(tmp_path)
     assert (model_config["model_name"], model_config["context_reserve_tokens"]) == (
         "edited-backend", 8192,
     )  # fmt: skip
+    assert record["expected_runtime_config_hash"] == record["runtime_config_hash"]
+
+
+def test_the_runner_runs_the_context_settings_its_launch_file_holds(tmp_path, monkeypatch):
+    """The model configuration's context settings travel whole in the launch file
+    (ModelConfig.context): the runner reads them back as they are, never resolving them again, and
+    runs their values."""
+    from realtime_framework.evaluation import _trial
+
+    path = trial_launch(monkeypatch, tmp_path / "trial", "--catalog-model", GEMINI, "--task", WEB)
+    settings = json.loads(path.read_text())
+    items = {item["key"]: item for item in settings["model_config"]["context"]["items"]}
+    items["tool_call_history"].update(source="run", category="nonstandard")
+    path.write_text(json.dumps(settings))
+    item = _trial.read_launch(path).model_config.context.item("tool_call_history")
+    assert (item.value, item.source, item.category) == ("tool_transcript", "run", "nonstandard")
+
+    def edit(settings):
+        items = {item["key"]: item for item in settings["model_config"]["context"]["items"]}
+        items["screenshots_kept"]["value"], items["screenshot_fold_block"]["value"] = 8, 3
+
+    (tmp_path / "run").mkdir()
+    record = _launched_run(tmp_path / "run", edit)
+    config = record["runtime_config"]
+    assert (config["active_visual_budget"], config["visual_fold_block_size"]) == (8, 3)
     assert record["expected_runtime_config_hash"] == record["runtime_config_hash"]
 
 

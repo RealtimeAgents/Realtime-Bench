@@ -24,7 +24,7 @@ from websockets.frames import Close
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy, resolve_context
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import (
     FATAL,
@@ -55,6 +55,15 @@ def yaml_options(model: str) -> dict:
         if entry.model_name == model:
             return entry.defaults["provider_options"]
     return {}
+
+
+def yaml_context(model: str):
+    """The context settings of the model YAML that names ``model``, resolved; a model id no YAML
+    names takes the standard values."""
+    layer = next(
+        (entry.context for entry in catalog.CATALOG.values() if entry.model_name == model), {}
+    )
+    return resolve_context("gemini_live", model, model_layer=layer)
 
 
 class FakeSocket:
@@ -149,6 +158,7 @@ class Rig:
             model_name=model,
             api_key="replay-dummy-key",
             provider_options=yaml_options(model),
+            context=yaml_context(model),
         )
         self.driver = live.GeminiLiveDriver(config, clock=RecordingClock(self.log))
         self.driver.bind_trace(UNTRACED)
@@ -158,9 +168,7 @@ class Rig:
             "function_call", "standard_vlm", tuple(gui_function_declarations(clock_mode="token"))
         )
         self.seed = SessionSeed("system instruction", model, None, 1.0, answer)
-        policy = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        )
+        policy = path_policy(config)
         call = CallParameters(model, config.reasoning_effort, None)
         self.view = lambda turns: build_request(
             policy,

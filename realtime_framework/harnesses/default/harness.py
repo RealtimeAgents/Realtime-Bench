@@ -890,7 +890,7 @@ from realtime_framework.harnesses.default.history import Accept
 from realtime_framework.harnesses.default.history import Commit
 from realtime_framework.harnesses.default.history import History
 from realtime_framework.harnesses.default.history import Unanswered
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.request import AnswerRequirements
 from realtime_framework.entity.request import CallParameters
 from realtime_framework.entity.request import CanonicalRequest
@@ -1207,9 +1207,7 @@ class DefaultHarness(VisionAgentBase):
     def _setup_backend(self):
         self.driver = adapter_class(self.config.adapter_type)(self.config, clock=self.clock)
         self.driver.bind_trace(self._trace)
-        self._context_policy = current_context_policy().for_path(
-            self.config.adapter_type, self.config.provider_options, self.config.context_preset
-        )
+        self._context_policy = path_policy(self.config)
         # Started by initialize(); close() stops it once the runtime has closed the session.
         self._execution_thread = ExecutionThread(
             self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"

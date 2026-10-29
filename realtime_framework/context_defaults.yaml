@@ -12,3 +12,42 @@ standard:
   archive_over_window: true
   tool_call_history: native_tools
   decision_history: turns
+# The settings a model of an API (endpoint.api and endpoint.model in its YAML) is approved to take
+# instead of the standard values, which its YAML's context section sets. A run that takes them
+# stays on the standard context; any other value of a setting that applies is a deviation.
+approved_deviations:
+  - api: moonshot
+    model: kimi-k3
+    settings: {reasoning_replay: true}
+    reason: >-
+      Kimi's thinking-model guide requires K3's past reasoning_content back in multi-turn
+      conversations and tool-call loops.
+  - api: gemini_live
+    model: gemini-3.1-flash-live-preview
+    settings: {tool_call_history: tool_transcript}
+    reason: &gemini >-
+      Past calls replayed as native tool calls can stall the next interaction of a rebuilt
+      session (providers/gemini/session.py SessionCore._tool_contents).
+  - api: gemini_live
+    model: gemini-3.8-live
+    settings: {tool_call_history: tool_transcript}
+    reason: *gemini
+  - api: gemini_live
+    model: gemini-3.8-live-extended-thinking
+    settings: {tool_call_history: tool_transcript}
+    reason: *gemini
+  - api: openai_decisions
+    model: openai/gpt-6-luna-decisions
+    settings: {observation: observation_json_screenshot}
+    reason: >-
+      Luna chooses among the candidates the harness lists in the observation JSON, which it keeps
+      beside the screenshot; it is not compared with the chat models.
+  - api: jev_decisions
+    model: typesafe/jev-1.13
+    settings:
+      observation: observation_json_text
+      execution_feedback: digest
+      decision_history: action_digest
+    reason: >-
+      JEV takes text only, within a 32k prompt: an action digest with the feedback in it, and
+      the observation JSON without a screenshot; it is not compared with the chat models.

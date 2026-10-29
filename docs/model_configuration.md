@@ -84,17 +84,21 @@ models gained, lost or changed a limit and 54 limits went down, for example
 upgrades, declare it in a preset. The run records the resolved preset, limit included, so results
 with different settings are never mixed.
 
-### Context preset
+### Context settings
 
-`context_preset` (top level, optional) names a set of context-policy values the model takes in
-place of the standard ones. A model can name only `kimi_k3` (`MODEL_PRESETS` in
-`realtime_framework/entity/context_policy.py`), which sends K3's past reasoning back, as Kimi
-requires for K3: `configs/models/kimi-k3.yaml` sets it, and other moonshot models leave it out and
-send none. K3 behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) names it
-too; no API sends past reasoning without a preset. An endpoint given on the trial worker's command
-line has no YAML (`python -m realtime_framework.evaluation._trial --model DEPLOYMENT_ID
---base-url URL`) and names it with `--context-preset kimi_k3`. A preset the API cannot render is
-refused before the run, and the run records the preset with its configuration.
+What each model is shown at every step, and where, follows ten context settings. Their standard
+values are in `realtime_framework/context_defaults.yaml`, the only source of them; each setting
+is defined in `SETTINGS` (`realtime_framework/entity/context_policy.py`). `context` (top level,
+optional) sets the few a model needs instead: `reasoning_replay`, `tool_call_history`,
+`observation`, `execution_feedback` and `decision_history`, each only where it applies to the
+model's API. `configs/models/kimi-k3.yaml` sets `reasoning_replay: true`, which sends K3's past
+reasoning back, as Kimi requires for K3; other moonshot models leave it out and send none. K3
+behind your own endpoint (`api: chat_completions`, served by vLLM or SGLang) sets it too. An
+endpoint given on the trial worker's command line has no YAML (`python -m
+realtime_framework.evaluation._trial --model DEPLOYMENT_ID --base-url URL`) and sets it with
+`--context-preset kimi_k3`. The defaults file also lists the deviations some models are approved
+to take (`approved_deviations`). A setting the API cannot render is refused before the run, and the
+run records each setting's value, where it came from and whether it is standard.
 
 The run records each context-policy value as the policy sets it, and two of them say what the
 policy allows rather than what the run does. Pressure archiving is on for every API, but it runs
@@ -125,12 +129,12 @@ from the command line, a run plan or Harbor.
 `provider_options` (top level) sets wire options of the API that its driver declares
 (`compat.provider_options`). Of the registered APIs, `openrouter` takes `cache_breakpoint` (`true`
 or `false`, the default), and `gemini_live` takes the options below; a Gemini Live model sets each
-of `tool_behavior`, `completion_signal`, `input_transport`, `tool_response_scheduling` and
-`history_format` (`native_tools` or `tool_transcript`: how past function calls are replayed into
-a rebuilt session): a model without them, a raw model id among them, is refused before the run.
-The allowed values are in `LIVE_PROTOCOL_OPTIONS` and `LIVE_HISTORY_OPTIONS`
-(`realtime_framework/providers/gemini/live.py`), and the Gemini presets in `configs/models` set
-the combinations their models need.
+of `tool_behavior`, `completion_signal`, `input_transport` and `tool_response_scheduling`: a model
+without them, a raw model id among them, is refused before the run. The allowed values are in
+`LIVE_OPTIONS` (`realtime_framework/providers/gemini/live.py`), and the Gemini presets in
+`configs/models` set the combinations their models need. How past function calls are replayed
+into a rebuilt session is the context setting `tool_call_history` (`native_tools` or
+`tool_transcript`), which the Gemini presets set to `tool_transcript` in their `context`.
 
 ### Streaming settings
 
@@ -227,7 +231,7 @@ A model that needs a new wire protocol gets a driver:
 5. Register the driver class as one `"package.module:Class"` entry in `APIS`
    (`realtime_framework/providers/registry.py`) and reference it from a preset with
    `endpoint.api`.
-6. Add the API's own row to `current_context_policy()`
+6. Add the API's own row to `ROW_PROMPTS`
    (`realtime_framework/entity/context_policy.py`); a registered API without one is refused when
    its context policy is resolved.
 
@@ -250,8 +254,8 @@ driver as a [model API](#add-a-model-api).
    `SessionEncoder`, or both, or leaves out an abstract method of the one it subclasses, is
    refused when its YAML is loaded; a session API subclasses `SessionLifecycle`, which is a
    `SessionEncoder`, as in step 1. The driver runs under the
-   `chat_completions` context policy, with the model's [context preset](#context-preset) if it
-   names one. Its prompts ask for one JSON action in the visible text, so a driver whose
+   `chat_completions` context policy, with the model's [context settings](#context-settings) if
+   it sets any. Its prompts ask for one JSON action in the visible text, so a driver whose
    `action_channel` is not `"text_json"` is refused before the run. Where the driver overrides
    `request_context_status(request)`, the runtime asks it
    before each request and archives the oldest turns while the request exceeds the context

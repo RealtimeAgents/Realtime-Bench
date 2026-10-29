@@ -65,6 +65,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "provider_options": {
@@ -103,9 +104,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "anthropic/claude-fable-5.1",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -142,7 +230,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -196,9 +283,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -243,7 +341,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3f4b1f4da6c94336b0f058cb53d57f0b7bb9e22a2870d100ca5517dedd396b8a"
+    "hash": "354c92845698ce8c22db5636dada08586f716bb85a5cb0859d3891596afe4c11"
    },
    "token/None": {
     "config": {
@@ -265,7 +363,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -319,9 +416,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -366,7 +474,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "37104658cef8cf107810df01f051d7fd1bf1e5c32c263442ac985e3e14aab8ea"
+    "hash": "88c10308be339fde40fde1fc68f6a4411a952c3ed7255e59dc778910b2077d10"
    },
    "wall/None": {
     "config": {
@@ -388,7 +496,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -442,9 +549,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -489,7 +607,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "884603c79d8ebeea5509bf4cb85b710a0f1eeb9868861b22bc101ea27ae1284c"
+    "hash": "e20235676e032a5bb9b332ca36b38bfdad8ceeb0b1347d56a808c5f540f6e736"
    }
   },
   "vendor": "anthropic"
@@ -512,6 +630,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "provider_options": {
@@ -550,9 +669,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "anthropic/claude-opus-5",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -589,7 +795,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -643,9 +848,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -690,7 +906,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "f540e0591a63dcb921babf575f9f9cf1c1288100a519f4d39356f0ed133e7486"
+    "hash": "848f60d96df85d72b58f4cc31ee9097a84f45de9016fbe8b23adf06994f213fa"
    },
    "token/None": {
     "config": {
@@ -712,7 +928,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -766,9 +981,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -813,7 +1039,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a52ec3a7017f6b177dbfa46afed0e833000b56b2f0ab64e1fdc677adbc50bc4e"
+    "hash": "b992d2d769cfcf980f33ca525b6a89725365eccb0d157873383c4bae576f788d"
    },
    "wall/None": {
     "config": {
@@ -835,7 +1061,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -889,9 +1114,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -936,7 +1172,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "52ffcc42f5ba52e31eb2bbefc35326668e90c4817620df96b54df2c841d9f7d5"
+    "hash": "c0268747b063667c66be8d7d3cb69f91611d3f5f7d487a992aeb7526d2b9f33e"
    }
   },
   "vendor": "anthropic"
@@ -959,6 +1195,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "reasoning_effort": "low",
@@ -993,9 +1230,96 @@
    "api_key_env": "ANTHROPIC_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "anthropic_messages",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "claude-opus-5",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -1030,7 +1354,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1084,9 +1407,20 @@
       "api_key_env": "ANTHROPIC_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1129,7 +1463,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "33eaa19d6e2456a98bd67960e59212dca91968ceaa313c7acfe6c6be9d291336"
+    "hash": "5cb4cb3e00bd261cc7b61786fd2110966ab4a42fc93f8c9cdcef16368db83b60"
    },
    "token/None": {
     "config": {
@@ -1151,7 +1485,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1205,9 +1538,20 @@
       "api_key_env": "ANTHROPIC_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1250,7 +1594,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ea3dc917ab041b07168f6b225dcf712ccbcb508c42bfb0fe1cca0e3a9ae603fd"
+    "hash": "7013a59f8e9df0a9a9333d8cdab3758b405fc73cf2797335058c5b726067b8a2"
    },
    "wall/None": {
     "config": {
@@ -1272,7 +1616,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1326,9 +1669,20 @@
       "api_key_env": "ANTHROPIC_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1371,7 +1725,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "107bef43a19311e7548f44f3c17a859769b85be3b5a135c3bc868a0375faf372"
+    "hash": "166c4e3252a711eee09df2363f6eb995d3de6fb80eadfd406288cd2e3ce66d37"
    }
   },
   "vendor": "anthropic"
@@ -1394,6 +1748,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "reasoning_effort": "low",
@@ -1429,9 +1784,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "deepseek/deepseek-v4.1-flash",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -1466,7 +1908,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1520,9 +1961,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1565,7 +2017,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b23dc5c754ad969cf3b121cf90721529eb248d4f2f8c4a7005d60f692adbc93f"
+    "hash": "fd525e16dd359d5ff9f42d4059660ac9a853e3f6372008ad3d46b48363ce7aba"
    },
    "token/None": {
     "config": {
@@ -1587,7 +2039,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1641,9 +2092,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1686,7 +2148,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ecf82a26e13ef91b93c7a728b5e3a101dce128ffa70bb16e7b695d07eb4719ab"
+    "hash": "6ea1330942dc939ea9bb62855db6c3915bc802ccc3b1bb06b4f99ee6f939fb24"
    },
    "wall/None": {
     "config": {
@@ -1708,7 +2170,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1762,9 +2223,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -1807,7 +2279,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d6d5eb2bb410acaf83d5bac8f73b3559c0d22ae6d10d5c633df4ebfe2ef453b9"
+    "hash": "43e123c660e0ce034f3ad7f36ea532da6c63427072fcf0d499182bad1f35e845"
    }
   },
   "vendor": "deepseek"
@@ -1830,6 +2302,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "provider_options": {
@@ -1868,9 +2341,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "google/gemini-3.8-flash",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -1907,7 +2467,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -1961,9 +2520,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2008,7 +2578,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "d623bcb54794226628ed9d2a63ab99390a545685d6ac3eb906351b5321b365fb"
+    "hash": "53f59d52f39ddc8e90631b35c51f504192a9eb2fd20e2e740a207f9e7c3a85de"
    },
    "token/None": {
     "config": {
@@ -2030,7 +2600,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -2084,9 +2653,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2131,7 +2711,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "46d7e879e1a3fd5ea80c0115089b8247e6e6bcdebf492f392825e6bcfc3e19c1"
+    "hash": "9df97feb03c8a6e6eca0e4242ad2b289c1a595059fae3e13fe79b8f7f2be4aa9"
    },
    "wall/None": {
     "config": {
@@ -2153,7 +2733,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -2207,9 +2786,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2254,7 +2844,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e7cb7fecee8b2d9b21cab0f79caeb2fe0dc1d673d8a34b31df6b4d7b8cc17cb6"
+    "hash": "d6cc7c61880899d9c18061be7eeba258f3ebe548d4887e1a8f2849b3f50daee3"
    }
   },
   "vendor": "google"
@@ -2277,11 +2867,13 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {
+    "tool_call_history": "tool_transcript"
+   },
    "defaults": {
     "model_revision": null,
     "provider_options": {
      "completion_signal": "turn_complete",
-     "history_format": "tool_transcript",
      "input_transport": "client_content",
      "tool_behavior": "non_blocking",
      "tool_response_scheduling": "silent"
@@ -2311,9 +2903,109 @@
    "api_key_env": "GEMINI_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "gemini_live",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "tool_call_history",
+      "source": "model",
+      "standard": "native_tools",
+      "value": "tool_transcript"
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "tool_call_history",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "native_tools"
+       }
+      ],
+      "source": "model",
+      "value": "tool_transcript"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "gemini-3.8-live",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -2323,7 +3015,6 @@
    "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "turn_complete",
-    "history_format": "tool_transcript",
     "input_transport": "client_content",
     "tool_behavior": "non_blocking",
     "tool_response_scheduling": "silent"
@@ -2354,7 +3045,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -2408,9 +3098,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2420,7 +3121,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -2450,7 +3150,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c2afd79d1200afbf82e00cd482d9d7706822cb7bc6e3dbf93710d23da8eb5bd2"
+    "hash": "adc9231907393e9e0859ff0d7e0fbd8ef8f1ede3a6a9ceea280bea30b2b1bf19"
    },
    "token/None": {
     "config": {
@@ -2472,7 +3172,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -2526,9 +3225,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2538,7 +3248,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -2568,7 +3277,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "fea02468bb9174db07d3703f40910739108715541379b16a27e426469f7c4f71"
+    "hash": "7590c03909295384ce6ca4bea778e6080d4b92b9fbe2117a4de648750e67f262"
    },
    "wall/None": {
     "config": {
@@ -2590,7 +3299,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -2644,9 +3352,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2656,7 +3375,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -2686,7 +3404,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7e198ca41e6ef382c973dd8628d62dfbb52339848843d8d8c58cf7044f9f8711"
+    "hash": "6c76ee56ab22d6791093eb12acfafdb6a4c9f15f837fd56ae40a2d4e16df2fed"
    }
   },
   "vendor": "google"
@@ -2709,11 +3427,13 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {
+    "tool_call_history": "tool_transcript"
+   },
    "defaults": {
     "model_revision": null,
     "provider_options": {
      "completion_signal": "interaction_idle",
-     "history_format": "tool_transcript",
      "input_transport": "client_content",
      "tool_behavior": "non_blocking",
      "tool_response_scheduling": "omit"
@@ -2744,9 +3464,109 @@
    "api_key_env": "GEMINI_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "gemini_live",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "tool_call_history",
+      "source": "model",
+      "standard": "native_tools",
+      "value": "tool_transcript"
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "tool_call_history",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "native_tools"
+       }
+      ],
+      "source": "model",
+      "value": "tool_transcript"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "gemini-3.8-live-extended-thinking",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -2756,7 +3576,6 @@
    "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "interaction_idle",
-    "history_format": "tool_transcript",
     "input_transport": "client_content",
     "tool_behavior": "non_blocking",
     "tool_response_scheduling": "omit"
@@ -2787,7 +3606,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -2841,9 +3659,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2853,7 +3682,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "omit"
@@ -2883,7 +3711,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4ecd07d27354b46934387d3ee7158d5ac60b4d43ab7e766e43b006710e077c28"
+    "hash": "39939d1a82288704d349801eebd5ffaf05fdea51cac9d0220eb7b07e9697ce35"
    },
    "token/None": {
     "config": {
@@ -2905,7 +3733,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -2959,9 +3786,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -2971,7 +3809,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "omit"
@@ -3001,7 +3838,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6d5c796aeb684c13fb20cf1d313d6f118527b64764f5464215649f3caa286a8f"
+    "hash": "fd3c1f4c36be5d29a0d057acf2e5592fb48b8f637afe324ad0af0247bddd8516"
    },
    "wall/None": {
     "config": {
@@ -3023,7 +3860,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -3077,9 +3913,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3089,7 +3936,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "interaction_idle",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "omit"
@@ -3119,7 +3965,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "7a21d89997b24325dd310d1d0dc21179df18893727bce037a343cd2926a6f119"
+    "hash": "e1e6d94599ca370f69aa4e97a836527d391729d5e36a0228caa451e579a05c34"
    }
   },
   "vendor": "google"
@@ -3142,11 +3988,13 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {
+    "tool_call_history": "tool_transcript"
+   },
    "defaults": {
     "model_revision": null,
     "provider_options": {
      "completion_signal": "turn_complete",
-     "history_format": "tool_transcript",
      "input_transport": "client_content",
      "tool_behavior": "non_blocking",
      "tool_response_scheduling": "silent"
@@ -3183,9 +4031,109 @@
    "api_key_env": "GEMINI_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "gemini_live",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "tool_call_history",
+      "source": "model",
+      "standard": "native_tools",
+      "value": "tool_transcript"
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "tool_call_history",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "native_tools"
+       }
+      ],
+      "source": "model",
+      "value": "tool_transcript"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "gemini-3.1-flash-live-preview",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -3195,7 +4143,6 @@
    "native_output_limit_source": "endpoint",
    "provider_options": {
     "completion_signal": "turn_complete",
-    "history_format": "tool_transcript",
     "input_transport": "client_content",
     "tool_behavior": "non_blocking",
     "tool_response_scheduling": "silent"
@@ -3226,7 +4173,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -3280,9 +4226,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3292,7 +4249,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -3322,7 +4278,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "6796e80f6daa3cd67790f504d461e8d0b4c113d4210b98aebdd7843bbc7873e7"
+    "hash": "c86dfb7064bd548074d715f9ffa6299be74ac1f85a5dc98c2f3a6a9c2538aee4"
    },
    "token/None": {
     "config": {
@@ -3344,7 +4300,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -3398,9 +4353,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3410,7 +4376,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -3440,7 +4405,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "ed5f7f8c962db5c7c18c806265928fc8de80cf6f1cfda3604a12066f59d2f48d"
+    "hash": "c955883be06030c03d14c298c0bf9a461db4bc537b22a53ff92031e0aebb44c2"
    },
    "wall/None": {
     "config": {
@@ -3462,7 +4427,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "function_call",
        "realtime": "function_call"
@@ -3516,9 +4480,20 @@
       "api_key_env": "GEMINI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "tool_transcript",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3528,7 +4503,6 @@
       "native_output_limit_source": "endpoint",
       "provider_options": {
        "completion_signal": "turn_complete",
-       "history_format": "tool_transcript",
        "input_transport": "client_content",
        "tool_behavior": "non_blocking",
        "tool_response_scheduling": "silent"
@@ -3558,7 +4532,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "357609f3c06513115fbc675ca450b310105f2d1247f956937b4e68e1312516e9"
+    "hash": "765e64d1078bd0c3bad4f0f120728139c5a083ef327358cff060e92f1cfc3370"
    }
   },
   "vendor": "google"
@@ -3581,6 +4555,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "reasoning_effort": "low",
@@ -3616,9 +4591,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "openai/gpt-5.6-sol",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -3653,7 +4715,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -3707,9 +4768,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3752,7 +4824,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3509c9764e8977fcb2ad82b31ad814ed31dff95e1848aa4ebc0ab24daf5bc673"
+    "hash": "b8595ba9320e63f6069f0b403289f027508bdb3d9beb7736cf9c883ea425f5d4"
    },
    "token/None": {
     "config": {
@@ -3774,7 +4846,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -3828,9 +4899,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3873,7 +4955,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b2e19b0e0f221835611f4d883def6a0027827d812bc32259a810712baea03e79"
+    "hash": "836b500f17e21fa3b84481ceb8ce8d4ee30c49c48023ade61298c654aabbbca6"
    },
    "wall/None": {
     "config": {
@@ -3895,7 +4977,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -3949,9 +5030,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -3994,7 +5086,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "c1d7cad31f55365344234d4fc82550562a20e3a331e3504912cc524c808cb1ea"
+    "hash": "1777396af79c060ae9b473ef4eef615a5e6bbb3e8082456e8a2e0a788bc201ec"
    }
   },
   "vendor": "openai"
@@ -4017,6 +5109,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "reasoning_effort": "low",
@@ -4052,9 +5145,96 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openrouter",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "openai/gpt-6-astra",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -4089,7 +5269,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4143,9 +5322,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -4188,7 +5378,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "422c0203af29b4bccca576d44f3a8fcd4ad7798cbcccafdbb13689bb5b2bca1d"
+    "hash": "47d72093985e1ecf9d85437c7112daa1c0f48c07e43564d2913b4f240651559a"
    },
    "token/None": {
     "config": {
@@ -4210,7 +5400,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4264,9 +5453,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -4309,7 +5509,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e5442c2622e0d54d0e2422ee2539a445f51854f6255695453b4fb0328cfc8668"
+    "hash": "2b6a4c83da011da54c30ecd388b1070aa09ce5b7a5d0ce5d0ad3ab452852e163"
    },
    "wall/None": {
     "config": {
@@ -4331,7 +5531,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4385,9 +5584,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -4430,7 +5640,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e5e36004e421537ef5634c4019f4bbf853f6819fe19b2662dde326e157121e6b"
+    "hash": "4c74e7154f1482815efec198167f2fedb88839e81a87f00ef73e32bb06afcc37"
    }
   },
   "vendor": "openai"
@@ -4445,6 +5655,9 @@
    "api_base_url": null,
    "benchmark_eligible": false,
    "comparison_scope": "experimental_system",
+   "context": {
+    "observation": "observation_json_screenshot"
+   },
    "defaults": {
     "context_image_tokens": 512,
     "context_reserve_tokens": 32768,
@@ -4475,9 +5688,109 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openai_decisions",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "observation",
+      "source": "model",
+      "standard": "som_screenshot",
+      "value": "observation_json_screenshot"
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "observation",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "som_screenshot"
+       }
+      ],
+      "source": "model",
+      "value": "observation_json_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "openai/gpt-6-luna-decisions",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 512,
-   "context_preset": null,
    "context_reserve_tokens": 32768,
    "context_window_tokens": 1050000,
    "fps": 1.0,
@@ -4526,7 +5839,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "observation_json_screenshot",
-      "preset": "luna",
       "prompts": {
        "browser_game": "multimodal_game_decisions",
        "realtime": "multimodal_decisions"
@@ -4580,9 +5892,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "observation_json_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 512,
-      "context_preset": null,
       "context_reserve_tokens": 32768,
       "context_window_tokens": 1050000,
       "fps": 1.0,
@@ -4616,7 +5939,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "471f657f112e10bbf85ff6a5072d9f1149a4674bf87629798b122d773265f459"
+    "hash": "1a353f17758a9c917ddf921caaf661510a74948fa72a2c58b27e9bd9133567bc"
    }
   },
   "vendor": "openai"
@@ -4639,6 +5962,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "model_revision": null,
     "reasoning_effort": "low",
@@ -4673,9 +5997,96 @@
    "api_key_env": "OPENAI_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "openai_realtime",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "gpt-realtime-2",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -4710,7 +6121,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4764,9 +6174,20 @@
       "api_key_env": "OPENAI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -4800,7 +6221,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2ef22cc8bcb9f32186852c872b881f68c1aff4b5237a19ed7d6a4e9005d43cf7"
+    "hash": "ab420465e0c8795e5cf0fc470633c330205889d97bd5e0582368e1ad17efd45e"
    },
    "token/None": {
     "config": {
@@ -4822,7 +6243,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4876,9 +6296,20 @@
       "api_key_env": "OPENAI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -4912,7 +6343,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "e0c275ca12887b63520162604ea29e8181092c3f8eb2bd5921a8c2cdee70b68a"
+    "hash": "d75a12e45ad9119ad9dc2515c342cd506e2156314269e58e47da94199c7b72ca"
    },
    "wall/None": {
     "config": {
@@ -4934,7 +6365,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -4988,9 +6418,20 @@
       "api_key_env": "OPENAI_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -5024,7 +6465,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "1de4db653b6324476f861e0c9a93ddd20128fd659e1e38d34f2f494fcee62106"
+    "hash": "fa6f401d354c8374d49784bf839d5db942f85f871ca85e8e2110f19c1842f5cd"
    }
   },
   "vendor": "openai"
@@ -5039,6 +6480,11 @@
    "api_base_url": null,
    "benchmark_eligible": false,
    "comparison_scope": "experimental_system",
+   "context": {
+    "decision_history": "action_digest",
+    "execution_feedback": "digest",
+    "observation": "observation_json_text"
+   },
    "defaults": {
     "context_reserve_tokens": 16384,
     "context_window_tokens": 73728,
@@ -5068,9 +6514,133 @@
    "api_key_env": "OPENROUTER_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "jev_decisions",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "execution_feedback",
+      "source": "model",
+      "standard": "separate_message",
+      "value": "digest"
+     },
+     {
+      "category": "approved",
+      "key": "observation",
+      "source": "model",
+      "standard": "som_screenshot",
+      "value": "observation_json_text"
+     },
+     {
+      "category": "approved",
+      "key": "decision_history",
+      "source": "model",
+      "standard": "turns",
+      "value": "action_digest"
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "execution_feedback",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "separate_message"
+       }
+      ],
+      "source": "model",
+      "value": "digest"
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "observation",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "som_screenshot"
+       }
+      ],
+      "source": "model",
+      "value": "observation_json_text"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "decision_history",
+      "overridden": [
+       {
+        "source": "default",
+        "value": "turns"
+       }
+      ],
+      "source": "model",
+      "value": "action_digest"
+     }
+    ],
+    "model": "typesafe/jev-1.13",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 16384,
    "context_window_tokens": 73728,
    "fps": 1.0,
@@ -5119,7 +6689,6 @@
       "execution_feedback": "digest",
       "ledger_role": "input",
       "observation": "observation_json_text",
-      "preset": "jev",
       "prompts": {
        "browser_game": null,
        "realtime": "jev_decisions"
@@ -5173,9 +6742,20 @@
       "api_key_env": "OPENROUTER_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "action_digest",
+       "execution_feedback": "digest",
+       "observation": "observation_json_text",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 16384,
       "context_window_tokens": 73728,
       "fps": 1.0,
@@ -5209,7 +6789,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "0f702f0f155220cc4c414e4464f3abee372fa9a7b21707563d7881cbf09fa6c2"
+    "hash": "7d0e874c1615479d0b54038a11bdf4c3e39ebddb43747bdfaef5de4e5a69b51b"
    }
   },
   "vendor": "typesafe"
@@ -5232,8 +6812,10 @@
    "api_base_url": "https://api.moonshot.ai/v1",
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {
+    "reasoning_replay": true
+   },
    "defaults": {
-    "context_preset": "kimi_k3",
     "model_revision": null,
     "reasoning_effort": "low",
     "temperature": null,
@@ -5267,9 +6849,109 @@
    "api_key_env": "MOONSHOT_API_KEY",
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "moonshot",
+    "deviations": [
+     {
+      "category": "approved",
+      "key": "reasoning_replay",
+      "source": "model",
+      "standard": false,
+      "value": true
+     }
+    ],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "approved",
+      "key": "reasoning_replay",
+      "overridden": [
+       {
+        "source": "default",
+        "value": false
+       }
+      ],
+      "source": "model",
+      "value": true
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "kimi-k3",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": "kimi_k3",
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -5304,7 +6986,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": "kimi_k3",
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -5358,9 +7039,20 @@
       "api_key_env": "MOONSHOT_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": true,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": "kimi_k3",
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -5403,7 +7095,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "3e1a42ee1fbaae572a62e92c337e7b413a62aef210e63040f0dbbc9a84f65b5a"
+    "hash": "0886946b2ca448b31db33baa5df3bc9f3d6c842c1897a945ad563afb084fc3d9"
    },
    "token/None": {
     "config": {
@@ -5425,7 +7117,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": "kimi_k3",
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -5479,9 +7170,20 @@
       "api_key_env": "MOONSHOT_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": true,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": "kimi_k3",
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -5524,7 +7226,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2d267b619869fd06adca097b2b90e8304364abc12a3d8bf4d09b5ccb15046ce5"
+    "hash": "b592dda561d8dbfc65fe775ac79bd76bd4ace34a4c7a24dfb3b1106a8a4ac04f"
    },
    "wall/None": {
     "config": {
@@ -5546,7 +7248,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": "kimi_k3",
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -5600,9 +7301,20 @@
       "api_key_env": "MOONSHOT_API_KEY",
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": true,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": "kimi_k3",
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -5645,7 +7357,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "a13e327c943073df3581114c20c5f4fc69d3c5084fb8af5430200a1301156986"
+    "hash": "ef9ca68239fb96c6dde1c0fe15f4cb011c9839377e37da49fb654989fa98a52f"
    }
   },
   "vendor": "moonshot"
@@ -5668,6 +7380,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "reasoning_effort": "provider_default",
     "temperature": null,
@@ -5701,9 +7414,96 @@
    "api_key_env": null,
    "chat_include_usage": false,
    "chat_stream": true,
+   "context": {
+    "api": "litellm",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "litellm-vlm",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -5750,7 +7550,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -5804,9 +7603,20 @@
       "api_key_env": null,
       "chat_include_usage": false,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -5849,7 +7659,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "4a5ba6cd3746b7dd27289adab551d84660fee8f2d5ca928d98ea4d8d61ac21e3"
+    "hash": "a1d219884cae6849fae5a935b1c4977014f2425af035f592de222576a0638409"
    }
   },
   "vendor": "litellm"
@@ -5872,6 +7682,7 @@
    "api_base_url": "https://YOUR_HOST/v1",
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "chat_stream": true,
     "model_revision": null,
@@ -5907,9 +7718,96 @@
    "api_key_env": "OPENAI_API_KEY",
    "chat_include_usage": true,
    "chat_stream": true,
+   "context": {
+    "api": "chat_completions",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "YOUR_MODEL",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -5956,7 +7854,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -6010,9 +7907,20 @@
       "api_key_env": "OPENAI_API_KEY",
       "chat_include_usage": true,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -6055,7 +7963,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "b04891b8adafff403790fb301d3e0e12fdfab0287fa3324e3df9948f6ee8621c"
+    "hash": "429544ee9a7ac589c76f9146919d93253be0639ce5a0680ce45567a6497215d6"
    }
   },
   "vendor": "compatible"
@@ -6078,6 +7986,7 @@
    "api_base_url": null,
    "benchmark_eligible": true,
    "comparison_scope": "model",
+   "context": {},
    "defaults": {
     "reasoning_effort": "provider_default",
     "temperature": null,
@@ -6111,9 +8020,96 @@
    "api_key_env": "OPENAI_API_KEY",
    "chat_include_usage": true,
    "chat_stream": true,
+   "context": {
+    "api": "chat_completions",
+    "deviations": [],
+    "items": [
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshots_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 20
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "screenshot_fold_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turns_kept",
+      "overridden": [],
+      "source": "default",
+      "value": 50
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "turn_archive_block",
+      "overridden": [],
+      "source": "default",
+      "value": 10
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "execution_feedback",
+      "overridden": [],
+      "source": "default",
+      "value": "separate_message"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "observation",
+      "overridden": [],
+      "source": "default",
+      "value": "som_screenshot"
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "reasoning_replay",
+      "overridden": [],
+      "source": "default",
+      "value": false
+     },
+     {
+      "applies": true,
+      "category": "standard",
+      "key": "archive_over_window",
+      "overridden": [],
+      "source": "default",
+      "value": true
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "tool_call_history",
+      "overridden": [],
+      "source": "default",
+      "value": "native_tools"
+     },
+     {
+      "applies": false,
+      "category": null,
+      "key": "decision_history",
+      "overridden": [],
+      "source": "default",
+      "value": "turns"
+     }
+    ],
+    "model": "remote-vlm",
+    "standard": true
+   },
    "context_counter": "estimate",
    "context_image_tokens": 4096,
-   "context_preset": null,
    "context_reserve_tokens": 4096,
    "context_window_tokens": null,
    "fps": 1.0,
@@ -6160,7 +8156,6 @@
       "execution_feedback": "separate_message",
       "ledger_role": "input",
       "observation": "som_screenshot",
-      "preset": null,
       "prompts": {
        "browser_game": "standard_vlm",
        "realtime": "standard_vlm"
@@ -6214,9 +8209,20 @@
       "api_key_env": "OPENAI_API_KEY",
       "chat_include_usage": true,
       "chat_stream": true,
+      "context": {
+       "archive_over_window": true,
+       "decision_history": "turns",
+       "execution_feedback": "separate_message",
+       "observation": "som_screenshot",
+       "reasoning_replay": false,
+       "screenshot_fold_block": 10,
+       "screenshots_kept": 20,
+       "tool_call_history": "native_tools",
+       "turn_archive_block": 10,
+       "turns_kept": 50
+      },
       "context_counter": "estimate",
       "context_image_tokens": 4096,
-      "context_preset": null,
       "context_reserve_tokens": 4096,
       "context_window_tokens": null,
       "fps": 1.0,
@@ -6259,7 +8265,7 @@
      "version": 47,
      "visual_fold_block_size": 10
     },
-    "hash": "2ee48d47d3df7b2467c524fa53c42ad01b819b33cdb36f2e4ff30d243fad88cd"
+    "hash": "4d0d6aba70f849742235e86451ca1436080bfb581e7fc09eb28811616182f7f1"
    }
   },
   "vendor": "compatible"

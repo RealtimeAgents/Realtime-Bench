@@ -1125,7 +1125,7 @@ class MoonshotDriver(LiteLLMDriver):
         protocol_family="moonshot_chat",
         # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
         # multi-turn conversations and tool-call loops". That is K3's requirement, not the API's:
-        # K3's YAML names the kimi_k3 preset, which sends it (entity/context_policy.py PRESETS).
+        # K3's YAML sets reasoning_replay, which sends it (configs/models/kimi-k3.yaml).
         # LiteLLM's Moonshot config sends the encoder's reasoning_content unchanged.
         reasoning_replay="optional",
     )
@@ -1179,7 +1179,7 @@ class ChatCompletionsDriver(LiteLLMDriver):
         wall_clock_only=True,
         # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
         # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
-        # template. A model that needs it back names a preset that sends it (K3: kimi_k3).
+        # template. A model that needs it back sets reasoning_replay in its YAML's context (K3).
         reasoning_replay="optional",
     )
     protocol = ChatProtocol(

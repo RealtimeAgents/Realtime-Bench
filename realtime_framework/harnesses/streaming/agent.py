@@ -59,7 +59,7 @@ from realtime_framework.entity.actions import (
     gui_function_declarations,
 )
 from realtime_framework.entity.config import DecisionBudget
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
@@ -259,9 +259,7 @@ class NativeStreamingAgent(VisionAgentBase):
         )
         self.driver.bind_trace(self._trace)
         self._states = SessionStates(self._trace, self.driver.capabilities.protocol_family)
-        self._context_policy = current_context_policy().for_path(
-            self.config.adapter_type, self.config.provider_options, self.config.context_preset
-        )
+        self._context_policy = path_policy(self.config)
         self._execution = ExecutionThread(
             self.clock, f"execution-thread-{self.driver.capabilities.protocol_family}"
         )

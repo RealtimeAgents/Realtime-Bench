@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 
 import realtime_framework.providers.registry as catalog
+from realtime_framework.entity.context_policy import resolve_context
 from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
 from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.providers.litellm import DEFAULT_MOONSHOT_BASE_URL
@@ -138,7 +139,7 @@ def _check_history_changes(records: list[dict]) -> None:
 
 
 def _check_reasoning_replay(records: list[dict], steps) -> None:
-    """The Kimi K3 preset keeps reasoning (entity/context_policy.py PRESETS): the runtime stores it
+    """Kimi K3's YAML keeps its reasoning (configs/models/kimi-k3.yaml): the runtime stores it
     with the turn (harnesses/default/context.py RealtimeRuntime._run_turn) and the next request
     carries it on the turn's assistant message (harnesses/default/request.py _turn_items,
     providers/litellm.py chat_messages)."""
@@ -254,9 +255,10 @@ def test_kimi_usage_at_another_address(monkeypatch):
     assert usage["completion_tokens_details"]["audio_tokens"] == 0
 
 
-def test_model_without_a_preset(tmp_path, monkeypatch):
-    """Another moonshot model, whose YAML names no context preset, takes the standard values
-    (entity/context_policy.py): each request replays the earlier replies without their reasoning,
+def test_model_without_reasoning_replay(tmp_path, monkeypatch):
+    """Another moonshot model, whose YAML sets no context, takes the standard values
+    (realtime_framework/context_defaults.yaml): each request replays the earlier replies without
+    their reasoning,
     and the pre-run checks accept it. Its YAML sets no reasoning_effort either: LiteLLM refuses
     one for a moonshot model its map does not list."""
     config, records = _run(
@@ -265,7 +267,7 @@ def test_model_without_a_preset(tmp_path, monkeypatch):
         PAUSE_SCENARIO,
         tokens_per_frame=None,
         model_name="kimi-other",
-        context_preset=None,
+        context=resolve_context("moonshot", "kimi-other"),
         reasoning_effort=None,
     )
     check_episode(config, clock_mode="token", task=ReplayTask(), env_fps=config.fps)

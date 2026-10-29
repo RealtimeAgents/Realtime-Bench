@@ -763,3 +763,5 @@ class ModelSpec:
     pricing: Optional[dict] = None  # billing-only rate card; not runtime identity
     benchmark_eligible: bool = True  # false => excluded from maintained leaderboard sweeps
     comparison_scope: str = "model"  # model | experimental_system | system_reference
+    # The context settings the model's YAML sets (its context section), over the standard values
+    context: dict = field(default_factory=dict)

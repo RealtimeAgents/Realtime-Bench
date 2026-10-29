@@ -11,4 +11,6 @@ provider_options:
   completion_signal: turn_complete
   input_transport: client_content
   tool_response_scheduling: silent
-  history_format: tool_transcript
+context:
+  # Past calls replayed as native tool calls can stall a rebuilt session's next interaction.
+  tool_call_history: tool_transcript

@@ -15,7 +15,7 @@ from pathlib import Path
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation, gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy, resolve_context
 from realtime_framework.entity.events import TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
     TRANSIENT,
@@ -79,9 +79,7 @@ def _run(driver, run_dir: Path, turns: int):
     sink = AgentTraceSink(trace, run_dir / "episode_blobs.pack", clock=clock)
     driver.bind_trace(sink)
     config = driver.config
-    policy = current_context_policy().for_path(
-        config.adapter_type, config.provider_options, config.context_preset
-    )
+    policy = path_policy(config)
     execution = ExecutionThread(SystemClock(), "execution-thread-ws")
     runtime = RealtimeRuntime(
         driver, policy, history=History(policy), trace=sink, execution=execution
@@ -418,6 +416,9 @@ def test_gemini_live_session(tmp_path, monkeypatch):
                 api_base_url=f"https://127.0.0.1:{stub.port}",
                 api_key_env="REPLAY_TRACE_KEY",
                 provider_options=catalog.get("gemini-live").defaults["provider_options"],
+                context=resolve_context(
+                    "gemini_live", model, model_layer=catalog.get("gemini-live").context
+                ),
             )
         )
         original = driver.sync_history

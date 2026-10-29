@@ -15,7 +15,7 @@ received them. On this wire:
   base64 image source (factory.py:2501-2531), and the system message moves to the top-level
   ``system`` field (litellm/llms/anthropic/chat/transformation.py:2052-2059);
 - thinking is never sent back: its context policy replays no reasoning
-  (entity/context_policy.py STANDARD, current_context_policy; harnesses/default/request.py
+  (realtime_framework/context_defaults.yaml; harnesses/default/request.py
   _turn_items).
 
 Record with ``REPLAY_RECORD=1 .venv/bin/python -m pytest tests/replay/test_anthropic_messages.py``;
@@ -34,18 +34,17 @@ from pathlib import Path
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
-from realtime_framework.entity.model import CanonicalTurn
-from realtime_framework.entity.model import GenerationRequest
-from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.context_policy import path_policy
+from realtime_framework.entity.model import (
+    ARCHIVED_ACTION_LEDGER_HEADER,
+    FOLDED_VISUAL_PLACEHOLDER,
+    CanonicalTurn,
+    GenerationRequest,
+    ProviderObservation,
+)
 from realtime_framework.entity.records import UNTRACED
-from realtime_framework.entity.request import AnswerRequirements
-from realtime_framework.entity.request import CallParameters
-from realtime_framework.harnesses.default.request import build_request
-from realtime_framework.harnesses.default.request import ledger_block
-from realtime_framework.harnesses.default.request import system_block
+from realtime_framework.entity.request import AnswerRequirements, CallParameters
+from realtime_framework.harnesses.default.request import build_request, ledger_block, system_block
 
 from . import baseline
 from .build import build_episode
@@ -345,9 +344,7 @@ def test_instruction_ledger_joins_the_system_field(monkeypatch):
     usage = {"input_tokens": 10, "output_tokens": 1}
     with AnthropicMessagesStub([Reply("ok", usage, {"output_tokens": 2})]) as stub:
         config = anthropic_config(stub.base_url)
-        policy = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        )
+        policy = path_policy(config)
         request = build_request(
             replace(policy, ledger_role="instruction"),
             system_block("SYSTEM", None),

@@ -10,7 +10,6 @@ from dataclasses import replace
 
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.events import GenerationBoundary, ProviderHistoryState
 from realtime_framework.entity.model import (
     GenerationHandle,
@@ -31,6 +30,8 @@ from realtime_framework.harnesses.default.execution_thread import ExecutionThrea
 from realtime_framework.harnesses.default.history import Accept, History
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
+
+from ..context import api_policy
 
 WAIT_S = 10.0
 ANSWER = AnswerRequirements("text_json", "standard_vlm", ())
@@ -145,7 +146,7 @@ class _Rig:
         clock = SystemClock()
         self.trace = _Trace()
         self.driver = driver(clock, self.trace)
-        policy = current_context_policy().for_path("openai_realtime", {}, None)
+        policy = api_policy("openai_realtime")
         self.policy = replace(policy, **retention)
         self.execution = ExecutionThread(clock, "runtime-session-test")
         self.runtime = RealtimeRuntime(

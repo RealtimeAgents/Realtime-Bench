@@ -6,7 +6,7 @@ import base64
 import json
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import FIXED_TEXTS, current_context_policy
+from realtime_framework.entity.context_policy import FIXED_TEXTS
 from realtime_framework.entity.model import (
     ARCHIVED_ACTION_LEDGER_HEADER,
     FOLDED_VISUAL_PLACEHOLDER,
@@ -19,7 +19,8 @@ from realtime_framework.providers.decisions.history import render_digest
 from realtime_framework.providers.litellm import chat_messages
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
-POLICY = current_context_policy()
+from ..context import api_policy
+
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("replay-vlm", "low", None)
 SYSTEM = system_block("SYSTEM", None)
@@ -46,7 +47,7 @@ def turn(k, prompt="FRAME", *, output="", feedback="", unattached="", **refs) ->
 
 
 def request(api, turns, ledger=None):
-    return build_request(POLICY.paths[api], SYSTEM, tuple(turns), ledger, ANSWER, CALL)
+    return build_request(api_policy(api), SYSTEM, tuple(turns), ledger, ANSWER, CALL)
 
 
 def image_part(k):
@@ -110,10 +111,10 @@ def test_reasoning_replay():
         assert [m for m in chat_messages(request(api, turns)) if m["role"] == "assistant"] == [
             {"role": "assistant", "content": "A1"}
         ], api
-    # Kimi K3's YAML names the kimi_k3 preset, which keeps the reasoning
-    # (entity/context_policy.py PRESETS), on moonshot and behind a chat_completions endpoint.
+    # Kimi K3's YAML sets reasoning_replay, which keeps the reasoning (configs/models/kimi-k3.yaml),
+    # on moonshot and behind a chat_completions endpoint.
     for api in ("moonshot", "chat_completions"):
-        k3 = POLICY.for_path(api, {}, "kimi_k3")
+        k3 = api_policy(api, "kimi-k3", model_layer={"reasoning_replay": True})
         messages = chat_messages(build_request(k3, SYSTEM, tuple(turns), None, ANSWER, CALL))
         assert messages[2] == {"role": "assistant", "content": "A1", "reasoning_content": "R1"}
         assert messages[4] == {"role": "assistant", "content": "", "reasoning_content": "R2"}

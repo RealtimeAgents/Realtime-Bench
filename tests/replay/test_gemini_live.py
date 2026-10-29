@@ -13,8 +13,8 @@ action, usage and commit.
 Scripts:
 - the long scenario for two maintained models (their YAMLs' provider_options, configs/models),
   which differ in the completion signal and the tool acknowledgement;
-- a model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS,
-  LIVE_HISTORY_OPTIONS): realtime_input observations and native_tools history;
+- a model that sets the driver's default options (live.py LIVE_OPTIONS) and the standard
+  tool_call_history: realtime_input observations and native_tools history;
 - a resume that the server rejects, which falls back to replaying the history
   (live.py GeminiLiveDriver._sync_history);
 - 3.1 Flash Live (configs/models/gemini-live.yaml) on the driver-default script: non-blocking
@@ -170,8 +170,8 @@ class Preset:
     completion: Callable[[int, dict], list[dict]]
 
 
-# Two maintained models (configs/models) and the driver defaults (live.py LIVE_PROTOCOL_OPTIONS,
-# LIVE_HISTORY_OPTIONS).
+# Two maintained models (configs/models) and the driver defaults (live.py LIVE_OPTIONS) with the
+# standard tool_call_history.
 TOOL_TRANSCRIPT = Preset(
     "tool-transcript",
     "gemini-3.8-live",
@@ -546,8 +546,8 @@ DEFAULT_SCENARIO = [
 
 
 def test_driver_default_short(live_env, tmp_path):
-    """A model that sets the driver's default options (live.py LIVE_PROTOCOL_OPTIONS,
-    LIVE_HISTORY_OPTIONS), native_tools history among them. The goAway of decision 1
+    """A model that sets the driver's default options (live.py LIVE_OPTIONS), with the standard
+    native_tools history. The goAway of decision 1
     comes without a resumption handle, so the session is replayed at once (live.py
     GeminiLiveDriver._sync_history), in the native_tools format with the thought-signature sentinel
     (gemini/session.py REPLAY_THOUGHT_SIGNATURE, SessionCore._tool_contents)."""

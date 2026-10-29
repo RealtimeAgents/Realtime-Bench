@@ -50,6 +50,13 @@ Deliberate changes since were re-exported the same way, offline (LITELLM_LOCAL_M
   same values, so every run hash changed.
 - The verbatim-replay item, which no encoder read, is gone: every context_policy record lost
   verbatim_replay (false everywhere), so every run hash changed.
+- Each model's context settings are resolved once onto its ModelConfig, from the defaults file
+  and its YAML's context section, in place of presets and Gemini's history_format: every
+  model_config holds the resolved record (context) in place of context_preset, and each run's the
+  ten values alone; the three Gemini Live presets' provider_options lost history_format, which
+  their YAMLs' context sets as tool_call_history; every entry holds its YAML's context, and
+  kimi-k3's defaults lost context_preset; every context_policy record lost preset. The values
+  are the ones before, and every run hash changed.
 
 The export uses only functions that exist before and after the change. It covers, per catalog key,
 the catalog entry, the ModelConfig the runner builds (providers/registry.py:609-663 there), the
@@ -67,8 +74,7 @@ import sys
 from pathlib import Path
 
 SNAPSHOT = Path(__file__).with_name("effective_config_3831f39.json")
-# Keys the reorganization moves out of the export (none: Gemini's history_format stays in
-# provider_options, where ContextPolicy.for_path reads it).
+# Keys the reorganization moves out of the export (none: deliberate changes re-export it).
 MOVED: frozenset[str] = frozenset()
 # Variables the catalog, to_model_config or effective_run_config read (providers/registry.py
 # _load_entries, to_model_config; evaluation/config.py _RUNTIME_ENV_KEYS, effective_run_config).

@@ -306,7 +306,7 @@ from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
 from realtime_framework.entity.config import FrameEncodingConfig
 from realtime_framework.entity.config import RunnerTimingConfig
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import context_row, context_values, path_policy
 from realtime_framework.evaluation.run_spec import DEFAULT_MODE
 from realtime_framework.evaluation.run_spec import RunSpec
 from realtime_framework.providers.preflight import check_streaming_options
@@ -479,7 +479,7 @@ def external_driver_identity(target: str) -> dict:
         "module": module_name,
         "class": class_name,
         "source_sha256": _entries_sha256(sorted(entries)),
-        "context_policy_row": current_context_policy().for_path(target, {}, None).api,
+        "context_policy_row": context_row(target),
     }
 
 
@@ -489,8 +489,10 @@ def configuration_sha256(launch: dict) -> str:
     Harbor's verify and aggregate and the upload compare it between resolution and the run and
     across runs; an external driver's code identity and a streaming run's settings are part of it.
     """
+    model_config = launch["model_config"]
     configuration = {
-        "model_config": launch["model_config"],
+        # The context settings' values, not where each came from or how it stands.
+        "model_config": {**model_config, "context": context_values(model_config["context"])},
         "model_revision": launch.get("model_revision"),
     }
     for part in ("external_driver", "streaming"):
@@ -541,10 +543,13 @@ def effective_run_config(
     execution_feedback: bool | None = None,
     interaction_mode: str = "turn_based",
 ) -> dict:
-    """Capture non-secret effective settings that materially change a run."""
-    streaming = getattr(model_config, "streaming", {})  # never in the dump (ModelConfig.streaming)
-    if hasattr(model_config, "model_dump"):
-        model_config = model_config.model_dump()
+    """Capture non-secret effective settings that materially change a run of the ModelConfig
+    ``model_config``."""
+    resolved = model_config
+    streaming = resolved.streaming  # never in the dump (ModelConfig.streaming)
+    model_config = resolved.model_dump()
+    # The context settings' values, not where each came from or how it stands.
+    model_config["context"] = context_values(model_config["context"])
     if clock_mode == "wall":
         tokens_per_frame = None
     validate_model_interaction(
@@ -571,9 +576,7 @@ def effective_run_config(
     from realtime_framework.sandbox.apptainer import runtime_identity
 
     adapter_type = model_config.get("adapter_type")
-    context_policy = current_context_policy().for_path(
-        adapter_type, model_config["provider_options"], model_config["context_preset"]
-    )
+    context_policy = path_policy(resolved)
     visual_budget = context_policy.screenshots_kept
     visual_fold_block_size = context_policy.screenshot_fold_block
     detailed_turns = context_policy.turns_kept

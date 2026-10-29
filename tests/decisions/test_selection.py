@@ -10,7 +10,6 @@ import asyncio
 import pytest
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import (
     FATAL,
     CanonicalTurn,
@@ -31,6 +30,8 @@ from realtime_framework.harnesses.default.request import build_request, system_b
 from realtime_framework.providers.decisions.questions import GUI_INSTRUCTIONS
 from realtime_framework.providers.decisions.selection import ChoiceDecision
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
+
+from ..context import api_policy
 
 MODEL = "openai/gpt-6-luna-decisions"
 NO_PROGRESS = "JEV cannot compare even two candidates within the context limit"
@@ -91,7 +92,7 @@ def _request(count: int):
         "replay_candidates",
     )
     return build_request(
-        current_context_policy().for_path("openai_decisions", {}, None),
+        api_policy("openai_decisions"),
         system_block("system", None),
         (CanonicalTurn(observation, decision=0),),
         None,

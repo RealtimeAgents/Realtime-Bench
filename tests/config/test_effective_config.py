@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.evaluation.effective_config import export
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.harnesses.registry import configure_agent
@@ -69,9 +69,7 @@ def test_the_system_prompt_hash_is_of_the_system_block_sent():
         assert (record["first_task"], record["error"]) == (web, None), model
         assert record["task"]["instruction_sha256"] == _sha256(task.description())
         config = catalog.to_model_config(model, fps=1.0)
-        prompts = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        ).prompts
+        prompts = path_policy(config).prompts
         assert prompts[task.category] == profile
         # The agent as the runner configures and initializes it, on the trial worker's wall clock.
         agent = SimpleNamespace(task_instruction=task.description())

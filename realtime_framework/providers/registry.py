@@ -79,7 +79,13 @@ import yaml
 from functools import lru_cache
 
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.context_policy import MODEL_PRESETS
+from realtime_framework.entity.context_policy import layer_error, resolve_context
+
+# The removed context_preset, refused wherever it is set.
+CONTEXT_PRESET_REMOVED = (
+    "context_preset was removed; set the model's context settings in a context section "
+    "(kimi_k3 was context: {reasoning_replay: true}); see docs/model_configuration.md"
+)
 
 
 _LITELLM = "realtime_framework.providers.litellm:"
@@ -273,16 +279,18 @@ def load_definitions(directory):
     ]:
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
+        if "context_preset" in value:
+            raise ValueError(f"{filename}: {CONTEXT_PRESET_REMOVED}")
         if (
             set(value) - {
                 "endpoint", "reasoning_effort", "reasoning_efforts", "provider_options",
-                "context_preset", "streaming",
+                "context", "streaming",
             }
             or "endpoint" not in value
         ):
             raise ValueError(
                 f"{filename}: use an endpoint block, plus optional reasoning_effort, "
-                "reasoning_efforts, provider_options, context_preset and streaming"
+                "reasoning_efforts, provider_options, context and streaming"
             )
         key = Path(filename).stem
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in seen:
@@ -326,6 +334,12 @@ def load_definitions(directory):
                 raise ValueError(f"{filename}: the {api} API takes no provider_options")
             if not isinstance(value["provider_options"], dict):
                 raise ValueError(f"{filename}: provider_options must be a mapping")
+            if "history_format" in value["provider_options"]:
+                raise ValueError(
+                    f"{filename}: provider_options.history_format was removed; set "
+                    "tool_call_history in the context section instead (context: "
+                    "{tool_call_history: tool_transcript})"
+                )
             definition["defaults"]["provider_options"] = dict(value["provider_options"])
         if "reasoning_efforts" in value:
             # The efforts this model takes, some of its API's: a model may reject a setting its
@@ -351,12 +365,16 @@ def load_definitions(directory):
                 f"{filename}: reasoning_effort must be one of {definition['reasoning_efforts']}"
             )
         definition["defaults"]["reasoning_effort"] = effort
-        if "context_preset" in value:
-            definition["defaults"]["context_preset"] = value["context_preset"]
-        # The YAML's preset, else the one the driver's model_defaults gave (merged above).
+        # Nor may the driver's model_defaults name one (merged above).
         defaults = definition["defaults"]
-        if "context_preset" in defaults and defaults["context_preset"] not in MODEL_PRESETS:
-            raise ValueError(f"{filename}: context_preset must be one of {list(MODEL_PRESETS)}")
+        if "context_preset" in defaults:
+            raise ValueError(f"{filename}: {CONTEXT_PRESET_REMOVED}")
+        if "context" in value:
+            # The settings a model may set, those that apply to its API (resolve_context).
+            error = layer_error("model", api, value["context"])
+            if error:
+                raise ValueError(f"{filename}: context {error}")
+            definition["context"] = dict(value["context"])
         if "streaming" in value:
             defaults["streaming"] = _streaming_settings(filename, api, driver, value["streaming"])
         result.append((filename, definition))
@@ -524,7 +542,7 @@ def _check_driver(target: str, driver: type) -> None:
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
 catalog identifier. Users configure connections, reasoning effort and the efforts a model takes,
-wire options (provider_options) and the context-policy preset; the drivers' model_defaults add
+wire options (provider_options) and the model's context settings; the drivers' model_defaults add
 what no YAML states. The loader imports the driver module of each API it reads, an external
 driver's included, with what those modules import (the OpenAI SDK, websockets and Pillow among
 them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The Gemini SDK is
@@ -731,17 +749,17 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     fields["api_key_env"] = e.key_env
     if fields.get("reasoning_effort") == "provider_default":
         fields["reasoning_effort"] = None
+    model_layer = e.context
     if e.adapter_type == "chat_completions":
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
-            # The trial worker's --context-preset, in place of a YAML's context_preset.
+            # Transitional, until the trial worker takes context settings: its
+            # --context-preset kimi_k3, K3's reasoning replay as the endpoint's own setting.
             preset = os.environ.get("BENCHMARK_CONTEXT_PRESET")
             if preset:
-                if preset not in MODEL_PRESETS:
-                    raise ValueError(
-                        f"BENCHMARK_CONTEXT_PRESET must be one of {list(MODEL_PRESETS)}"
-                    )
-                fields["context_preset"] = preset
+                if preset != "kimi_k3":
+                    raise ValueError("BENCHMARK_CONTEXT_PRESET must be one of ['kimi_k3']")
+                model_layer = {**model_layer, "reasoning_replay": True}
         for field in (
             "context_window_tokens",
             "context_counter",
@@ -765,5 +783,6 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
         adapter_type=e.adapter_type,
         model_name=e.model_name,
         api_base_url=e.api_base_url,
+        context=resolve_context(e.adapter_type, e.model_name, model_layer=model_layer),
         **fields,
     )

@@ -65,8 +65,9 @@ _HANDSHAKE_TIMEOUT_S = 30.0
 # each in its YAML (GeminiLiveDriver.compat). Gemini 3.8 Extended Thinking requires asynchronous
 # tool declarations and remains active across intermediate utterance-level turnComplete messages
 # until interaction_status becomes IDLE. Ordered screenshot/text turns (client_content) avoid
-# synthesizing an audio activity for GUI input.
-LIVE_PROTOCOL_OPTIONS = {
+# synthesizing an audio activity for GUI input. How past tool calls are replayed into a rebuilt
+# session is a context setting (tool_call_history), not an option.
+LIVE_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
     "input_transport": ("realtime_input", ("realtime_input", "client_content")),
@@ -74,14 +75,6 @@ LIVE_PROTOCOL_OPTIONS = {
     # without function scheduling (3.8 Extended Thinking).
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
 }
-# Context policy item 10: how past tool calls are replayed into a rebuilt session. It stays in
-# provider_options, where ContextPolicy.for_path reads it and this driver records it. Every model
-# sets it as well: the row's value, native_tools, can stall the next interaction
-# (gemini/session.py SessionCore._tool_contents).
-LIVE_HISTORY_OPTIONS = {
-    "history_format": ("native_tools", ("native_tools", "tool_transcript")),
-}
-LIVE_OPTIONS = {**LIVE_PROTOCOL_OPTIONS, **LIVE_HISTORY_OPTIONS}
 
 
 _RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
@@ -897,7 +890,7 @@ class GeminiLiveDriver(SessionLifecycle):
                 "video_ingestion_wait_ms": 1000 if transport == "realtime_input" else 0,
                 "gemini_live_input_transport": transport,
                 "gemini_live_tool_response_scheduling": self.options["tool_response_scheduling"],
-                "gemini_live_history_format": self.options["history_format"],
+                "gemini_live_history_format": request.canonical.policy.tool_call_history,
                 "gemini_live_tool_behavior": self.options["tool_behavior"],
                 "gemini_live_completion_signal": self.options["completion_signal"],
                 "completed_turn_refs": {

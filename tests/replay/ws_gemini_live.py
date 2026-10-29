@@ -129,10 +129,10 @@ class LiveStub:
     """BidiGenerateContent server with scripted replies.
 
     ``turns`` holds one reply per observation. A reply is a list of server frames, with
-    AWAIT_ACK where the client must acknowledge the calls sent before it. ``history_format`` and
-    ``ack_options`` are the client's Live options the checks depend on (live.py
-    LIVE_PROTOCOL_OPTIONS, LIVE_HISTORY_OPTIONS; gemini/session.py
-    SessionCore.tool_response_options). ``setup_closes`` maps a resumption handle to the close code
+    AWAIT_ACK where the client must acknowledge the calls sent before it. ``history_format`` (the
+    client's tool_call_history setting) and ``ack_options`` (its Live options: live.py
+    LIVE_OPTIONS; gemini/session.py SessionCore.tool_response_options) are what the checks depend
+    on. ``setup_closes`` maps a resumption handle to the close code
     and reason that answer a setup resuming with it, ``connection_closes`` a connection number to
     those that answer its setup.
     """

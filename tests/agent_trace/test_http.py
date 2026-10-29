@@ -22,7 +22,7 @@ import realtime_framework.entity.model as model_module
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, current_context_policy
+from realtime_framework.entity.context_policy import CONTEXT_POLICY_VERSION, path_policy
 from realtime_framework.entity.model import CanonicalTurn, GenerationRequest, ProviderObservation
 from realtime_framework.entity.records import TraceEvent, trace_scope, validate_episode_trace
 from realtime_framework.entity.request import (
@@ -43,6 +43,7 @@ from realtime_framework.providers.litellm import ChatCompletionsDriver
 from realtime_framework.providers.openai_decisions import OpenAIDecisionsClient
 from realtime_framework.sandbox.observation.som import FRAME_INTERACTABLES_HEADER
 
+from ..context import row_context
 from ..replay.build import build_episode
 from ..replay.frames import ReplayTask
 from ..replay.scenario import LONG_SCENARIO, TASK_INSTRUCTION, replies
@@ -356,9 +357,7 @@ def _tokenize_driver(origin: str, monkeypatch, run_dir: Path):
     driver = ChatCompletionsDriver(config)
     driver.bind_trace(sink)
     canonical = build_request(
-        current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        ),
+        path_policy(config),
         system_block("count me", None),
         (),
         None,
@@ -485,9 +484,7 @@ def _request(config):
         "replay_candidates",
     )
     return build_request(
-        current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        ),
+        path_policy(config),
         system_block("system", None),
         turns,
         ledger_block('{"decision": 0}', 1, None),
@@ -511,6 +508,10 @@ def _decide(client_type, model, provider, script, run_dir, monkeypatch, *, serve
             api_base_url=stub.origin + "/api/alpha/",
             api_key_env="REPLAY_TRACE_KEY",
             upstream_provider=provider,
+            context=row_context(
+                "jev_decisions" if client_type is JevDecisionsClient else "openai_decisions",
+                model,
+            ),
         )
         client = client_type(config)
         client.bind_trace(sink)
@@ -590,6 +591,7 @@ def test_jev_estimates_the_history_it_sends(tmp_path, monkeypatch):
         model_name="typesafe/jev-1.13",
         api_key_env="REPLAY_TRACE_KEY",
         upstream_provider="typesafe",
+        context=row_context("jev_decisions", "typesafe/jev-1.13"),
     )
     request = GenerationRequest("turn-0", None, canonical=_request(config))
 

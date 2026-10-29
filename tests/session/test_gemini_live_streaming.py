@@ -23,7 +23,7 @@ from websockets.exceptions import ConnectionClosedError
 
 from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.events import (
     FunctionCall,
     FunctionCallsCancelled,
@@ -54,6 +54,7 @@ from tests.session.test_gemini_live_receive import (
     DeliveryLog,
     RecordingClock,
     server_closed,
+    yaml_context,
     yaml_options,
 )
 from tests.session.test_gemini_live_session import pushed
@@ -205,6 +206,7 @@ class Rig:
             api_key="replay-dummy-key",
             streaming=streaming_settings or {},
             provider_options=yaml_options(model),
+            context=yaml_context(model),
         )
         self.driver = live.GeminiLiveDriver(
             config, clock=RecordingClock(self.log), streaming=streaming
@@ -216,9 +218,7 @@ class Rig:
             "function_call", "standard_vlm", tuple(gui_function_declarations(clock_mode="wall"))
         )
         self.seed = SessionSeed("system instruction", model, None, 1.0, self.answer)
-        self.policy = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        )
+        self.policy = path_policy(config)
         self.call = CallParameters(model, config.reasoning_effort, None)
 
     def view(self, blocks, *, frames: int = 2):

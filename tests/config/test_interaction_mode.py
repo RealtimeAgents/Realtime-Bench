@@ -559,7 +559,10 @@ def test_a_streaming_trial_hashes_the_streaming_settings_its_run_records(
 
     turn_based = _trial_launch(capsys, "turn_based")
     assert "streaming" not in turn_based
-    before = {"model_config": turn_based["model_config"], "model_revision": None}
+    # The model configuration with its context settings' values (context_values).
+    model_config = turn_based["model_config"]
+    values = {item["key"]: item["value"] for item in model_config["context"]["items"]}
+    before = {"model_config": {**model_config, "context": values}, "model_revision": None}
     assert configuration_sha256(turn_based) == hashlib.sha256(
         json.dumps(before, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

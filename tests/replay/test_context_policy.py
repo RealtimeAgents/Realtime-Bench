@@ -2,40 +2,43 @@
 later version's change to what it changed.
 
 Every check reads class-level capabilities or static tables, so no key or connection is needed.
-Line numbers cite those code paths as they were on 7912231.
+Line numbers cite those code paths as they were on 7912231. A row stands for the models of its
+API without a YAML of their own (tests/context.py api_policy): the standard values, and Luna's or
+JEV's on the Decision rows, which their YAMLs set.
 """
 
 from __future__ import annotations
 
-from dataclasses import fields, replace
+from dataclasses import fields
 
 import pytest
 
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.context_policy import (
+    CONTEXT_POLICY_VERSION,
     FIXED_TEXTS,
-    MODEL_PRESETS,
-    PRESETS,
     PROMPT_CHANNELS,
-    DecisionHistory,
+    ROW_PROMPTS,
     PathPolicy,
     context_defaults,
-    current_context_policy,
+    path_policy,
 )
 from realtime_framework.entity.model import implements
 from realtime_framework.harnesses.default.harness import INTERACTION_PROFILES
 from realtime_framework.providers.registry import APIS, adapter_class
 
-POLICY = current_context_policy()
+from ..context import api_policy
+
+PATHS = {api: api_policy(api) for api in APIS}
 
 
 def capabilities(api: str):
     return adapter_class(api).capabilities
 
 
-def test_one_path_per_registered_api():
-    assert set(POLICY.paths) == set(APIS)
-    assert all(path.version == POLICY.version for path in POLICY.paths.values())
+def test_one_row_per_registered_api():
+    assert set(ROW_PROMPTS) == set(APIS)
+    assert all(path.version == CONTEXT_POLICY_VERSION for path in PATHS.values())
 
 
 def test_policy_fields():
@@ -44,7 +47,6 @@ def test_policy_fields():
     assert [field.name for field in fields(PathPolicy)] == [
         "version",
         "api",
-        "preset",
         "screenshots_kept",
         "screenshot_fold_block",
         "turns_kept",
@@ -59,7 +61,7 @@ def test_policy_fields():
         "prompts",
         "observation",
     ]
-    assert list(POLICY.paths["chat_completions"].to_record()) == [
+    assert list(PATHS["chat_completions"].to_record()) == [
         field.name for field in fields(PathPolicy)
     ]
 
@@ -68,7 +70,7 @@ def test_retention_and_texts_are_shared():
     # The defaults file's (realtime_framework/context_defaults.yaml); hermetic.py clears the
     # STREAM_* overrides.
     standard = context_defaults()["standard"]
-    for path in POLICY.paths.values():
+    for path in PATHS.values():
         assert (path.screenshots_kept, path.screenshot_fold_block) == (
             standard["screenshots_kept"],
             standard["screenshot_fold_block"],
@@ -85,7 +87,7 @@ def test_retention_follows_the_environment(monkeypatch):
     monkeypatch.setenv("STREAM_VISUAL_FOLD_BLOCK_SIZE", "3")
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_TURNS", "12")
     monkeypatch.setenv("STREAM_DETAILED_HISTORY_DROP_BLOCK_SIZE", "4")
-    path = current_context_policy().paths["chat_completions"]
+    path = api_policy("chat_completions")
     assert (
         path.screenshots_kept,
         path.screenshot_fold_block,
@@ -105,51 +107,32 @@ def test_feedback_placement(api):
     digest carries its own."""
     caps = capabilities(api)
     expected = "digest" if caps.history_replay == "action_digest" else "separate_message"
-    assert POLICY.paths[api].execution_feedback == expected
+    assert PATHS[api].execution_feedback == expected
 
 
-def test_presets():
-    assert {api: path.preset for api, path in POLICY.paths.items() if path.preset} == {
-        "openai_decisions": "luna",
-        "jev_decisions": "jev",
+def test_model_values():
+    """A model's own values are in its YAML's context section, those its row's preset (Luna, JEV),
+    its YAML's context_preset (Kimi K3) or its provider_options (Gemini Live) gave before."""
+    models = {key: catalog.get(key).context for key in catalog.CATALOG}
+    assert {key: values for key, values in models.items() if values} == {
+        "kimi-k3": {"reasoning_replay": True},
+        "gemini-live": {"tool_call_history": "tool_transcript"},
+        "gemini-3.8-live": {"tool_call_history": "tool_transcript"},
+        "gemini-3.8-live-extended-thinking": {"tool_call_history": "tool_transcript"},
+        "gpt-6-luna-decisions": {"observation": "observation_json_screenshot"},
+        "jev-1.13": {
+            "observation": "observation_json_text",
+            "execution_feedback": "digest",
+            "decision_history": "action_digest",
+        },
     }
-    for path in POLICY.paths.values():
-        for item, value in PRESETS[path.preset].items() if path.preset else ():
-            assert getattr(path, item) == value, (path.api, item)
-    models = {key: catalog.get(key).defaults.get("context_preset") for key in catalog.CATALOG}
-    assert {key: preset for key, preset in models.items() if preset} == {"kimi-k3": "kimi_k3"}
-    # A preset is either the rows' or the models' (the catalog loader refuses the rows').
-    assert MODEL_PRESETS == ("kimi_k3",)
-    assert set(PRESETS) - set(MODEL_PRESETS) == {"luna", "jev"}
-
-
-def test_model_preset():
-    """A model config's preset takes the place of its row's: the standard values, then the
-    preset's items, then the row's own."""
-    k3 = POLICY.for_path("moonshot", {}, "kimi_k3")
-    assert k3 == replace(POLICY.paths["moonshot"], preset="kimi_k3", reasoning_replay=True)
-    # The row's own Decision history form wins over JEV's digest. No model YAML can name jev
-    # (MODEL_PRESETS); this pins the order for_path applies.
-    jev = POLICY.for_path("openai_decisions", {}, "jev")
-    assert (jev.preset, jev.decision_history, jev.execution_feedback, jev.observation) == (
-        "jev",
-        DecisionHistory("turns"),
-        "digest",
-        "observation_json_text",
-    )
-    # Luna's observation form leaves with Luna's preset; the row's own prompts stay.
-    luna_row = POLICY.paths["openai_decisions"]
-    k3_row = POLICY.for_path("openai_decisions", {}, "kimi_k3")
-    assert k3_row == replace(
-        luna_row, preset="kimi_k3", reasoning_replay=True, observation="som_screenshot"
-    )
 
 
 def test_replay_and_pressure_sets():
-    paths = POLICY.paths
+    paths = PATHS
     # Version 2: reasoning goes back only where the provider requires it, Kimi K3, whose YAML
-    # names the kimi_k3 preset (test_model_preset); no row and no API requires it. Every reply
-    # is rebuilt from the model output.
+    # sets it (test_model_values); no row and no API requires it. Every reply is rebuilt from the
+    # model output.
     assert not any(path.reasoning_replay for path in paths.values())
     assert not any(capabilities(api).reasoning_replay == "required" for api in APIS)
     # Version 5: one pressure-archive rule, which the runtime applies where the API estimates its
@@ -166,7 +149,7 @@ def test_replay_and_pressure_sets():
 @pytest.mark.parametrize("api", sorted(APIS))
 def test_decision_history(api):
     caps = capabilities(api)
-    history = POLICY.paths[api].decision_history
+    history = PATHS[api].decision_history
     if caps.action_channel != "choice":
         assert history is None
         return
@@ -177,14 +160,13 @@ def test_ledger_roles():
     # Version 3: an input everywhere. Version 1 had OpenAI Realtime's system item
     # (openai_realtime_session.py:23, 205-221) and Luna's role-less state
     # (openai_decisions.py:132-163), which still places the ledger by position and header.
-    assert {path.ledger_role for path in POLICY.paths.values()} == {"input"}
+    assert {path.ledger_role for path in PATHS.values()} == {"input"}
 
 
 def test_gemini_tool_history_format():
-    from realtime_framework.providers.gemini.live import LIVE_OPTIONS, live_options
-
-    assert POLICY.paths["gemini_live"].tool_call_history == LIVE_OPTIONS["history_format"][0]
-    assert POLICY.for_path("gemini_live", {}, None).tool_call_history == "native_tools"
+    """Gemini Live's standard is native_tools; each maintained model's YAML sets tool_transcript,
+    which its provider_options set before. No other row replays tool calls."""
+    assert PATHS["gemini_live"].tool_call_history == "native_tools"
     keys = [
         key
         for key in catalog.keys(provider="gemini")
@@ -192,13 +174,11 @@ def test_gemini_tool_history_format():
     ]
     assert keys
     for key in keys:
-        config = catalog.to_model_config(key, fps=1.0)
-        resolved = POLICY.for_path(
-            config.adapter_type, config.provider_options, config.context_preset
+        assert path_policy(catalog.to_model_config(key, fps=1.0)).tool_call_history == (
+            "tool_transcript"
         )
-        assert resolved.tool_call_history == live_options(config)["history_format"]
     assert all(
-        path.tool_call_history is None for api, path in POLICY.paths.items() if api != "gemini_live"
+        path.tool_call_history is None for api, path in PATHS.items() if api != "gemini_live"
     )
 
 
@@ -210,7 +190,7 @@ CHANNEL_PROFILES = {"text_json": "standard_vlm", "function_call": "function_call
 @pytest.mark.parametrize("api", sorted(APIS))
 def test_prompts_and_observation_form(api):
     caps = capabilities(api)
-    path = POLICY.paths[api]
+    path = PATHS[api]
     if caps.action_channel == "choice":
         if caps.observation_modality == "screenshot":
             expected = {
@@ -240,7 +220,7 @@ def test_prompt_channels():
     """Every profile has the action channel it asks for, and each row's profiles ask for its API's
     (providers/preflight.py check_context_policy)."""
     assert set(PROMPT_CHANNELS) == set(INTERACTION_PROFILES)
-    for api, path in POLICY.paths.items():
+    for api, path in PATHS.items():
         channels = {PROMPT_CHANNELS[name] for name in path.prompts.values() if name is not None}
         assert channels == {capabilities(api).action_channel}, api
 
@@ -248,6 +228,6 @@ def test_prompt_channels():
 def test_policy_record_is_json():
     import json
 
-    record = POLICY.paths["jev_decisions"].to_record()
+    record = PATHS["jev_decisions"].to_record()
     assert json.loads(json.dumps(record)) == record
     assert record["decision_history"] == {"form": "action_digest"}

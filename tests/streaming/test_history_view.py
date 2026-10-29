@@ -10,7 +10,6 @@ from dataclasses import replace
 import pytest
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import (
     AnswerRequirements,
@@ -30,7 +29,9 @@ from realtime_framework.sandbox.observation.som import (
     observation_prompt_with_interactables,
 )
 
-POLICY = current_context_policy().paths["openai_realtime"]
+from ..context import api_policy
+
+POLICY = api_policy("openai_realtime")
 SYSTEM = system_block("Fill in the form.", 1_000)
 ANSWER = AnswerRequirements("text_json", "standard_vlm")
 CALL = CallParameters("gpt-realtime-2", None, None)

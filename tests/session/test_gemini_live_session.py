@@ -15,7 +15,6 @@ from dataclasses import replace
 from google.genai import types
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.context_policy import current_context_policy
 from realtime_framework.entity.model import CanonicalTurn, ProviderObservation
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
 from realtime_framework.harnesses.default.frames import FrameRecord
@@ -41,6 +40,8 @@ from realtime_framework.providers.gemini.session import (
     SessionCore,
     Trigger,
 )
+
+from ..context import api_policy
 
 GO_AWAY_RECONNECT = {
     "reconnect_required": True,
@@ -91,9 +92,7 @@ def turn(k: int, *, calls=("click",), feedback: str = "", text_after: str = "") 
 
 def view(turns, *, ledger: str = "", history_format: str = "native_tools"):
     """The history view the runtime builds for gemini_live from these turns."""
-    policy = current_context_policy().for_path(
-        "gemini_live", {"history_format": history_format}, None
-    )
+    policy = api_policy("gemini_live", model_layer={"tool_call_history": history_format})
     return build_request(
         policy,
         system_block("system instruction", None),
@@ -115,9 +114,7 @@ def streaming_view(blocks, *, frames: int = 2, history_format: str = "native_too
     ``frames`` frames with their screenshots."""
     return history_view(
         blocks,
-        policy=current_context_policy().for_path(
-            "gemini_live", {"history_format": history_format}, None
-        ),
+        policy=api_policy("gemini_live", model_layer={"tool_call_history": history_format}),
         system=system_block("system instruction", None),
         retained_frames=frames,
         answer=AnswerRequirements("function_call", "standard_vlm"),
@@ -259,7 +256,7 @@ def test_seed_replays_the_history_view():
     connect = plan(core, view(turns, ledger='{"decision": 0}'))
     (contents,) = connect.seed
     ledger, frame_0, calls_0, receipts_0, frame_1, calls_1, receipts_1, after_1 = contents
-    texts = current_context_policy().for_path("gemini_live", {}, None).texts
+    texts = api_policy("gemini_live").texts
     assert ledger == Content("user", (Part(text=texts.ledger_header + '\n{"decision": 0}'),))
     assert frame_0 == frame_content(0)
     assert frame_1 == frame_content(1, "EXECUTION RESULT: ok\nframe 1")
@@ -489,7 +486,7 @@ def fed(k: int, feedback: str) -> CanonicalTurn:
 def separate_view(turns):
     """view() under the policy with each action's feedback as its own block (item 3)."""
     policy = replace(
-        current_context_policy().for_path("gemini_live", {"history_format": "native_tools"}, None),
+        api_policy("gemini_live"),
         execution_feedback="separate_message",
     )
     return build_request(

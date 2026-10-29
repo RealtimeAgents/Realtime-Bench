@@ -40,6 +40,7 @@ from realtime_framework.harnesses.registry import create_agent
 from realtime_framework.providers.registry import adapter_class
 
 from .agent_trace.test_http import CANDIDATES, _request
+from .context import row_context
 from .fake_clock import FakeClock
 from .replay.build import build_episode
 from .replay.frames import CLOCK_ORIGIN, ReplayTask
@@ -52,6 +53,7 @@ DECISIONS = ModelConfig(
     model_name="openai/gpt-6-luna-decisions",
     api_key="sk-clock-wiring",
     upstream_provider="openai",
+    context=row_context("openai_decisions", "openai/gpt-6-luna-decisions"),
 )
 
 

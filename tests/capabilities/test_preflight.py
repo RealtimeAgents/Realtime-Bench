@@ -20,10 +20,9 @@ import realtime_framework.providers.registry as catalog
 import realtime_tasks.registry as tasks
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.context_policy import (
-    PRESETS,
-    STANDARD,
     DecisionHistory,
-    current_context_policy,
+    path_policy,
+    resolve_context,
 )
 from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.evaluation.config import effective_run_config, load_benchmark
@@ -345,7 +344,6 @@ GEMINI_OPTIONS = {
     "completion_signal": "turn_complete",
     "input_transport": "client_content",
     "tool_response_scheduling": "when_idle",
-    "history_format": "tool_transcript",
 }
 
 
@@ -355,16 +353,14 @@ GEMINI_OPTIONS = {
         {},
         *[
             {name: value for name, value in GEMINI_OPTIONS.items() if name != left_out}
-            for left_out in ("input_transport", "history_format")
+            for left_out in ("input_transport",)
         ],
     ],
-    ids=["none", "one-left-out", "history-format-left-out"],
+    ids=["none", "one-left-out"],
 )
 def test_gemini_model_without_its_options(options):
     """No driver default stands in for a Gemini Live model's wire options: a model that does not
-    set each one, a raw model id (which has no YAML) or a YAML without them, is refused. That
-    includes the tool-call replay format (context policy item 10), whose default, native_tools,
-    can stall the next interaction (gemini/session.py)."""
+    set each one, a raw model id (which has no YAML) or a YAML without them, is refused."""
     missing = [name for name in GEMINI_OPTIONS if name not in options]
     fails(
         lambda: episode(gemini(model_name="gemini-other", provider_options=options)),
@@ -463,9 +459,7 @@ def test_context_policy_fits_every_catalog_model():
 
 def policy_check(config, **values):
     driver = catalog.adapter_class(config.adapter_type)
-    policy = current_context_policy().for_path(
-        config.adapter_type, config.provider_options, config.context_preset
-    )
+    policy = path_policy(config)
     return lambda: check_context_policy(driver, replace(policy, **values), config)
 
 
@@ -546,27 +540,29 @@ def test_context_policy_item(key, values, message):
     fails(policy_check(preset(key), **values), message)
 
 
-def test_kimi_k3_preset_comes_from_its_model_config():
-    """Kimi requires K3's past reasoning back (entity/context_policy.py PRESETS): K3's YAML names
-    the kimi_k3 preset. Another moonshot model runs under the standard values, which send none."""
-    policy = current_context_policy()
+def test_kimi_k3_reasoning_replay_comes_from_its_model_yaml():
+    """Kimi requires K3's past reasoning back: K3's YAML sets reasoning_replay
+    (configs/models/kimi-k3.yaml), an approved deviation. Another moonshot model runs under the
+    standard values, which send none."""
     k3 = preset("kimi-k3")
-    assert k3.context_preset == "kimi_k3"
-    resolved = policy.for_path(k3.adapter_type, k3.provider_options, k3.context_preset)
-    assert (resolved.preset, resolved.reasoning_replay) == ("kimi_k3", True)
+    item = k3.context.item("reasoning_replay")
+    assert (item.value, item.source, item.category) == (True, "model", "approved")
+    assert path_policy(k3).reasoning_replay is True
     episode(k3)
-    other = k3.model_copy(update={"model_name": "kimi-other", "context_preset": None})
-    resolved = policy.for_path(other.adapter_type, other.provider_options, other.context_preset)
-    assert resolved == policy.paths["moonshot"]
-    assert {item: getattr(resolved, item) for item in PRESETS["kimi_k3"]} == {
-        item: STANDARD[item] for item in PRESETS["kimi_k3"]
-    }
+    other = k3.model_copy(
+        update={"model_name": "kimi-other", "context": resolve_context("moonshot", "kimi-other")}
+    )
+    assert path_policy(other).reasoning_replay is False
     episode(other)
 
 
-def test_model_preset_the_api_cannot_render():
+def test_reasoning_replay_the_api_cannot_render():
+    config = preset("claude-opus-5")
+    context = resolve_context(
+        config.adapter_type, config.model_name, model_layer={"reasoning_replay": True}
+    )
     fails(
-        lambda: episode(preset("claude-opus-5", context_preset="kimi_k3")),
+        lambda: episode(config.model_copy(update={"context": context})),
         "The openrouter API cannot send past reasoning back",
     )
 
@@ -940,22 +936,19 @@ def test_upstream_provider_of_a_model_yaml(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "endpoint, preset",
     [
-        ("{api: moonshot, model: kimi-k3}", "kimi-k3"),  # the catalog key's spelling
-        ("{api: moonshot, model: kimi-k3}", "[kimi_k3]"),
-        # Luna's and JEV's presets belong to their API rows, in their own models' YAMLs too.
-        ("{api: openrouter, model: openai/x, upstream_provider: openai}", "luna"),
+        ("{api: moonshot, model: kimi-k3}", "kimi_k3"),
         ("{api: openai_decisions, model: openai/x, upstream_provider: openai}", "luna"),
-        ("{api: jev_decisions, model: typesafe/x}", "jev"),
     ],
-    ids=["misspelt", "list", "luna-on-chat", "luna", "jev"],
+    ids=["kimi_k3", "luna"],
 )
 def test_context_preset_of_a_model_yaml(tmp_path, endpoint, preset):
+    """A YAML's context_preset, which context settings replaced, is refused with where they
+    went."""
     models = tmp_path / "models"
     models.mkdir()
     (models / "m.yaml").write_text(f"endpoint: {endpoint}\ncontext_preset: {preset}\n")
     fails(
-        lambda: catalog.load_definitions(models),
-        "m.yaml: context_preset must be one of ['kimi_k3']",
+        lambda: catalog.load_definitions(models), f"m.yaml: {catalog.CONTEXT_PRESET_REMOVED}"
     )
 
 
@@ -1234,7 +1227,7 @@ def sent_ledger_roles(api, role):
 
     key = next(key for key in catalog.CATALOG if catalog.get(key).adapter_type == api)
     config = preset(key, api_key="preflight-test")
-    policy = current_context_policy().for_path(api, config.provider_options, config.context_preset)
+    policy = path_policy(config)
     frame = ProviderObservation(
         observation=Observation(b"raw", 100.0, 0.0, {"observation_id": "o0"}),
         prompt="FRAME",

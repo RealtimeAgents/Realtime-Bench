@@ -23,7 +23,7 @@ for the API key, and are now reported ahead of a missing key.
 
 from __future__ import annotations
 
-from realtime_framework.entity.context_policy import PROMPT_CHANNELS, current_context_policy
+from realtime_framework.entity.context_policy import PROMPT_CHANNELS, path_policy
 from realtime_framework.entity.model import SessionEncoder, implements
 from realtime_framework.providers.registry import adapter_class
 
@@ -322,7 +322,4 @@ def check_episode(
     check_choice_task(driver, task)
     check_fps(driver, model_config.fps)
     check_session_config(driver, model_config)
-    policy = current_context_policy().for_path(
-        adapter_type, model_config.provider_options, model_config.context_preset
-    )
-    check_context_policy(driver, policy, model_config)
+    check_context_policy(driver, path_policy(model_config), model_config)

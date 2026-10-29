@@ -268,7 +268,7 @@ def _probe_runner(request: dict) -> dict:
     import realtime_framework.sandbox.desktop as desktop
     import realtime_tasks.registry as tasks
     from realtime_framework.entity.config import EnvironmentConfig
-    from realtime_framework.entity.context_policy import current_context_policy
+    from realtime_framework.entity.context_policy import path_policy
     from realtime_framework.evaluation._trial import LAUNCH_FILE
 
     settings = {}
@@ -306,9 +306,7 @@ def _probe_runner(request: dict) -> dict:
         state["claimed"] |= _load_env_file(request.get("env_file"), state["attribution"])
         # The harness reads its context policy once, after building the driver
         # (harnesses/default/harness.py DefaultHarness._setup_backend).
-        policy = current_context_policy().for_path(
-            config.adapter_type, config.provider_options, config.context_preset
-        )
+        policy = path_policy(config)
         state["settings_at_agent_setup"] = {
             "active_visual_budget": policy.screenshots_kept,
             "visual_fold_block_size": policy.screenshot_fold_block,

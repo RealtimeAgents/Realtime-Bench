@@ -24,7 +24,12 @@ import pytest
 import yaml
 
 import realtime_framework.providers.registry as catalog
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import (
+    ROW_PROMPTS,
+    context_row,
+    path_policy,
+    resolve_context,
+)
 from realtime_framework.entity.records import validate_episode_trace
 from realtime_framework.evaluation.agent_trace import load_body
 from realtime_framework.evaluation.config import (
@@ -40,6 +45,7 @@ from realtime_framework.providers.preflight import (
     check_token_budget,
 )
 
+from ..context import api_policy
 from ..fake_clock import FakeClock
 from . import baseline
 from .build import build_episode
@@ -327,8 +333,8 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
     """A driver that declares past reasoning required in later requests
     (RealtimeCapabilities.reasoning_replay) runs only under a context policy that sends it back
     (check_context_policy). No registered API declares it, so an external driver holds the rule:
-    the chat_completions row it gets sends none, and check_episode refuses it; with the kimi_k3
-    preset, which sends it, the same driver passes."""
+    the chat_completions row it gets sends none, and check_episode refuses it; with reasoning
+    replay set, which sends it, the same driver passes."""
     (external.site / "rtb_ext" / "required.py").write_text(REQUIRED_REASONING)
     api = "rtb_ext.required:RequiredReasoning"
     write_model(external.models, api, key="ext-required")
@@ -338,8 +344,9 @@ def test_preflight_holds_the_policy_to_a_required_reasoning_replay(external):
         lambda: check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps),
         f"The {api} API requires past reasoning in later requests; its context policy sends none",
     )
-    replayed = config.model_copy(update={"context_preset": "kimi_k3"})
-    assert current_context_policy().for_path(api, {}, "kimi_k3").reasoning_replay is True
+    context = resolve_context(api, config.model_name, model_layer={"reasoning_replay": True})
+    replayed = config.model_copy(update={"context": context})
+    assert path_policy(replayed).reasoning_replay is True
     check_episode(replayed, clock_mode="wall", task=ReplayTask(), env_fps=replayed.fps)
 
 
@@ -364,7 +371,7 @@ def test_preflight_holds_the_prompts_to_the_action_channel(external):
     write_model(external.models, api, key="ext-function-call")
     config = catalog.to_model_config("ext-function-call", fps=1.0, reasoning_effort="low")
     assert catalog.adapter_class(api).capabilities.action_channel == "function_call"
-    assert current_context_policy().for_path(api, {}, None).prompts["realtime"] == "standard_vlm"
+    assert path_policy(config).prompts["realtime"] == "standard_vlm"
     fails(
         lambda: check_episode(config, clock_mode="wall", task=ReplayTask(), env_fps=config.fps),
         f"The {api} API answers in function_call; its context policy prompts realtime tasks "
@@ -608,11 +615,8 @@ def test_model_defaults_preset_checked_as_the_yaml(external, monkeypatch):
     """A context preset from the driver's model_defaults is refused as one in the YAML is."""
     write_model(external.models, key="ext-preset")
     driver = catalog.adapter_class(TARGET)
-    monkeypatch.setattr(driver, "model_defaults", {"replay-vlm": {"context_preset": "kimi-k3"}})
-    fails(
-        lambda: catalog.get("ext-preset"),
-        "ext-preset.yaml: context_preset must be one of ['kimi_k3']",
-    )
+    monkeypatch.setattr(driver, "model_defaults", {"replay-vlm": {"context_preset": "kimi_k3"}})
+    fails(lambda: catalog.get("ext-preset"), f"ext-preset.yaml: {catalog.CONTEXT_PRESET_REMOVED}")
 
 
 def test_registered_drivers_meet_the_contract():
@@ -623,8 +627,8 @@ def test_registered_drivers_meet_the_contract():
 
 def test_context_policy_of_an_external_driver():
     """An external driver gets the chat_completions row, the plain stateless chat values."""
-    policy = current_context_policy()
-    assert policy.for_path(TARGET, {}, None) is policy.paths["chat_completions"]
+    assert context_row(TARGET) == "chat_completions"
+    assert api_policy(TARGET) == api_policy("chat_completions")
 
 
 def test_registered_api_needs_its_own_row(monkeypatch):
@@ -634,15 +638,14 @@ def test_registered_api_needs_its_own_row(monkeypatch):
     from realtime_framework.entity.config import ModelConfig
     from realtime_framework.harnesses.registry import create_agent
 
-    policy = current_context_policy()
-    assert policy.paths.keys() == catalog.APIS.keys()
+    assert ROW_PROMPTS.keys() == catalog.APIS.keys()
     monkeypatch.setitem(catalog.APIS, "my_api", catalog.APIS["chat_completions"])
     monkeypatch.setenv(KEY_ENV, "replay-external-key")
     message = (
-        "API 'my_api' has no context-policy row; add one in current_context_policy() "
+        "API 'my_api' has no context-policy row; add one in ROW_PROMPTS "
         "(realtime_framework/entity/context_policy.py)"
     )
-    fails(lambda: policy.for_path("my_api", {}, None), message)
+    fails(lambda: context_row("my_api"), message)
     config = ModelConfig(
         adapter_type="my_api",
         model_name="replay-vlm",
@@ -745,10 +748,16 @@ def test_effective_config_export_hashes_the_driver_code(external, tmp_path, monk
 
 
 def test_configuration_hash_of_registered_models(capsys):
-    """A registered model hashes only its model config and revision, as before."""
+    """A registered model hashes only its model config, its context settings by their values, and
+    its revision."""
     settings = trial_settings(capsys, "my-model")
     assert "external_driver" not in settings
-    configuration = {key: settings[key] for key in ("model_config", "model_revision")}
+    model_config = settings["model_config"]
+    values = {item["key"]: item["value"] for item in model_config["context"]["items"]}
+    configuration = {
+        "model_config": {**model_config, "context": values},
+        "model_revision": settings["model_revision"],
+    }
     assert configuration_sha256(settings) == hashlib.sha256(
         json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

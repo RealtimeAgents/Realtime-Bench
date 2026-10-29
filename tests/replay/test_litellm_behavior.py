@@ -33,7 +33,7 @@ import realtime_framework.entity.model as model_module
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import current_context_policy
+from realtime_framework.entity.context_policy import path_policy
 from realtime_framework.entity.events import GenerationBoundary, TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
     FATAL,
@@ -106,10 +106,13 @@ def _turn(k: int, output: str = "", reasoning: str = "", feedback: str = "") -> 
     return CanonicalTurn(observation, output, feedback, decision=k, output_reasoning=reasoning)
 
 
-def _canonical(config: ModelConfig, turns=(), preset: str | None = None):
-    policy = current_context_policy().for_path(
-        config.adapter_type, config.provider_options, preset or config.context_preset
-    )
+def _canonical(config: ModelConfig, turns=(), reasoning_replay: bool = False):
+    """The canonical request of ``turns`` and a frame under ``config``'s policy, with its reasoning
+    replay on when ``reasoning_replay``: past the pre-run checks, which refuse it where the API
+    cannot send it."""
+    policy = path_policy(config)
+    if reasoning_replay:
+        policy = replace(policy, reasoning_replay=True)
     return build_request(
         policy,
         system_block(SYSTEM, None),
@@ -445,13 +448,13 @@ def test_anthropic_message_conversion(tmp_path):
     - ``reasoning_content`` on an assistant message is not sent;
     - ``anthropic-version: 2023-06-01`` is sent (llms/anthropic/common_utils.py:1216).
 
-    The kimi_k3 context preset replays reasoning, so the driver hands LiteLLM assistant messages
-    with ``reasoning_content``.
+    With reasoning replay on, the driver hands LiteLLM assistant messages with
+    ``reasoning_content``.
     """
     turns = (_turn(0, reasoning="r0", feedback="fb0"), _turn(1, "click", "r1", "fb1"))
     with HttpStub(_messages_answer) as stub:
         config = _model(stub.origin, "anthropic_messages", "claude-opus-5", "")
-        canonical = _canonical(config, turns, preset="kimi_k3")
+        canonical = _canonical(config, turns, reasoning_replay=True)
         assert _generate(config, tmp_path, canonical).error is None
     ours = chat_messages(canonical)
     assert [m["role"] for m in ours] == [

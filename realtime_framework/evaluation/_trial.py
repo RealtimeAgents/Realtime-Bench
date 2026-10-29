@@ -14,7 +14,6 @@ from typing import NamedTuple
 
 from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.config import merge_streaming_settings
-from realtime_framework.entity.context_policy import MODEL_PRESETS
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
@@ -123,9 +122,8 @@ def main(argv=None):
     )
     parser.add_argument(
         "--context-preset",
-        choices=MODEL_PRESETS,
-        help="Context-policy preset of the endpoint, as a model YAML's context_preset "
-        "(kimi_k3: send Kimi K3 its past reasoning)",
+        choices=("kimi_k3",),
+        help="Context preset of the endpoint (kimi_k3: send Kimi K3 its past reasoning)",
     )
     parser.add_argument("--reasoning-effort", help="Only set if the selected endpoint supports it")
     parser.add_argument(
@@ -213,7 +211,7 @@ def main(argv=None):
                 "Endpoint options apply to --model; catalog models use their own transport configuration"
             )
         if args.context_preset is not None:
-            parser.error("A catalog model's YAML names its context_preset; omit --context-preset")
+            parser.error("A catalog model's YAML sets its context; omit --context-preset")
         key = args.catalog_model
     elif args.model and "/" in args.model:
         from realtime_framework.providers.litellm import validate_endpoint
