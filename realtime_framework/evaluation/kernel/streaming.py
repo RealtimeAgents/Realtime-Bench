@@ -670,7 +670,7 @@ class StreamingPolicy:
 
     def _arrived(self, event: ActionArrived) -> None:
         generation, action, protocol_failure = event.generation, event.action, None
-        # There are no terminal actions here either (legacy_loop.py _decide).
+        # There are no terminal actions here either: a DONE or FAIL is a wait.
         if action is not None and action.action_type in (ActionType.DONE, ActionType.FAIL):
             action, protocol_failure = Action.wait(), "unsupported_terminal_action"
         a = _Action(

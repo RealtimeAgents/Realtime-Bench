@@ -206,7 +206,7 @@ class Kernel:
         The end is dated ``at``, the reading being handled unless the failure is dated otherwise,
         as a state read is by its asking."""
         if self.invalid is None:
-            # The end of a traceback names the exception (legacy_loop.py _invalidate).
+            # The end of a traceback names the exception.
             self.invalid = Invalidated(
                 category, reason, None if detail is None else str(detail)[-2000:]
             )
