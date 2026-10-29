@@ -412,7 +412,8 @@ def test_a_session_that_departs_from_its_cassette_is_closed_with_the_departure(t
     at 1 s. The server closes the connection over it with the departure, which fails that push
     and the reply running. That reply had said nothing yet, so it is asked for again, as a turn
     would be; the server takes no other connection, and the deadline ends the episode while the
-    session is being reopened."""
+    session is being reopened for the third frame's push. The end gives that push up, and its
+    frame is dropped as one the end kept out, not as a failed push."""
     episode = run_e2e(
         realtime_agent(tmp_path / "agent"), realtime_cassette(frame_2_at=1.5), tmp_path,
         duration_s=3.0, normalizer=RealtimeWire(),
@@ -421,7 +422,8 @@ def test_a_session_that_departs_from_its_cassette_is_closed_with_the_departure(t
         "conn 1 record 16: c2s conversation.item.create at t=1, recorded at t=1.5"
     ]
     assert episode.kernel("FrameDropped", "observation_id", "reason") == [
-        (FRAMES[1], "push_failed")
+        (FRAMES[1], "push_failed"),
+        (FRAMES[2], "ended"),
     ]
     retried = next(
         payload

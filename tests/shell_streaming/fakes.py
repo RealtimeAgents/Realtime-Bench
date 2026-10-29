@@ -156,10 +156,14 @@ class FakeAgent:
         self.accepted: list[int] = []
         self.discarded: list[int] = []
         self.committed: list = []
+        self.pushes_ended: list[float] = []
         self._cancel: dict[int, object] = {}
 
     def bind_inbox(self, post, origin) -> None:
         self.post, self.origin = post, origin
+
+    def end_pushes(self) -> None:
+        self.pushes_ended.append(self.clock.monotonic())
 
     def push(self, observation: Observation) -> None:
         self.clock.sleep(self.push_s)

@@ -483,6 +483,31 @@ def test_a_stuck_reply_is_given_up_and_the_next_one_starts_once_its_abort_return
     assert result.termination.stop_reason == "time_limit"
 
 
+def test_the_end_gives_the_pushes_up_before_its_abort_and_no_other_abort_does():
+    """The reply stuck at 30.875 s is given up within the episode, and its abort leaves the
+    pushes alone. At the deadline the shell gives the agent's pushes up (end_pushes) before it
+    aborts the reply in flight, whose closing of the session fails a push still out: that push
+    is then one the end gave up, not a failed push (harnesses/streaming/agent.py push)."""
+    calls = []
+
+    def agent_setup(agent, clock):
+        abort, end_pushes = agent.abort, agent.end_pushes
+
+        def recorded_abort(generation=None):
+            calls.append(("abort", generation, clock.monotonic()))
+            abort(generation)
+
+        def recorded_end_pushes():
+            calls.append(("end_pushes", clock.monotonic()))
+            end_pushes()
+
+        agent.abort, agent.end_pushes = recorded_abort, recorded_end_pushes
+
+    result, _, _ = _episode(32.0, [], agent_setup=agent_setup)
+    assert calls == [("abort", 1, 30.875), ("end_pushes", 32.0), ("abort", 2, 32.0)]
+    assert result.termination.stop_reason == "time_limit"
+
+
 def _slow_abort(seconds: float):
     def agent_setup(agent, clock):
         abort = agent.abort
@@ -1010,7 +1035,8 @@ def test_a_kernel_that_raises_leaves_the_episode_wrapped_up_by_the_shell(monkeyp
     }
     assert result.invalid_run["reason"] == "run_exception"
     assert "RuntimeError: step broke" in result.loop_error
-    assert agent.aborted == [(2, 3.0)]
+    # The wrap-up ends the episode: it gives the pushes up before it aborts the reply.
+    assert (agent.pushes_ended, agent.aborted) == ([3.0], [(2, 3.0)])
 
 
 def test_a_kernel_that_raises_after_the_end_keeps_its_end_and_its_snapshot(monkeypatch):

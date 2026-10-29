@@ -16,7 +16,7 @@ import pytest
 import realtime_framework.providers.registry as catalog
 from realtime_framework.entity.actions import Action, ActionType
 from realtime_framework.entity.events import FunctionCall, UsageSnapshot
-from realtime_framework.entity.model import TRANSIENT, TransportFailureError
+from realtime_framework.entity.model import TRANSIENT, RetryCancelled, TransportFailureError
 from realtime_framework.entity.records import UNTRACED, TraceEvent
 from realtime_framework.entity.request import Intent, ToolExchange
 from realtime_framework.evaluation.kernel.events import Outcome
@@ -1921,6 +1921,77 @@ def test_closing_ends_a_push_waiting_to_try_reopening_the_session_again(monkeypa
     assert clock.monotonic() - started < 0.5
     assert clock.wait(pushed, 1.0)
     assert "error" in pushing
+
+
+def test_the_end_gives_up_a_push_waiting_to_try_reopening_the_session_again(monkeypatch, clock):
+    """As above, but the episode ends instead (end_pushes, which the shell calls as the end's
+    first command): the push stops waiting out its backoff and tries no more, the attempt the
+    backoff was for is cancelled, and the frame is a push given up, not a failed one."""
+    trace = RecordingTrace()
+    agent = make_agent(monkeypatch, clock, trace=trace)
+    runtime = RecordingToolRuntime()
+    agent.bind_tool_runtime(runtime)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    _two_frames(agent, clock)
+    agent.abort(6)
+    connects = agent.driver.connect_attempts
+    agent.driver.connect_failures = [ConnectionError("down")] * 3
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    assert not pushed.is_set()  # in the first backoff, 1 s ± 25%
+    started = clock.monotonic()
+    agent.end_pushes()
+    assert clock.wait(pushed, 1.0)
+    assert clock.monotonic() - started < 0.5
+    assert isinstance(pushing["error"], RetryCancelled)
+    assert agent.driver.connect_attempts == connects + 1
+    assert _ready_attempts(trace) == [("retry", TRANSIENT), ("cancelled", None)]
+    rows = [row for row in runtime.rows if row[0] == "obs-3"]
+    assert rows == [("obs-3", "push_cancelled", "", 0.0)]
+    agent.close()
+
+
+class _Unconfirmed(FakeLiveDriver):
+    """The fake live encoder whose server, once ``unconfirming``, confirms no pushed frame: the
+    push waits for its confirmation until the session is closed under it, which fails it, as
+    OpenAI Realtime's push does (providers/openai_realtime.py push_frame)."""
+
+    unconfirming = False
+
+    async def _receipt(self):
+        if self.unconfirming:
+            await self._closed.wait()
+            raise ConnectionError("connection closed")
+        return await super()._receipt()
+
+
+@pytest.mark.parametrize(
+    ("ended", "outcome"), [(True, "push_cancelled"), (False, "push_failed")], ids=["end", "within"]
+)
+def test_a_push_the_end_s_abort_fails_is_given_up_not_failed(monkeypatch, clock, ended, outcome):
+    """A reply is on the session, and a push waits for its frame's confirmation, when the reply
+    is aborted: the abort closes the session, which fails the push. The end's abort comes after
+    end_pushes, and the frame is a push given up; the abort of a reply given up within the
+    episode fails a push as before."""
+    agent = make_agent(monkeypatch, clock, _Unconfirmed)
+    runtime = RecordingToolRuntime()
+    agent.bind_tool_runtime(runtime)
+    agent.bind_inbox(lambda event: None, ORIGIN)
+    frame = _two_frames(agent, clock)
+    agent.driver.replies.append(Reply(ends_at=99.0))
+    replied, _ = _on_worker(clock, lambda: agent.generate(7, 3, frame, BUDGET))
+    clock.sleep(0.5)
+    agent.driver.unconfirming = True
+    pushed, pushing = _on_worker(clock, lambda: agent.push(observation(clock, 3)))
+    clock.sleep(0.5)
+    assert not pushed.is_set()
+    if ended:
+        agent.end_pushes()
+    agent.abort(7)
+    assert clock.wait(pushed, 1.0) and clock.wait(replied, 1.0)
+    assert isinstance(pushing["error"], ConnectionError)
+    assert [row for row in runtime.rows if row[0] == "obs-3"] == [("obs-3", outcome, "", 0.0)]
+    agent.close()
 
 
 def _preparations(posted) -> list[tuple[str, float]]:

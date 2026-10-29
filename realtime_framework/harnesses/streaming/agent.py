@@ -223,8 +223,9 @@ class NativeStreamingAgent(VisionAgentBase):
         # between a reply's two steps, or once it is closed.
         self._readying = asyncio.Lock()
         self._closed = False
-        # Set once close() starts: a push readying the session then gives up, its backoff
-        # included, instead of holding the lock close() waits for.
+        # Set once the episode ends (end_pushes) or close() starts: a push readying the session
+        # then gives up, its backoff included, instead of holding the lock close() waits for,
+        # and a push that fails then was given up, not failed.
         self._closing = self.clock.event()
         self._blocks: list[ContentBlock] = []
         self._pushed: dict[str | None, _Pushed] = {}  # by observation id
@@ -361,10 +362,11 @@ class NativeStreamingAgent(VisionAgentBase):
 
     def push(self, observation: Observation) -> None:
         """Enter the frame in the frame table and put it into the session, readied first, and
-        record it sent. Raises when it did not go in. A frame whose inspection is invalid, as
-        one whose elements kept changing while it was captured, does not go in: it invalidates
-        the run unless the episode stopped first (kernel/streaming.py FrameFoundInvalid), as a
-        turn-based decision on it does (harnesses/default/harness.py)."""
+        record it sent. Raises when it did not go in; one that failed once the pushes were given
+        up (end_pushes, close) is recorded as given up, not as a failed push. A frame whose
+        inspection is invalid, as one whose elements kept changing while it was captured, does
+        not go in: it invalidates the run unless the episode stopped first (kernel/streaming.py
+        FrameFoundInvalid), as a turn-based decision on it does (harnesses/default/harness.py)."""
         value, execution, record = bind_observation(
             self, observation, self.interaction_profile.frame_prompt, observation.tick_number
         )
@@ -390,7 +392,8 @@ class NativeStreamingAgent(VisionAgentBase):
                     finally:
                         self._preparing_session("renewal", False)
         except BaseException:
-            self._finish_inspection(pushed, "push_failed")
+            given_up = self._closing.is_set()
+            self._finish_inspection(pushed, "push_cancelled" if given_up else "push_failed")
             raise
 
     async def _push(self, key: str | None, pushed: _Pushed) -> threading.Event | None:
@@ -1060,6 +1063,12 @@ class NativeStreamingAgent(VisionAgentBase):
         self.tool_runtime.finish(pushed.execution, outcome=outcome, **fields)
 
     # ---- the end ------------------------------------------------------------------------------
+
+    def end_pushes(self) -> None:
+        """The episode ended: a push still out gives up, its readying of the session included,
+        as once close() starts, and one the end's abort fails as it closes the session was
+        given up, not failed. The kernel starts no push after the end."""
+        self._closing.set()
 
     def close(self):
         """Give up the replies left, which the kernel neither accepts nor discards once the
