@@ -1243,8 +1243,8 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         wall_clock_only=True,
         # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:
         # sent unchanged to OpenAI-format APIs, an unsigned thought part for Gemini, dropped for
-        # Anthropic.
-        reasoning_replay="unsupported",
+        # Anthropic. It may go back to the providers compat names.
+        reasoning_replay="optional",
     )
     protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
     deployment = ChatDeployment(
@@ -1255,4 +1255,11 @@ class DirectLiteLLMDriver(LiteLLMDriver):
         gateway="litellm",
         require_api_key=False,
     )
-    compat = ChatCompat()
+    # The providers whose conversion (LiteLLM 1.106.1) keeps an assistant message's
+    # reasoning_content: llms/deepseek/chat/transformation.py (which fills a missing one with a
+    # space in thinking mode), llms/moonshot/chat/transformation.py, llms/together_ai/chat/
+    # transformation.py (which says Together consumes it) and llms/hosted_vllm/chat/
+    # transformation.py (which keeps a string one).
+    compat = ChatCompat(
+        reasoning_replay_providers=("deepseek", "moonshot", "together_ai", "hosted_vllm")
+    )

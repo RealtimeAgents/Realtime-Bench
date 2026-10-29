@@ -245,6 +245,16 @@ def check_context_policy(driver, policy, config) -> None:
         )
     if capabilities.reasoning_replay == "unsupported" and policy.reasoning_replay:
         raise ValueError(f"The {api} API cannot send past reasoning back")
+    providers = driver.compat.reasoning_replay_providers
+    if (
+        policy.reasoning_replay
+        and providers is not None
+        and config.model_name.partition("/")[0] not in providers
+    ):
+        raise ValueError(
+            f"The {api} API sends past reasoning back only to {list(providers)} models, whose "
+            f"LiteLLM conversions keep it, not to {config.model_name}"
+        )
     if (
         policy.archive_over_window
         and config.context_window_tokens is not None

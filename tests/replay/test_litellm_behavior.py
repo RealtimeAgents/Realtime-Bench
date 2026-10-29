@@ -33,7 +33,7 @@ import realtime_framework.entity.model as model_module
 from realtime_framework.clock import SystemClock
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.config import ModelConfig
-from realtime_framework.entity.context_policy import path_policy
+from realtime_framework.entity.context_policy import path_policy, resolve_context
 from realtime_framework.entity.events import GenerationBoundary, TextDelta, UsageSnapshot
 from realtime_framework.entity.model import (
     FATAL,
@@ -44,7 +44,7 @@ from realtime_framework.entity.model import (
 )
 from realtime_framework.entity.records import trace_scope
 from realtime_framework.entity.request import AnswerRequirements, CallParameters
-from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace
+from realtime_framework.evaluation.agent_trace import AgentTraceSink, close_agent_trace, load_body
 from realtime_framework.evaluation.reporting import EpisodeTrace
 from realtime_framework.harnesses.default.request import build_request, system_block
 from realtime_framework.providers.litellm import LITELLM_VERSION, MoonshotDriver, chat_messages
@@ -583,6 +583,33 @@ os.environ.update(setting.split("=", 1) for setting in sys.argv[4:])
 from tests.replay.test_litellm_behavior import _child
 _child(*sys.argv[1:4])
 """
+
+
+def test_generic_litellm_hands_a_kept_provider_the_past_reasoning(tmp_path):
+    """With reasoning replay on, the generic API hands LiteLLM the turns' reasoning_content, and
+    a provider whose conversion keeps it (hosted_vllm) sends it: in LiteLLM's final request dict,
+    which the trace records, and on the wire."""
+    turns = (_turn(0, "wait", "r0", "fb0"), _turn(1, "click", "r1", "fb1"))
+    with HttpStub(_chat_answer) as stub:
+        config = _model(
+            stub.origin, "litellm", "hosted_vllm/replay-vlm", "/v1", chat_stream=False,
+            context=resolve_context(
+                "litellm", "hosted_vllm/replay-vlm", run={"reasoning_replay": True}
+            ),
+        )  # fmt: skip
+        generated = _generate(config, tmp_path, _canonical(config, turns))
+        assert generated.error is None
+    replayed = [
+        message.get("reasoning_content")
+        for message in _sent(stub)["messages"]
+        if message["role"] == "assistant"
+    ]
+    assert replayed == ["r0", "r1"]
+    (sent,) = [row["payload"] for row in generated.trace if row["event"] == "ModelRequestSent"]
+    body = json.loads(load_body(tmp_path / "episode_blobs.pack", sent["body"]))
+    assert [m.get("reasoning_content") for m in body["messages"] if m["role"] == "assistant"] == (
+        replayed
+    )
 
 
 def _child_config(case: str, origin: str) -> ModelConfig:

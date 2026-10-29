@@ -141,6 +141,9 @@ class Compat:
     )
     # The reasoning_effort values the encoder maps (None: the provider default); None takes any.
     reasoning_efforts: tuple[str | None, ...] | None = None
+    # Where the model id names the provider (provider/model-id), the providers past reasoning may
+    # go back to (context setting reasoning_replay); None: any the API takes it for.
+    reasoning_replay_providers: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

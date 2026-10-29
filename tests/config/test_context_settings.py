@@ -516,11 +516,15 @@ def _hashes(config):
 
 @pytest.fixture
 def environment():
-    """The trial worker writes os.environ (evaluation/_trial.py main)."""
+    """The trial worker writes os.environ (evaluation/_trial.py main), from which the catalog
+    takes an inline endpoint's model (providers/registry.py _load_entries): a fresh catalog for
+    each test, as each trial worker is a fresh process."""
     saved = dict(os.environ)
+    catalog._catalog_entries.cache_clear()
     yield
     os.environ.clear()
     os.environ.update(saved)
+    catalog._catalog_entries.cache_clear()
 
 
 def trial(capsys, *argv) -> dict:
@@ -722,3 +726,26 @@ def test_harbor_finds_an_experiment_file_changed_after_resolution(
     assert resolved() == before
     path.write_text("turns_kept: 40\n")
     assert resolved() != before
+
+
+# Generic LiteLLM: past reasoning goes back only to the providers whose conversion keeps it
+
+
+def test_generic_litellm_sends_past_reasoning_to_a_provider_that_keeps_it(environment, capsys):
+    """`--model provider/model-id` takes reasoning replay from the command line, for a provider
+    whose LiteLLM conversion keeps an assistant message's reasoning_content."""
+    settings = trial(capsys, "--model", "hosted_vllm/m", "--context", "reasoning_replay=true")
+    config = ModelConfig.model_validate(settings["model_config"])
+    item = config.context.item("reasoning_replay")
+    assert (config.adapter_type, item.value, item.source) == ("litellm", True, "run")
+    assert path_policy(config).reasoning_replay is True
+
+
+@pytest.mark.parametrize("model", ["openai/m", "anthropic/m", "gemini/m", "vertex_ai/m"])
+def test_generic_litellm_refuses_past_reasoning_elsewhere(environment, capsys, model):
+    usage_error(
+        capsys,
+        ["--model", model, "--context", "reasoning_replay=true"],
+        "The litellm API sends past reasoning back only to ['deepseek', 'moonshot', "
+        f"'together_ai', 'hosted_vllm'] models, whose LiteLLM conversions keep it, not to {model}",
+    )
