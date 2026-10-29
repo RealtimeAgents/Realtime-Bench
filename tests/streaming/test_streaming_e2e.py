@@ -112,9 +112,12 @@ def _agent(config, log_dir, trace, clock):
     return agent
 
 
-def _frame_text(prompt: str) -> str:
-    """A frame's text: its prompt and the interactables its inspection found, none."""
-    return observation_prompt_with_interactables(prompt, "", FRAME_INTERACTABLES_HEADER)
+def _frame_text(prompt: str, n: int) -> str:
+    """Capture ``n``'s (from 0) text: its prompt, naming its frame, and the interactables its
+    inspection found, none."""
+    return observation_prompt_with_interactables(
+        prompt.format(frame=n + 1), "", FRAME_INTERACTABLES_HEADER
+    )
 
 
 def realtime_agent(log_dir):
@@ -165,7 +168,7 @@ def _realtime_push(n: int, content: list[dict], at: float, previous: str | None)
 
 def _realtime_frame(n: int) -> list[dict]:
     return [
-        {"type": "input_text", "text": _frame_text(STREAMING_TEXT_ACTION_FRAME_PROMPT)},
+        {"type": "input_text", "text": _frame_text(STREAMING_TEXT_ACTION_FRAME_PROMPT, n)},
         {"type": "input_image", "image_url": f"data:image/png;{_frame(n)}"},
     ]
 
@@ -229,7 +232,7 @@ def _live_push(n: int, at: float) -> list[dict]:
     """Capture ``n`` (from 0) going in at ``at``: its image, then its text."""
     return [
         _live_input(at, video={"data": _frame(n), "mime_type": "image/png"}),
-        _live_input(at, text=_frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT)),
+        _live_input(at, text=_frame_text(STREAMING_FUNCTION_CALL_FRAME_PROMPT, n)),
     ]
 
 

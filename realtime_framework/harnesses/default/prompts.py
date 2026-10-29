@@ -199,8 +199,10 @@ FRAME_PROMPT = "Screenshot."
 FUNCTION_CALL_FRAME_PROMPT = (
     FRAME_PROMPT + " Submit exactly one GUI action by calling its function. Do not speak."
 )
-# A streamed frame is no decision's: an action names whichever frame it is based on.
-STREAMING_FRAME_PROMPT = "Streamed screenshot; its number is in its FRAME label."
+# A streamed frame is no decision's: an action names whichever frame it is based on. Its text
+# names its frame ({frame}, bind_observation), so that the model pairs the two by number, not by
+# the order they came in.
+STREAMING_FRAME_PROMPT = "This text goes with the streamed screenshot labelled FRAME {frame}."
 STREAMING_FUNCTION_CALL_FRAME_PROMPT = (
     STREAMING_FRAME_PROMPT + " Submit exactly one GUI action by calling its function, with the "
     "frame it is based on. Do not speak."

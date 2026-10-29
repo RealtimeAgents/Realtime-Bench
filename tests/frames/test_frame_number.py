@@ -1,6 +1,7 @@
 """Under streaming each screenshot carries its frame number in its top-left corner (the frames the
 native-streaming agent pushes: tests/streaming/test_streaming_e2e.py), and the SoM marks keep
-clear of it; turn-based screenshots are the SoM images, unchanged."""
+clear of it; its text names the same number. Turn-based screenshots are the SoM images,
+unchanged."""
 
 from __future__ import annotations
 
@@ -12,6 +13,10 @@ import json
 import pytest
 from PIL import Image, ImageChops
 
+from realtime_framework.harnesses.default.prompts import (
+    STREAMING_FUNCTION_CALL_FRAME_PROMPT,
+    STREAMING_TEXT_ACTION_FRAME_PROMPT,
+)
 from realtime_framework.sandbox.observation import som
 from realtime_framework.sandbox.observation.som import render_frame_number
 from tests.fake_clock import FakeClock
@@ -20,7 +25,7 @@ from tests.replay.frames import FrameSource, ReplayTask
 from tests.replay.scenario import replies
 from tests.replay.steps import Step
 from tests.replay.stub import ChatCompletionsStub
-from tests.streaming.fake_live import make_agent
+from tests.streaming.fake_live import LIVE, REALTIME, FakeLiveDriver, TextLiveDriver, make_agent
 
 from .episode import decide, open_episode
 
@@ -157,3 +162,28 @@ def test_a_streaming_screenshot_is_its_som_image_with_its_frame_number_over_it(m
     [marked] = runtime.marked
     [frame] = [item.block for item in agent.driver.views[-1].items if item.block.kind == "frame"]
     assert frame.image.data == render_frame_number(marked, 1)
+
+
+@pytest.mark.parametrize(
+    ("driver", "model", "prompt"),
+    [
+        (FakeLiveDriver, LIVE, STREAMING_FUNCTION_CALL_FRAME_PROMPT),
+        (TextLiveDriver, REALTIME, STREAMING_TEXT_ACTION_FRAME_PROMPT),
+    ],
+    ids=["function_call", "text_json"],
+)
+def test_a_streaming_frames_text_names_the_number_drawn_on_its_screenshot(
+    monkeypatch, clock, driver, model, prompt
+):
+    """The model pairs a frame's text with its screenshot by that number, not by the order they
+    came in."""
+    agent = make_agent(monkeypatch, clock, driver, model)
+    agent.bind_tool_runtime(som.ToolRuntime())
+    source = FrameSource(ReplayTask(), text_observation=False, fps=1.0)
+    for tick in range(2):
+        agent.push(source.capture(tick))
+    agent.close()
+    frames = [item.block for item in agent.driver.views[-1].items if item.block.kind == "frame"]
+    first_lines = [frame.text.partition("\n")[0] for frame in frames]
+    assert [f"FRAME {n}" in line for n, line in enumerate(first_lines, 1)] == [True, True]
+    assert first_lines == [prompt.format(frame=n) for n in (1, 2)]

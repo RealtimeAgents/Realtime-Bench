@@ -973,12 +973,15 @@ class _GenerationOutputCollector:
 def bind_observation(agent, observation, prompt, tick):
     """Prepare one capture for the model, attach its read-only interactables and enter it in the
     frame table, whose record of it comes back too. Under streaming the frame's number is drawn
-    on the screenshot, and the marks keep clear of it."""
+    on the screenshot, and the marks keep clear of it, and ``prompt`` names it ({frame})."""
     streaming = agent.interaction_mode == "streaming"
     prepared = prepare_for_model(observation.screenshot)
     metadata = observation.metadata if isinstance(observation.metadata, dict) else {}
     expected = metadata.get("observation_id") or "missing-observation-id"
     width, height = agent.interaction_profile.inspection_size(prepared.geometry)
+    # A streaming push enters its frame on the shell's one push lane, so no other frame takes
+    # this number before the frame table gives it to this one.
+    number = agent.frames.next_frame() if streaming else None
     execution = agent.tool_runtime.inspect(
         observation,
         requested_observation_id=expected,
@@ -987,12 +990,12 @@ def bind_observation(agent, observation, prompt, tick):
         model_height=height,
         model_image_bytes=prepared.data,
         model_image_mime_subtype=prepared.mime_subtype,
-        # A streaming push enters its frame on the shell's one push lane, so no other frame
-        # takes this number before the frame table gives it to this one.
-        frame_number=agent.frames.next_frame() if streaming else None,
+        frame_number=number,
     )
     prompt = observation_prompt_with_interactables(
-        prompt, execution.get("text") or "", FRAME_INTERACTABLES_HEADER
+        prompt if number is None else prompt.format(frame=number),
+        execution.get("text") or "",
+        FRAME_INTERACTABLES_HEADER,
     )
     value = ProviderObservation(
         observation=observation,
