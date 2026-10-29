@@ -287,9 +287,9 @@ class ChoiceDecision:
         failure=None,
         delay=None,
     ):
-        """One ModelAttemptFinished per question attempt of the per-question retry, and one
-        without a start for the attempt a cancellation stopped, before it was sent or under
-        way."""
+        """One ModelAttemptFinished per question attempt of the per-question retry, and one for
+        the attempt a cancellation stopped: under way, timed from its start, or before it was
+        sent, without one."""
         payload = {
             "kind": "choice_question",
             "outcome": outcome,
@@ -310,11 +310,11 @@ class ChoiceDecision:
 
     async def _decide_with_retries(self, state, question, *, phase):
         """One question under the shared transport retry policy; each attempt is recorded."""
-        started = None
+        started = sent = None
 
         async def send(attempt):
-            nonlocal started
-            started = self.clock.monotonic()
+            nonlocal started, sent
+            started, sent = self.clock.monotonic(), attempt
             try:
                 with self._attempt_scope(attempt):
                     reply = await self.client.decide(state, question)
@@ -354,7 +354,9 @@ class ChoiceDecision:
             )
 
         def cancelled(attempt, exc):
-            self._attempt_finished(attempt, None, question, "cancelled", error=exc)
+            # Stopped in its backoff, the attempt was never sent: the start is the one before's.
+            start = started if sent == attempt else None
+            self._attempt_finished(attempt, start, question, "cancelled", error=exc)
 
         key = f"{self.trace.attempt_id}:{self.selection.observation_id}:{len(self.calls)}"
         retry = RequestRetry(key, classify, record, cancelled=cancelled, clock=self.clock)

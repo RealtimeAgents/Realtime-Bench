@@ -1152,6 +1152,45 @@ def test_decision_closed_between_questions(tmp_path, monkeypatch):
     ]
 
 
+def test_decision_closed_during_a_question(tmp_path, monkeypatch):
+    """Decision API. As in test_decision_closed_between_questions, but decision 1's text-edit
+    question is under way, held by the stub, when the agent is closed. The close cancels the
+    generation and closes the client before it stops the execution thread (harnesses/default/
+    context.py RealtimeRuntime.close), which fails that attempt under way: it is cancelled with
+    its time, as one the abort's close fails is."""
+    arrived, release = threading.Event(), threading.Event()
+    with DecisionsStub(upstream="openai") as stub:
+        respond = stub._respond
+
+        def held(path, headers, body):
+            # Request 0 is decision 0's, 1 decision 1's first question, 2 its text-edit question.
+            if len(stub.requests) == 2:
+                arrived.set()
+                release.wait(WAIT_S)
+            return respond(path, headers, body)
+
+        monkeypatch.setattr(stub, "_respond", held)
+        episode = _decision_episode(stub, tmp_path, monkeypatch)
+        agent = episode.agent
+        try:
+            run_decisions(episode, [decision("click_P1")], stub)
+            stub.load(decision("compose_text", ADA, SPACE, LOVELACE, "finish").script)
+            observation = episode.frames.capture(1)
+            box, done = _generate_in_worker(episode, observation, decision=1)
+            assert arrived.wait(WAIT_S), "the text-edit question never came"
+            agent.close()
+            assert done.wait(WAIT_S), "the closed worker never returned"
+        finally:
+            release.set()
+            episode.finish()
+    assert "error" not in box, repr(box.get("error"))
+    assert box["pending"].result["stale"] is True
+    assert _questions(tmp_path) == [(0, 0, 1, "ok"), (1, 0, 1, "ok"), (1, 1, 1, "cancelled")]
+    ((error, latency),) = _cancelled(tmp_path, "choice_question")
+    assert error == "RetryCancelled('generation abandoned during attempt 1')"
+    assert 0.0 < latency < WAIT_S
+
+
 def test_decision_aborted_during_its_last_question_attempt(tmp_path, monkeypatch):
     """Decision API. Decision 1's first question picks compose_text; its text-edit question gets
     HTTP 503 three times, each recorded as a retry, and the stub holds its fourth, last allowed
@@ -1202,6 +1241,11 @@ def test_decision_aborted_during_its_last_question_attempt(tmp_path, monkeypatch
         *[(1, 1, attempt, "retry") for attempt in (1, 2, 3)],
         (1, 1, 4, "cancelled"),
     ]
+    # The attempt went out, and its time until the close failed it is recorded, as the time of
+    # each retried attempt before it is.
+    ((error, latency),) = _cancelled(tmp_path, "choice_question")
+    assert error == "RetryCancelled('generation abandoned during attempt 4')"
+    assert 0.0 < latency < WAIT_S
     assert result["stale"] is True and "invalid_reason" not in result
     assert (result["usage"], result["provider_usage_missing_reason"]) == (
         answered,
