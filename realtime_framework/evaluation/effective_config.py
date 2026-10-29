@@ -4,13 +4,10 @@
 
 Entry points (each with its own defaults):
 
-- ``runner``: ``python -m realtime_framework.evaluation.runner --model M --task T``.
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
   loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
   job file). Harbor resolves the trial (evaluation/harbor.py) and starts ``_trial``.
-- ``identity``: ``python -m realtime_framework.evaluation.config`` with the runner's defaults; it
-  prints the hash the runner should record.
 
 Each process an entry point starts is reproduced in a fresh interpreter with the environment it
 would receive, so values read at import are the values that process would use. The runner process
@@ -55,7 +52,7 @@ _EXTRA_VARIABLES = frozenset(
         "PYTHONPATH", "TASK_SUITE", "TASK_PORT_OFFSET", "SANDBOX_DISPLAY_NUMBER",
         "SANDBOX_CONTAINER", "RT_SUITE_CONTAINER", "GUEST_AGENT_PORT", "VNC_PORT", "NOVNC_PORT",
         "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
-        # The --seed default of the runner's and the trial worker's command lines.
+        # The --seed default of the trial worker's command line.
         "SEED",
         # Interpreters, roots and gates.
         "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
@@ -258,7 +255,7 @@ class _Task:
 
 
 def _probe_runner(request: dict) -> dict:
-    """Run runner main() for each (model, task) up to its decision loop."""
+    """Run runner main() on each (model, task)'s launch file up to its decision loop."""
     import realtime_framework.evaluation.runner as runner  # first: the runner's import-time reads
 
     attribution = dict(request["attribution"])
@@ -360,12 +357,11 @@ def _probe_runner(request: dict) -> dict:
     runner.run_stream = run_stream
     scratch = Path(request["scratch"])
     results = {}
-    for index, (model, task, argv, *launch) in enumerate(request["runs"]):
+    for index, (model, task, argv, launch) in enumerate(request["runs"]):
         results_dir = scratch / f"run-{index}"
-        if launch:
-            # The trial's settings, as the trial worker writes them (evaluation/_trial.py main).
-            results_dir.mkdir(parents=True)
-            (results_dir / LAUNCH_FILE).write_text(json.dumps(launch[0]))
+        # The trial's settings, as the trial worker writes them (evaluation/_trial.py main).
+        results_dir.mkdir(parents=True)
+        (results_dir / LAUNCH_FILE).write_text(json.dumps(launch))
         argv = [arg.replace("<results>", results_dir.as_posix()) for arg in argv]
         state.clear()
         state.update(attribution=dict(attribution), claimed=set(), start=_snapshot())
@@ -586,32 +582,10 @@ def _probe_harbor(request: dict) -> dict:
     return {"models": results, "attribution": attribution}
 
 
-def _probe_identity(request: dict) -> dict:
-    """The hash identity_main prints (evaluation/config.py), with the runner's defaults."""
-    from realtime_framework.evaluation.config import identity_main
-
-    argparse.ArgumentParser.error = _reject
-    results = {}
-    for model, task, argv in request["runs"]:
-        _fresh_catalog()
-        record = {"error": None}
-        with _restored_environ():
-            output = io.StringIO()
-            try:
-                with contextlib.redirect_stdout(output):
-                    identity_main(argv)
-                record["runtime_config_hash"] = output.getvalue().strip()
-            except (_Rejected, SystemExit, Exception) as exc:
-                record["error"] = _error(exc)
-        results.setdefault(model, {})[task] = record
-    return {"models": results}
-
-
 _PROBES = {
     "runner": _probe_runner,
     "trial": _probe_trial,
     "harbor": _probe_harbor,
-    "identity": _probe_identity,
 }
 
 
@@ -654,11 +628,9 @@ def default_entries() -> list[str]:
     files = sorted((ROOT / "configs" / "runs").glob("*.yaml"))
     files += sorted((ROOT / "configs" / "jobs").glob("*.yaml"))
     return [
-        "runner",
         "trial",
         "harbor",
         *(f"harbor:{path.relative_to(ROOT).as_posix()}" for path in files),
-        "identity",
     ]
 
 
@@ -725,17 +697,6 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
 
 def _entry(entry: str, *, environ, env_file, models, tasks, scratch) -> dict:
     shell = {name: "shell" for name in environ}
-    if entry == "identity":
-        runs = [
-            (model, task, ["--model", model, "--task", task, "--fps", "1.0",
-                           "--max-minutes", "5.0", "--protocol", "time-aware-token-v1"])
-            for model, task in _cells(models, tasks)
-        ]
-        return _probe("identity", environ, {"runs": runs}, scratch=scratch)
-    if entry == "runner":
-        runs = [(model, task, ["--model", model, "--task", task])
-                for model, task in _cells(models, tasks)]
-        return _runner_entry(environ, shell, runs, env_file=env_file, scratch=scratch)
     if entry == "trial":
         launch = {
             (tuple(sorted(environ.items())), tuple(sorted(shell.items())), sys.executable): [

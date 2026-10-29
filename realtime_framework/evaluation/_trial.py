@@ -10,13 +10,16 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
+from realtime_framework.entity.config import ModelConfig
 from realtime_framework.entity.config import merge_streaming_settings
 from realtime_framework.entity.context_policy import MODEL_PRESETS
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
 from realtime_framework.evaluation.run_spec import INTERACTION_MODES
 from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
 from realtime_framework.evaluation.run_spec import PROTOCOLS
+from realtime_framework.evaluation.run_spec import RunSpec
 from realtime_framework.evaluation.run_spec import run_spec
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,9 +29,46 @@ LAUNCH_FILE = "wall_clock_launch.json"
 
 
 def runner_arguments(result_root: Path) -> list[str]:
-    """The runner arguments for the launch file in ``result_root``, whose plan gives the runner
-    its run options, model and task, except the episode's output paths."""
+    """The runner arguments for the launch file in ``result_root``, which gives the runner what
+    it runs (read_launch); the episode's output paths are the runner's own arguments."""
     return ["--launch", str(result_root / LAUNCH_FILE), "--report-root", str(result_root)]
+
+
+class Launch(NamedTuple):
+    """What a launch file gives the runner (read_launch)."""
+
+    spec: RunSpec
+    model: str  # the catalog key
+    reasoning_effort: str  # as the catalog names it
+    task: str
+    model_config: ModelConfig
+    graphics_mode: str
+    recording_encoder: str
+
+
+def read_launch(path) -> Launch:
+    """The run the launch file at ``path`` gives the runner, as main() writes it: the run
+    options, the model's catalog key and reasoning effort, the task, the model configuration main()
+    resolved, and the desktop's graphics mode and recording encoder."""
+    launch = json.loads(Path(path).read_text())
+    plan = launch["plan"]
+    (model,) = plan["models"]
+    (task,) = plan["tasks"]
+    runtime = plan["runtime"]
+    return Launch(
+        spec=RunSpec(**{option: runtime[option] for option in PLAN_OPTIONS}),
+        model=model["key"],
+        reasoning_effort=model["reasoning_effort"],
+        task=task,
+        # The configuration's dump leaves out its key, which the driver reads from the variable
+        # api_key_env names, and its streaming settings, which a streaming launch file holds merged
+        # over the driver's; merged again, they are the same.
+        model_config=ModelConfig.model_validate(
+            {**launch["model_config"], "streaming": launch.get("streaming", {})}
+        ),
+        graphics_mode=runtime["graphics_mode"],
+        recording_encoder=runtime["recording_encoder"],
+    )
 
 
 def runner_environment(plan) -> dict:
@@ -295,7 +335,8 @@ def main(argv=None):
         resolved_model = catalog.to_model_config(
             key, fps=spec.model_input_fps, reasoning_effort=effort
         )
-        # The runner's pre-run rules, so that Harbor's resolve refuses what the runner would.
+        # The pre-run rules, applied here alone: the runner runs the launch file as written, and
+        # Harbor's resolve, the dry run, refuses what a run would.
         check_episode(
             resolved_model,
             clock_mode=spec.clock_mode,

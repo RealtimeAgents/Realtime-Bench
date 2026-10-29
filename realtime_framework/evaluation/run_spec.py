@@ -1,12 +1,12 @@
 """The options one episode runs with, each declared, defaulted and checked here alone.
 
-Every entry point builds a RunSpec from what it is given: the runner's command line and
-identity_main's, which takes the same options (evaluation/runner.py, evaluation/config.py), the
-Harbor trial worker's (evaluation/_trial.py), Harbor's agent options (evaluation/harbor.py
-RealtimeBenchOptions) and a run plan's runtime (evaluation/config.py load_benchmark). An option an
-entry point is not given takes that entry point's default (ENTRY_DEFAULTS), else the field's. The
-rules that read the model's API, its driver's declarations, are the pre-run checks'
-(providers/preflight.py), and stay there.
+Every entry point builds a RunSpec from what it is given: the Harbor trial worker's command line
+(evaluation/_trial.py), Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions) and a
+run plan's runtime (evaluation/config.py load_benchmark). An option an entry point is not given
+takes that entry point's default (ENTRY_DEFAULTS), else the field's. The runner runs the one the
+trial worker writes into its launch file (evaluation/_trial.py read_launch). The rules that read
+the model's API, its driver's declarations, are the pre-run checks' (providers/preflight.py), and
+stay there.
 """
 
 from __future__ import annotations
@@ -16,28 +16,24 @@ import os
 from dataclasses import dataclass, fields
 
 from realtime_framework.entity.config import DEFAULT_TASK_SEED
-from realtime_framework.entity.config import DEFAULT_TOKENS_PER_FRAME
 from realtime_framework.entity.config import task_seed
 from realtime_framework.providers.preflight import check_streaming_options
 
 DEFAULT_MODE = "default"
 INTERACTION_MODES = ("turn_based", "streaming")
-# The protocol each clock runs, unless the runner is given another label for it (--protocol).
+# The protocol each clock runs.
 PROTOCOLS = {"wall": "wall-clock", "token": "time-aware-token-v1"}
 
-# The defaults that differ between entry points, on purpose. Run directly, the runner takes the
-# token clock at the default B, as identity_main does, which prints the hash the runner records.
-# The trial worker, and Harbor's agent options and run plans, from which Harbor starts it, take the
-# wall clock, and an unlimited B where the token clock is asked for without one; a run plan on the
-# token clock names its B (load_benchmark).
+# The defaults of each entry point. The trial worker, and Harbor's agent options and run plans,
+# from which Harbor starts it, take the wall clock, and an unlimited B where the token clock is
+# asked for without one; a run plan on the token clock names its B (load_benchmark).
 ENTRY_DEFAULTS = {
-    "runner": {"clock_mode": "token", "tokens_per_frame": DEFAULT_TOKENS_PER_FRAME},
     "trial": {"clock_mode": "wall", "tokens_per_frame": "unlimited"},
     "harbor": {"clock_mode": "wall", "tokens_per_frame": "unlimited"},
 }
-# The two command lines take an option they are not given from this variable, where it is set.
+# The trial worker's command line takes an option it is not given from this variable, where it is
+# set.
 ENVIRONMENT_DEFAULTS = {
-    "runner": {"seed": "SEED"},
     "trial": {"seed": "SEED"},
 }
 
@@ -59,7 +55,7 @@ class RunSpec:
     ``fps`` is the environment frame rate and ``model_input_fps`` that of the frames the model is
     fed, ``fps`` when left out. ``tokens_per_frame`` is B per model-input frame, a positive
     integer, or None for unlimited, which it is on the wall clock whatever it was given; it takes
-    "unlimited" and, as the command lines give it, a decimal string. ``protocol`` left out is its
+    "unlimited" and, as the command line gives it, a decimal string. ``protocol`` left out is its
     clock's (PROTOCOLS). The deliberation caps are the runner's legacy diagnostics, which
     streaming refuses."""
 
