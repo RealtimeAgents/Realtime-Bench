@@ -1156,7 +1156,7 @@ def test_the_agent_lets_go_of_a_frames_screenshot_once_it_folds(monkeypatch, clo
     agent = make_agent(monkeypatch, clock)
     for n in range(1, 7):
         agent.push(observation(clock, n))
-    frames = [block for block in agent._blocks if block.kind == "frame"]
+    frames = [block for block in agent._history.blocks if block.kind == "frame"]
     assert [block.image is not None for block in frames] == [False] * 4 + [True] * 2
     assert list(agent._pushed) == ["obs-5", "obs-6"]
     agent.close()
@@ -1179,10 +1179,10 @@ def test_a_push_that_fails_once_the_view_is_full_folds_no_frame(monkeypatch, clo
         changes = trace.of(TraceEvent.HISTORY_CHANGED)
         return [change["frames"] for change in changes if change["kind"] == "visual_fold"]
 
-    assert [block.image is not None for block in agent._blocks] == [True, True]
+    assert [block.image is not None for block in agent._history.blocks] == [True, True]
     assert folds() == []
     agent.push(observation(clock, 4))
-    assert [block.image is not None for block in agent._blocks] == [False, True, True]
+    assert [block.image is not None for block in agent._history.blocks] == [False, True, True]
     assert folds() == [[{"block": "f1.frame", "observation_id": "obs-1"}]]
     agent.close()
 
@@ -1700,7 +1700,7 @@ def test_each_frame_the_view_folds_is_recorded_as_a_turn_based_fold_is(
     count, and under none where the encoder's own setting keeps it."""
     trace = RecordingTrace()
     agent = make_agent(monkeypatch, clock, driver, trace=trace)
-    keep = agent._retained
+    keep = agent._history.retained_frames
     for n in range(1, keep + 3):
         agent.push(observation(clock, n))
     folds = [c for c in trace.of(TraceEvent.HISTORY_CHANGED) if c["kind"] == "visual_fold"]

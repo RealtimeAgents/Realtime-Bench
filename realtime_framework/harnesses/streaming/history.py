@@ -1,14 +1,16 @@
-"""The native-streaming history view: what a live session should hold, computed from the content
-blocks the streaming agent has accepted (phase2.md, native streaming 上下文怎么管).
+"""The native-streaming history: what a live session should hold, kept from what the streaming
+agent tells it, and the view it makes (phase2.md, native streaming 上下文怎么管).
 
-The agent keeps the blocks in the order they came to the session: each pushed frame under its
-frame-table number, the model output of each reply accepted, or given up once an action of it ran,
-where the output began, based on the frame its action names, with the reply's tool rounds right
-after it where the policy replays them, as a turn's (harnesses/default/request.py
-tool_exchange_block), and each execution feedback, attached to the output whose action it reports. The view keeps the frames and outputs in that order under
-their ids, so an encoder can diff two views by id. Only the newest frames keep their screenshots;
-an older frame folds as a turn-based frame does, and never gets its screenshot back. Every output
-stays, however old.
+The history keeps the blocks in the order they came to the session: each pushed frame under its
+frame-table number, once its push went in; the model output of each reply accepted, or given up
+once an action of it ran, as it was when first given up, where the output began, based on the
+frame its action names, with the reply's tool rounds right after it where the policy replays them,
+as a turn's (harnesses/default/request.py tool_exchange_block), outputs that began at one place in
+the order their replies were asked for; and each execution feedback, attached to the output whose
+action it reports. The view keeps the frames and outputs in that order under their ids, so an
+encoder can diff two views by id. Only the newest frames keep their screenshots; an older frame
+folds as a turn-based frame does, and never gets its screenshot back. Every output stays, however
+old.
 
 Each execution feedback is a block of its own, as a turn-based request places it under
 separate_message (harnesses/default/request.py _turn_items): it keeps its id and stays where it
@@ -99,7 +101,7 @@ def history_view(
     call: CallParameters,
 ) -> CanonicalRequest:
     """The session the accepted ``blocks`` (frames, outputs and feedback, in the order the
-    agent keeps them) make: the system instruction, then every block in order, the frames older
+    history keeps them) make: the system instruction, then every block in order, the frames older
     than the newest ``retained_frames`` folded."""
     frames = [index for index, block in enumerate(blocks) if block.kind == "frame"]
     older = set(frames[: max(0, len(frames) - retained_frames)])
