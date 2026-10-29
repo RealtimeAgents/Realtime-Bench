@@ -504,6 +504,36 @@ def test_a_tap_of_a_wall_held_key_presses_it_again_by_its_x_keysym():
     ]
 
 
+class _ModifierClickGuest(_Guest):
+    """Also takes the guest's pointer actions, which press and release their modifier around them
+    (guest_server/server.py _with_modifier)."""
+
+    def execute_action(self, action):
+        self.commands.append((self.clock.monotonic(), f"click {action.parameters['modifier']}"))
+        return {"status": "ok"}
+
+
+def test_a_modifier_click_with_a_wall_held_modifier_presses_it_again():
+    """The guest releases the click's modifier after it; a lease on that key goes on with the key
+    down again, as after a tap."""
+    clock = FakeClock(wall_origin=ORIGIN)
+    env = _wall(clock)
+    env.g = _ModifierClickGuest(clock)
+    with clock.participant():
+        env.execute(Action.hold_key("shift", 3.0), release_at=3.0)
+        clock.sleep(1.0)
+        execution = env.execute(Action(ActionType.CLICK, {"x": 5, "y": 5, "modifier": "shift"}))
+        assert execution.status == "applied"
+        clock.sleep(5.0)
+    assert execution.result["restored_wall_holds"] == ["shift"]
+    assert [entry for entry in env.g.commands if not entry[1].startswith("xset")] == [
+        (0.0, "xdotool keydown -- Shift_L"),
+        (1.0, "click shift"),
+        (1.0, "xdotool keydown -- Shift_L"),
+        (3.0, "xdotool keyup -- Shift_L"),
+    ]
+
+
 # ---- on_invalid -----------------------------------------------------------------------------
 
 
