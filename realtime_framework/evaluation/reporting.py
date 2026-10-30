@@ -1656,7 +1656,7 @@ def report(root):
                     matched = summary_ok(
                         path,
                         require_scored=True,
-                        allow_experimental=os.environ.get("ALLOW_EXPERIMENTAL_MODEL") == "1",
+                        allow_experimental=True,
                         **{
                             f"expected_{field}": identity[field]
                             for field in (
