@@ -54,8 +54,8 @@ _EXTRA_VARIABLES = frozenset(
         "RT_SUITE_PORT", "CUDA_VISIBLE_DEVICES",
         # The --seed default of the trial worker's command line.
         "SEED",
-        # Interpreters, roots and gates.
-        "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT", "ALLOW_EXPERIMENTAL_MODEL",
+        # Interpreters and roots.
+        "REALTIMEBENCH_PYTHON", "RTBENCH_PYTHON", "RTBENCH_ROOT",
         # Model bridges (providers/registry.py _load_entries, to_model_config).
         "BENCHMARK_MODEL", "BENCHMARK_BASE_URL", "BENCHMARK_MODEL_REVISION",
         "BENCHMARK_LITELLM_MODEL", "BENCHMARK_LITELLM_API_BASE", "BENCHMARK_LITELLM_KEY_ENV",

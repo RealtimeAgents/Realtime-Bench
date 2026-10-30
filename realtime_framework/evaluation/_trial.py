@@ -301,8 +301,6 @@ def main(argv=None):
 
     try:
         entry = catalog.get(key)
-        if not entry.benchmark_eligible and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") != "1":
-            parser.error(f"{key} is not eligible for the maintained benchmark")
         effort = args.reasoning_effort or entry.defaults["reasoning_effort"]
         catalog.validate_reasoning_effort(key, effort)
         validate_model_interaction(

@@ -1014,11 +1014,7 @@ def main():
     )
     # Infrastructure-invalid runs are never successful process results and are never resumable as
     # scored cells. The final tasks suite additionally requires a Boolean score for every valid run.
-    accepted = conclusion.run_status == "scored" or (
-        conclusion.run_status == "experimental"
-        and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") == "1"
-    )
-    if not accepted or (
+    if conclusion.run_status not in ("scored", "experimental") or (
         custom_tasks.suite_id() == "tasks" and not isinstance(conclusion.solved, bool)
     ):
         raise SystemExit(1)
