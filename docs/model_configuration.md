@@ -72,8 +72,9 @@ and leave it out. `anthropic_messages` marks every request.
 ### Output limit
 
 `native_output_limit` caps the output tokens of every request, reasoning included; unless a token
-clock budget is smaller, it is the output limit each request sends. Every preset in
-`configs/models/` declares it. A preset without it has no limit and gets the provider default,
+clock budget is smaller, it is the output limit each request sends. The exception is an external
+driver, which gets no limit on the wall and paused clocks. Every preset in `configs/models/`
+declares it. A preset without it has no limit and gets the provider default,
 except on `api: litellm`.
 
 Direct runs, and presets on `api: litellm` without a limit, take the model's `max_output_tokens`

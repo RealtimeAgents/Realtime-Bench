@@ -117,7 +117,7 @@ rather than in shared sources, and draw every content-affecting random value fro
 
 ### 5. tests/evaluation.py
 
-The success criterion, evaluated on the task state frozen at the deadline.
+The success criterion, evaluated on the task state frozen when the episode ends.
 
 ### 6. List the task
 

@@ -27,7 +27,7 @@ shell to send it).
 | `--ak model_input_fps=1` | Frames per second fed to the model, at most `fps`; `tokens_per_frame` counts these frames (default: `fps`). |
 | `--ak interaction_mode=turn_based` | `turn_based` (default): one frame per model generation. `streaming` pushes frames into a live session (OpenAI Realtime, Gemini Live) on the wall clock and is reported separately ([streaming runs](#streaming-runs)). |
 | `--ak clock=wall` | `wall` (default) or `token`; see [clocks](#clocks). |
-| `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else its API's default, `low` for most APIs; provider default for `-m provider/model-id` and `chat_completions` presets). |
+| `--ak reasoning_effort=high` | Reasoning effort supported by the model (default: the preset's `reasoning_effort`, else the provider default). |
 | `--ak api_base=https://HOST/v1` | Custom endpoint, e.g. with `-m openai/MODEL` for an OpenAI-compatible service. |
 | `--ak api_key_env=MY_KEY` | Read the credential from another variable (`provider/model-id` only; set a preset's in its YAML). |
 | `--ak model_revision=REV` | Record the deployment revision (`provider/model-id` only; presets use `endpoint.revision`). |
@@ -114,8 +114,8 @@ incomplete. A turn-based trial's `run_summary.json` keeps two totals:
   `known_usd` (the sum of the costs known), and `tokens`: the provider's input, output and total
   tokens, each with `total`, `known_total` and `complete`. A call's own retries are not counted.
 
-In the job's report, each task has `known_spend_usd`, `spend_complete` and, when scored,
-`spend_usd`; each group has `mean_spend_usd`, the mean known spend of its scored tasks with
+In a trial's `artifacts/logs/artifacts/report.json`, each task has `known_spend_usd`,
+`spend_complete` and, when scored, `spend_usd`; each group has `mean_spend_usd`, the mean known spend of its scored tasks with
 one, over `spend_tasks` tasks, of which `spend_incomplete_tasks` are incomplete (the mean is
 then a lower bound), and `invalid_known_spend_usd`, the known spend of its invalid tasks.
 `mean_cost_usd` stays the mean over the tasks whose cost is complete. Archived retry attempts
@@ -135,7 +135,7 @@ section is null.
 
 ## Streaming runs
 
-A streaming trial's `run_summary.json`, and each streaming group of the job's report, carry a
+A streaming trial's `run_summary.json`, and each streaming group of its `report.json`, carry a
 `streaming` section: the frames captured, pushed into the live session, dropped (and why) and
 confirmed by the provider; the actions that arrived, the age of the frame each one named and what
 became of each; and the replies started and given up. The episode trace records each frame and
