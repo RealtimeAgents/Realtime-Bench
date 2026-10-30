@@ -707,7 +707,9 @@ def aggregate(job, *, official=False):
     for directory, request in requests.items():
         task_id = request["task"]["task_id"]
         if task_id not in tasks or task_id in seen:
-            raise ValueError("Unexpected or repeated task; retries require a separate job")
+            raise ValueError(
+                "Unexpected or repeated task; a job takes one model and one trial per task"
+            )
         seen.add(task_id)
         system = {k: v for k, v in request.items() if k not in ("task", "suite_tasks")}
         systems.add(json.dumps(system, sort_keys=True))
