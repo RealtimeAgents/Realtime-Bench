@@ -19,8 +19,10 @@ for run in 1 2 3; do
 done
 ```
 
-Submit all three runs as they are. A trial that ends in `error` counts as a failure. The
-leaderboard scores every task over the three runs (pass^k and pass@k).
+Submit all three runs as they are. A trial that ends in `error` counts as a failure. A trial
+that never started, for example because its sandbox failed, leaves the job incomplete.
+`rtbench upload` refuses such a job, so run it again. The leaderboard scores every task over the
+three runs (pass^k and pass@k).
 
 ## Submit to the leaderboard
 
