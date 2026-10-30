@@ -4,24 +4,113 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import sys
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
-from realtime_framework.entity.config import task_seed
+from realtime_framework.entity.config import ModelConfig
+from realtime_framework.entity.config import merge_streaming_settings
+from realtime_framework.entity.context_policy import (
+    CONTEXT_PRESET_OPTION_REMOVED,
+    ContextLayers,
+    legacy_context_error,
+    read_experiment_file,
+)
+from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS
+from realtime_framework.evaluation.run_spec import INTERACTION_MODES
+from realtime_framework.evaluation.run_spec import PLAN_OPTIONS
+from realtime_framework.evaluation.run_spec import PROTOCOLS
+from realtime_framework.evaluation.run_spec import RunSpec
+from realtime_framework.evaluation.run_spec import run_spec
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def positive(value):
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        raise argparse.ArgumentTypeError("must be finite and positive")
-    return number
+LAUNCH_FILE = "wall_clock_launch.json"
+
+
+def runner_arguments(result_root: Path) -> list[str]:
+    """The runner arguments for the launch file in ``result_root``, which gives the runner what
+    it runs (read_launch); the episode's output paths are the runner's own arguments."""
+    return ["--launch", str(result_root / LAUNCH_FILE), "--report-root", str(result_root)]
+
+
+class Launch(NamedTuple):
+    """What a launch file gives the runner (read_launch)."""
+
+    spec: RunSpec
+    model: str  # the catalog key
+    reasoning_effort: str  # as the catalog names it
+    task: str
+    model_config: ModelConfig
+    graphics_mode: str
+    recording_encoder: str
+
+
+def read_launch(path) -> Launch:
+    """The run the launch file at ``path`` gives the runner, as main() writes it: the run
+    options, the model's catalog key and reasoning effort, the task, the model configuration main()
+    resolved, and the desktop's graphics mode and recording encoder."""
+    launch = json.loads(Path(path).read_text())
+    plan = launch["plan"]
+    (model,) = plan["models"]
+    (task,) = plan["tasks"]
+    runtime = plan["runtime"]
+    return Launch(
+        spec=RunSpec(**{option: runtime[option] for option in PLAN_OPTIONS}),
+        model=model["key"],
+        reasoning_effort=model["reasoning_effort"],
+        task=task,
+        # The configuration's dump leaves out its key, which the driver reads from the variable
+        # api_key_env names, and its streaming settings, which a streaming launch file holds merged
+        # over the driver's; merged again, they are the same.
+        model_config=ModelConfig.model_validate(
+            {**launch["model_config"], "streaming": launch.get("streaming", {})}
+        ),
+        graphics_mode=runtime["graphics_mode"],
+        recording_encoder=runtime["recording_encoder"],
+    )
+
+
+def context_settings(arguments: list[str]) -> dict:
+    """The --context KEY=VALUE arguments as settings: each value parsed as JSON, else a string,
+    then checked as a run's settings are (entity/context_policy.py resolve_context)."""
+    settings = {}
+    for argument in arguments:
+        key, separator, text = argument.partition("=")
+        if not separator or not key:
+            raise ValueError(f"--context takes KEY=VALUE, got {argument!r}")
+        try:
+            settings[key] = json.loads(text)
+        except json.JSONDecodeError:
+            settings[key] = text
+    return settings
+
+
+def runner_environment(plan) -> dict:
+    """The variables the runner's fresh interpreter receives before any module-level defaults are
+    loaded: the suite, the desktop's graphics mode and recording encoder, and the lane's."""
+    lane = plan["execution"]["lane"]
+    offset = lane * 1000
+    return {
+        "PYTHONPATH": str(ROOT),
+        "TASK_SUITE": plan["suite"],
+        "SANDBOX_GRAPHICS_MODE": plan["runtime"]["graphics_mode"],
+        "SCREEN_RECORDING_ENCODER": plan["runtime"]["recording_encoder"],
+        "TASK_PORT_OFFSET": str(offset),
+        "SANDBOX_DISPLAY_NUMBER": str(99 + lane),
+        "SANDBOX_CONTAINER": f"streaming-agent-sandbox-L{lane}",
+        "RT_SUITE_CONTAINER": f"rt-realtime-suite-L{lane}",
+        "GUEST_AGENT_PORT": str(6010 + offset),
+        "VNC_PORT": str(6011 + offset),
+        "NOVNC_PORT": str(6012 + offset),
+        "RT_SUITE_PORT": str(6014 + offset),
+    }
 
 
 def main(argv=None):
@@ -53,27 +142,55 @@ def main(argv=None):
         help="Request terminal usage from streaming endpoints (default: on; "
         "--no-include-usage for endpoints that reject stream_options)",
     )
+    parser.add_argument(
+        "--context-file",
+        type=Path,
+        help="Experiment file: a YAML mapping of context settings to values, for every model",
+    )
+    parser.add_argument(
+        "--context",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="A context setting of this run (repeatable; the value is JSON, else a string), over "
+        "the experiment file's and the model YAML's",
+    )
+    # Removed; refused with what replaced it.
+    parser.add_argument("--context-preset", help=argparse.SUPPRESS)
     parser.add_argument("--reasoning-effort", help="Only set if the selected endpoint supports it")
     parser.add_argument(
         "--suite", default="public", help="Task suite NAME or NAME@MAJOR.MINOR (default: public)"
     )
     parser.add_argument("--task", required=True, help="Task ID supplied by Harbor")
-    parser.add_argument("--clock", choices=("wall", "token"), default="wall")
-    parser.add_argument("--tokens-per-frame", default="unlimited")
+    # A run option not given is None, which takes the trial worker's default
+    # (evaluation/run_spec.py).
     parser.add_argument(
-        "--fps",
-        type=positive,
-        default=1.0,
-        help="Observation rate in frames/second (default: 1)",
+        "--clock",
+        choices=tuple(PROTOCOLS),
+        help=f"(default: {ENTRY_DEFAULTS['trial']['clock_mode']})",
+    )
+    parser.add_argument(
+        "--tokens-per-frame", help=f"(default: {ENTRY_DEFAULTS['trial']['tokens_per_frame']})"
+    )
+    parser.add_argument(
+        "--fps", type=float, help="Environment frame rate in frames/second (default: 1)"
+    )
+    parser.add_argument(
+        "--model-input-fps", type=float, help="Frames per second fed to the model (default: --fps)"
+    )
+    parser.add_argument(
+        "--interaction-mode",
+        choices=INTERACTION_MODES,
+        help="One frame per model generation, or frames streamed to a live model (default: "
+        "turn_based)",
     )
     parser.add_argument(
         "--duration-minutes",
         "--max-minutes",
-        type=positive,
-        default=5.0,
+        type=float,
         help="Scored episode horizon in minutes (default: 5)",
     )
-    parser.add_argument("--seed", type=task_seed, default=os.environ.get("SEED", "42"))
+    parser.add_argument("--seed", help="Task seed (default: SEED where it is set)")
     parser.add_argument("--lane", type=int, default=0, help="Port/display isolation lane")
     parser.add_argument(
         "--report-output",
@@ -89,19 +206,35 @@ def main(argv=None):
         "--dry-run", action="store_true", help="Validate and print the plan; no API calls or files"
     )
     args = parser.parse_args(argv)
-    if args.clock == "wall" or args.tokens_per_frame in (None, "unlimited"):
-        tokens_per_frame = None
-    else:
-        try:
-            tokens_per_frame = int(args.tokens_per_frame)
-            if tokens_per_frame <= 0:
-                raise ValueError
-        except (TypeError, ValueError):
-            parser.error("--tokens-per-frame must be positive or 'unlimited'")
+
+    # Past parsing, an error refuses the request the command line parsed into: the reason alone.
+    # argparse's usage text fits only a malformed command line, and a Harbor trial reports this
+    # stderr (harbor.py resolve), where the usage would bury the reason. parser.error itself stays
+    # the way out, which the configuration export's trial probe intercepts (effective_config.py).
+    parser.print_usage = lambda file=None: None
+
+    try:
+        spec = run_spec(
+            "trial",
+            clock_mode=args.clock,
+            tokens_per_frame=args.tokens_per_frame,
+            fps=args.fps,
+            model_input_fps=args.model_input_fps,
+            interaction_mode=args.interaction_mode,
+            duration_minutes=args.duration_minutes,
+            seed=args.seed,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     from realtime_framework.providers.registry import load_project_secrets
 
     load_project_secrets()
     os.environ.setdefault("REALTIMEBENCH_PYTHON", sys.executable)
+    if args.context_preset is not None:
+        parser.error(CONTEXT_PRESET_OPTION_REMOVED)
+    legacy = legacy_context_error(os.environ)
+    if legacy:
+        parser.error(legacy)
     if args.lane < 0 or 9292 + args.lane * 1000 > 65535:
         parser.error("--lane must be between 0 and 56")
     if args.catalog_model:
@@ -162,19 +295,24 @@ def main(argv=None):
     # Import after resolving environment-backed endpoint/model settings.
     import realtime_framework.evaluation.config as _yaml
     import realtime_framework.providers.registry as catalog
-    from realtime_framework.providers.registry import validate_model_interaction
+    from realtime_framework.providers.preflight import check_episode
+    from realtime_framework.providers.preflight import check_token_budget
+    from realtime_framework.providers.preflight import validate_model_interaction
 
     try:
         entry = catalog.get(key)
-        if not entry.benchmark_eligible and os.environ.get("ALLOW_EXPERIMENTAL_MODEL") != "1":
-            parser.error(f"{key} is not eligible for the maintained benchmark")
         effort = args.reasoning_effort or entry.defaults["reasoning_effort"]
         catalog.validate_reasoning_effort(key, effort)
         validate_model_interaction(
             entry.adapter_type,
-            clock_mode=args.clock,
-            fps=args.fps,
-            tokens_per_frame=tokens_per_frame,
+            clock_mode=spec.clock_mode,
+            fps=spec.fps,
+            model_input_fps=spec.model_input_fps,
+            interaction_mode=spec.interaction_mode,
+            tokens_per_frame=spec.tokens_per_frame,
+        )
+        check_token_budget(
+            entry.adapter_type, clock_mode=spec.clock_mode, tokens_per_frame=spec.tokens_per_frame
         )
     except (KeyError, ValueError) as exc:
         parser.error(str(exc))
@@ -192,18 +330,11 @@ def main(argv=None):
     selected = [args.task]
     if selected[0] not in all_tasks:
         parser.error("Task ID must be a member of the selected suite")
-    protocol = "wall-clock" if args.clock == "wall" else "time-aware-token-v1"
     plan = {
         "benchmark_id": "harbor-trial",
         "suite": args.suite,
         "runtime": {
-            "mode": "default",
-            "clock_mode": args.clock,
-            "tokens_per_frame": tokens_per_frame,
-            "fps": args.fps,
-            "duration_minutes": args.duration_minutes,
-            "seed": args.seed,
-            "protocol": protocol,
+            **{option: getattr(spec, option) for option in PLAN_OPTIONS},
             "graphics_mode": os.environ.get("SANDBOX_GRAPHICS_MODE", "cpu"),
             "recording_encoder": os.environ.get("SCREEN_RECORDING_ENCODER", "cpu"),
         },
@@ -221,8 +352,27 @@ def main(argv=None):
             if value:
                 endpoint[field] = value
         plan["models"][0]["endpoint"] = endpoint
+    # The runner looks its task up in the suite TASK_SUITE names (realtime_tasks/registry.py).
+    os.environ["TASK_SUITE"] = args.suite
+    import realtime_tasks.registry as tasks
+
     try:
-        resolved_model = catalog.to_model_config(key, fps=args.fps, reasoning_effort=effort)
+        layers = ContextLayers(run=context_settings(args.context))
+        if args.context_file is not None:
+            experiment_file, experiment = read_experiment_file(args.context_file)
+            layers = replace(layers, experiment=experiment, experiment_file=experiment_file)
+        resolved_model = catalog.to_model_config(
+            key, context=layers, fps=spec.model_input_fps, reasoning_effort=effort
+        )
+        # The pre-run rules, applied here alone: the runner runs the launch file as written, and
+        # Harbor's resolve, the dry run, refuses what a run would.
+        check_episode(
+            resolved_model,
+            clock_mode=spec.clock_mode,
+            task=tasks.get(args.task),
+            env_fps=spec.fps,
+            interaction_mode=spec.interaction_mode,
+        )
     except (OSError, ValueError, ImportError) as exc:
         parser.error(str(exc))
     settings = {
@@ -231,6 +381,14 @@ def main(argv=None):
         "credential_variable": resolved_model.api_key_env or entry.key_env,
         "model_revision": resolved_model.model_revision,
     }
+    if catalog.is_external_driver(entry.adapter_type):
+        # The driver's code, part of the configuration hash (evaluation/config.py).
+        settings["external_driver"] = _yaml.external_driver_identity(entry.adapter_type)
+    if spec.interaction_mode == "streaming":
+        # The settings the run records (evaluation/config.py effective_run_config), part of the
+        # configuration hash.
+        driver = catalog.adapter_class(entry.adapter_type)
+        settings["streaming"] = merge_streaming_settings(driver, resolved_model.streaming)
     if args.dry_run:
         print(json.dumps(settings, indent=2))
         return 0
@@ -258,7 +416,8 @@ def main(argv=None):
     results_base = results_base.resolve()
     results_base.mkdir(parents=True, exist_ok=True)
     for attempt in range(5):
-        result_root = results_base / datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        # To the millisecond: the lanes of a batch on one checkout start trials within a second.
+        result_root = results_base / datetime.now(UTC).strftime("%Y%m%d-%H%M%S-%f")[:-3]
         try:
             result_root.mkdir()
             break
@@ -266,61 +425,22 @@ def main(argv=None):
             if attempt == 4:
                 parser.error("Unable to allocate a unique run timestamp; retry shortly")
             time.sleep(1)
-    (result_root / "wall_clock_launch.json").write_text(json.dumps(settings, indent=2) + "\n")
-    _yaml.dump_yaml(plan, result_root / "plan.yaml")
+    (result_root / LAUNCH_FILE).write_text(json.dumps(settings, indent=2) + "\n")
     if args.run_root_output:
         locator = args.run_root_output.resolve()
         locator.parent.mkdir(parents=True, exist_ok=True)
         locator.write_text(json.dumps({"run_root": str(result_root)}) + "\n")
 
-    # The fresh interpreter receives lane settings before any module-level defaults are loaded.
-    offset = args.lane * 1000
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(ROOT),
-        "TASK_SUITE": args.suite,
-        "SEED": str(args.seed),
-        "CLOCK_MODE": args.clock,
-        "TOKENS_PER_FRAME": str(tokens_per_frame) if tokens_per_frame is not None else "unlimited",
-        "SANDBOX_GRAPHICS_MODE": plan["runtime"]["graphics_mode"],
-        "SCREEN_RECORDING_ENCODER": plan["runtime"]["recording_encoder"],
-        "TASK_PORT_OFFSET": str(offset),
-        "SANDBOX_DISPLAY_NUMBER": str(99 + args.lane),
-        "SANDBOX_CONTAINER": f"streaming-agent-sandbox-L{args.lane}",
-        "RT_SUITE_CONTAINER": f"rt-realtime-suite-L{args.lane}",
-        "GUEST_AGENT_PORT": str(6010 + offset),
-        "VNC_PORT": str(6011 + offset),
-        "NOVNC_PORT": str(6012 + offset),
-        "RT_SUITE_PORT": str(6014 + offset),
-    }
+    env = {**os.environ, **runner_environment(plan)}
     command = [
         entry.python_env,
         "-m",
         "realtime_framework.evaluation.runner",
-        "--model",
-        key,
-        "--task",
-        selected[0],
-        "--clock",
-        args.clock,
-        "--tokens-per-frame",
-        env["TOKENS_PER_FRAME"],
-        "--fps",
-        str(args.fps),
-        "--max-minutes",
-        str(args.duration_minutes),
-        "--seed",
-        str(args.seed),
-        "--reasoning-effort",
-        effort,
-        "--protocol",
-        protocol,
+        *runner_arguments(result_root),
         "--results-dir",
         str(result_root / key),
         "--run-id",
         selected[0].split("__", 1)[-1].replace("/", "_"),
-        "--report-root",
-        str(result_root),
     ]
     if args.report_output:
         command += ["--report-output", str(args.report_output.resolve())]

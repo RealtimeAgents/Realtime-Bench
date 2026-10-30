@@ -5,7 +5,6 @@ from abc import ABC as ABC
 from abc import abstractmethod as abstractmethod
 
 from realtime_framework.entity.actions import Observation
-from realtime_framework.entity.config import DecisionBudget
 
 
 class StreamingAgent(ABC):
@@ -32,17 +31,9 @@ class StreamingAgent(ABC):
         provisional frame must not leak into the first scored decision.
         """
 
-    def configure_decision(self, budget: DecisionBudget) -> None:
-        """Bind model-native generation limits for the next decision."""
-        self._provider_output_token_cap = budget.provider_output_tokens
-        self._transport_output_token_cap = budget.transport_output_tokens
-        self._clock_mode = budget.clock_mode
-
-    def stream_prefill(self, observation: Observation) -> None:
-        raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
-
-    def stream_generate(self, tick: int = 0) -> dict:
-        raise NotImplementedError(f"{type(self).__name__} is not a frame-driven adapter")
+    def abort(self, generation: int) -> None:
+        """Interrupt the event kernel's generation ``generation`` in flight. An adapter with
+        nothing to interrupt does nothing."""
 
 
 from dataclasses import dataclass as dataclass

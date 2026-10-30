@@ -7,59 +7,71 @@ their winners compared in a further Choice. All calls belong to the same wall-cl
 
 from __future__ import annotations
 
-import asyncio
 import json
-import time
+from decimal import Decimal
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.model import (
-    TRANSPORT_RETRY,
     ChoiceContextLimitError,
+    RequestRetry,
     TransportFailureError,
 )
-from realtime_framework.harnesses.jev.composition import (
-    TEXT_COMPOSITION_POLICY,
-    composition_candidates,
-    unicode_candidates,
+from realtime_framework.entity.records import TraceEvent, current_trace_scope, trace_scope
+from realtime_framework.providers.decisions.history import (
+    render_digest,
+    render_transcript,
+    transcript_state,
 )
-from realtime_framework.harnesses.jev.context import compact_ledger_messages
-from realtime_framework.harnesses.jev.game_candidates import (
-    POINTER_COMPOSITION_POLICY,
-    coordinate_choices,
-)
-from realtime_framework.harnesses.jev.prompts import (
+from realtime_framework.providers.decisions.questions import (
     COMPOSE_INSTRUCTIONS,
-    GAME_INSTRUCTIONS,
     GROUP_NOTE,
-    GUI_INSTRUCTIONS,
+    POINTER_COMPOSITION_POLICY,
+    TEXT_COMPOSITION_POLICY,
     UNICODE_INSTRUCTIONS,
+    composition_candidates,
+    coordinate_choices,
+    unicode_candidates,
 )
 
 SELECTION_POLICY = "exhaustive_groups_255_provider_split_then_winners_pointer_v6"
 
 
 class ChoiceDecision:
-    """Resolve one observation's candidates into one executable action, with a full trace."""
+    """Resolve one observation's candidates into one executable action, with a full trace.
 
-    def __init__(self, client, observation_state, messages):
+    Everything comes from the canonical request: the candidates and the root question's
+    instructions from its answer requirements, the material of the follow-up questions from its
+    selection material, and the history from its blocks, rendered as Decisions state.
+    """
+
+    def __init__(self, client, request, *, trace, clock=None):
         self.client = client
-        self.observation = observation_state
-        # Canonical replay is already bounded by the runtime's retention and context checks.
-        self.canonical = client.capabilities.history_replay == "canonical"
-        self.history = list(messages) if self.canonical else compact_ledger_messages(messages)
+        self.trace = trace
+        self.clock = clock or SystemClock()
+        self.choice = request.answer.choice
+        self.selection = request.selection
+        self.digest = request.history_form == "action_digest"
+        self.policy_version = request.policy.version
+        # Bounded before the request by the runtime's retention and context checks; every
+        # question of the decision sends it unchanged.
+        self.history = render_digest(request) if self.digest else render_transcript(request)
         self.calls = []
         self.retries = []
         self.context_splits = []
-        self.history_reductions = []
-        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        # The cost is the provider's, in USD; a decision that asks nothing costs a known 0.
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cost": 0.0}
 
     async def run(self) -> dict:
-        candidates = self.observation["candidates"]
+        candidates = {
+            key: {"description": c.description, "action": c.action, "audit": c.audit}
+            for key, c in self.choice.candidates
+        }
         if not candidates:
             raise ValueError("JEV requires at least one candidate action")
-        instructions = GAME_INSTRUCTIONS if self.observation.get("game_choices") else GUI_INSTRUCTIONS
-        choice = await self._choose(candidates, instructions, phase="gui_action")
-        # The deciding action-choice call; composition calls that follow stay in jev_calls.
-        decisive = self.calls[-1]
+        choice = await self._choose(candidates, self.choice.instructions, phase="gui_action")
+        # The deciding action-choice call, none for a lone candidate; composition calls that
+        # follow stay in jev_calls.
+        decisive = self.calls[-1] if self.calls else None
         action = candidates[choice]["action"]
         composition = None
         pointer_composition = None
@@ -73,8 +85,8 @@ class ChoiceDecision:
         return {
             "action": action,
             "usage": self.usage,
-            "jev_response": decisive["response"],
-            "jev_question": decisive["question"],
+            "jev_response": decisive["response"] if decisive else None,
+            "jev_question": decisive["question"] if decisive else None,
             "jev_calls": self.calls,
             "candidate_count": len(candidates),
             "candidate_criteria_bytes": sum(
@@ -84,13 +96,12 @@ class ChoiceDecision:
             "selected_candidate": choice,
             "selected_candidate_audit": candidates[choice].get("audit"),
             "context_splits": self.context_splits,
-            "history_reductions": self.history_reductions,
-            "observation_id": self.observation["observation_id"],
+            "observation_id": self.selection.observation_id,
             "retries": self.retries,
             "text_composition": composition,
             "pointer_composition": pointer_composition,
             "key_composition": key_composition,
-            "candidate_policy": self.observation.get("candidate_policy"),
+            "candidate_policy": self.choice.candidate_policy,
         }
 
     async def _compose_hold(self, spec):
@@ -151,44 +162,57 @@ class ChoiceDecision:
         """Compare every remaining candidate; winners of separate groups meet in a new Choice.
 
         Groups use the client's option boundary. A context rejection bisects that group
-        losslessly. Probabilities are never compared across different questions.
+        losslessly. A group of one wins without a question: there is nothing to choose, and
+        OpenAI's upstream refuses a question with fewer than two options. Probabilities are never
+        compared across different questions.
         """
         remaining = list(candidates)
         round_index = 0
         while True:
             winners = []
-            size = self.client.max_choices
+            size = self.client.capabilities.max_choices
             groups = [remaining[start : start + size] for start in range(0, len(remaining), size)]
             group_index = 0
             while groups:
                 group = groups.pop(0)
+                if len(group) == 1:
+                    winners.extend(group)
+                    group_index += 1
+                    continue
                 question = {
                     "type": "choice",
                     "instructions": instructions + (GROUP_NOTE if len(group) < len(remaining) else ""),
                     "criteria": {key: candidates[key]["description"] for key in group},
                 }
-                started = time.monotonic()
+                started = self.clock.monotonic()
+                question_scope = {
+                    "choice_phase": phase,
+                    "round": round_index,
+                    "group": group_index,
+                    "question": len(self.calls),
+                }
                 try:
-                    reply = await self._ask(question, phase=phase, text_state=text_state)
+                    with trace_scope(choice=question_scope):
+                        reply = await self._ask(question, phase=phase, text_state=text_state)
                 except ChoiceContextLimitError:
-                    if len(group) == 1:
-                        raise
                     middle = len(group) // 2
                     self.context_splits.append(
                         {
                             "phase": phase,
                             "round": round_index,
                             "candidates": list(group),
-                            "latency_s": time.monotonic() - started,
+                            "latency_s": self.clock.monotonic() - started,
                         }
                     )
+                    self._history_changed("choice_candidate_split", self.context_splits[-1])
                     groups[0:0] = [group[:middle], group[middle:]]
                     continue
                 choice = reply.answer.get("choice")
                 if reply.answer.get("type") != "choice" or choice not in group:
                     raise ValueError("JEV returned an action outside the current candidate group")
-                for key in self.usage:
+                for key in ("input_tokens", "output_tokens"):
                     self.usage[key] += reply.usage[key]
+                self._add_cost(reply.usage.get("cost"))
                 self.calls.append(
                     {
                         "phase": phase,
@@ -196,7 +220,7 @@ class ChoiceDecision:
                         "group": group_index,
                         "question": question,
                         "response": reply.response,
-                        "latency_s": time.monotonic() - started,
+                        "latency_s": self.clock.monotonic() - started,
                         **({"text_state": dict(text_state)} if text_state is not None else {}),
                     }
                 )
@@ -211,74 +235,147 @@ class ChoiceDecision:
             remaining = winners
             round_index += 1
 
-    async def _ask(self, question, *, phase, text_state=None):
-        """Ask one question; if even one option overflows a digest, drop its oldest history.
+    def _add_cost(self, cost) -> None:
+        """Add an answered question's cost to the decision's, summed as decimals so that it
+        carries no float error. A question that reports none leaves it unknown."""
+        if "cost" not in self.usage:
+            return
+        if type(cost) not in (int, float):
+            del self.usage["cost"]
+            return
+        self.usage["cost"] = float(Decimal(str(self.usage["cost"])) + Decimal(str(cost)))
 
-        The digest state is [system, *older history, current observation]. The current observation
-        and instructions are never removed; every reduction is recorded. Canonical history is
-        never reduced here: the runtime archives it before the request.
-        """
-        history = list(self.history)
-        while True:
-            state = {"history": history}
-            if self.observation.get("images"):
-                state["images"] = self.observation["images"]
+    async def _ask(self, question, *, phase, text_state=None):
+        """Ask one question over the decision's history, plus this question's own state."""
+        if self.digest:
+            state = {"history": self.history}
             if text_state is not None:
                 state["text_composition"] = text_state
-            try:
-                return await self._decide_with_retries(state, question, phase=phase)
-            except ChoiceContextLimitError:
-                droppable = len(history) - 2
-                if self.canonical or len(question["criteria"]) > 1 or droppable <= 0:
-                    raise
-                removed = max(1, droppable // 2)
-                history = [history[0], *history[1 + removed :]]
-                self.history_reductions.append(
-                    {"phase": phase, "removed_messages": removed, "remaining": len(history)}
-                )
+        else:
+            extra = {} if text_state is None else {"text_composition": text_state}
+            state = transcript_state(self.history, extra)
+        return await self._decide_with_retries(state, question, phase=phase)
+
+    def _history_changed(self, kind, choice):
+        """Record a context-limit fallback; the candidate split has no context-policy item yet."""
+        self.trace.capture(
+            TraceEvent.HISTORY_CHANGED,
+            {
+                "kind": kind,
+                "trigger": "fallback",
+                "policy_item": None,
+                "policy_version": self.policy_version,
+                "choice": choice,
+            },
+        )
+
+    @staticmethod
+    def _attempt_scope(transport_attempt):
+        return trace_scope(
+            choice={**current_trace_scope()["choice"], "transport_attempt": transport_attempt}
+        )
+
+    def _attempt_finished(
+        self,
+        transport_attempt,
+        started,
+        question,
+        outcome,
+        *,
+        reply=None,
+        error=None,
+        failure=None,
+        delay=None,
+    ):
+        """One ModelAttemptFinished per question attempt of the per-question retry, and one for
+        the attempt a cancellation stopped: under way, timed from its start, or before it was
+        sent, without one."""
+        payload = {
+            "kind": "choice_question",
+            "outcome": outcome,
+            "failure_kind": failure.kind if failure is not None else None,
+            "error": repr(error)[:300] if error is not None else None,
+            "retry_delay_s": delay,
+            "criteria_count": len(question["criteria"]),
+            "answer": (
+                {name: reply.answer.get(name) for name in ("choice", "probabilities", "confidence")}
+                if reply is not None
+                else None
+            ),
+            "usage": reply.usage if reply is not None else None,
+            "latency_s": self.clock.monotonic() - started if started is not None else None,
+        }
+        with self._attempt_scope(transport_attempt):
+            self.trace.capture(TraceEvent.MODEL_ATTEMPT_FINISHED, payload)
 
     async def _decide_with_retries(self, state, question, *, phase):
         """One question under the shared transport retry policy; each attempt is recorded."""
-        key = f"{self.observation['observation_id']}:{len(self.calls)}"
-        retry = 0
-        while True:
+        started = sent = None
+
+        async def send(attempt):
+            nonlocal started, sent
+            started, sent = self.clock.monotonic(), attempt
             try:
-                return await self.client.decide(state, question)
-            except ChoiceContextLimitError:
+                with self._attempt_scope(attempt):
+                    reply = await self.client.decide(state, question)
+            except ChoiceContextLimitError as exc:
+                self._attempt_finished(attempt, started, question, "context_limit", error=exc)
                 raise
-            except Exception as exc:
-                retry += 1
-                failure = self.client.classify_transport_error(exc)
-                delay = TRANSPORT_RETRY.delay_s(retry, key, failure)
-                if delay is None:
-                    # Name the question so an error report shows which step failed.
-                    cause = RuntimeError(f"{phase} question {len(self.calls)}: {exc!r}")
-                    raise TransportFailureError(failure, cause, retry - 1) from exc
-                self.retries.append(
-                    {
-                        "call": len(self.calls),
-                        "phase": phase,
-                        "kind": failure.kind,
-                        "delay_s": delay,
-                        "detail": repr(exc)[:300],
-                    }
-                )
-                await asyncio.sleep(delay)
+            self._attempt_finished(attempt, started, question, "ok", reply=reply)
+            return reply
+
+        def classify(exc):
+            if isinstance(exc, ChoiceContextLimitError):
+                return None
+            return self.client.classify_question_error(exc)
+
+        def record(attempt, exc, failure, delay):
+            self._attempt_finished(
+                attempt,
+                started,
+                question,
+                "failed" if delay is None else "retry",
+                error=exc,
+                failure=failure,
+                delay=delay,
+            )
+            if delay is None:
+                # Name the question so an error report shows which step failed.
+                cause = RuntimeError(f"{phase} question {len(self.calls)}: {exc!r}")
+                raise TransportFailureError(failure, cause, attempt - 1) from exc
+            self.retries.append(
+                {
+                    "call": len(self.calls),
+                    "phase": phase,
+                    "kind": failure.kind,
+                    "delay_s": delay,
+                    "detail": repr(exc)[:300],
+                }
+            )
+
+        def cancelled(attempt, exc):
+            # Stopped in its backoff, the attempt was never sent: the start is the one before's.
+            start = started if sent == attempt else None
+            self._attempt_finished(attempt, start, question, "cancelled", error=exc)
+
+        key = f"{self.trace.attempt_id}:{self.selection.observation_id}:{len(self.calls)}"
+        retry = RequestRetry(key, classify, record, cancelled=cancelled, clock=self.clock)
+        return await retry.run_async(send)
 
     async def _compose_text(self):
-        inventory = self.observation.get("text_composition")
-        if not inventory or not self.observation.get("focused_input"):
+        inventory = self.selection.text_composition
+        if not inventory or not self.selection.focused_input:
             raise ValueError("JEV text composition requires a focused observation-bound input")
         candidates = composition_candidates(inventory)
         draft, edits = "", []
-        started = time.monotonic()
+        started = self.clock.monotonic()
         # No forced completion, repetition guard or answer repair. The runtime/harness
         # deadline bounds this generation, exactly as it bounds a generative model's output.
         while True:
             state = {
                 "draft": draft,
                 "step": len(edits),
-                "focused_input": self.observation["focused_input"],
+                "focused_input": self.selection.focused_input,
             }
             choice = await self._choose(
                 candidates, COMPOSE_INSTRUCTIONS, phase="text_edit", text_state=state
@@ -322,5 +419,5 @@ class ChoiceDecision:
                     "draft": draft,
                     "edits": edits,
                     "candidate_count": len(candidates),
-                    "latency_s": time.monotonic() - started,
+                    "latency_s": self.clock.monotonic() - started,
                 }

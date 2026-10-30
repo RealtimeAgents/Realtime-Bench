@@ -3,3 +3,7 @@ endpoint:
   model: typesafe/jev-1.13
   api_key_env: OPENROUTER_API_KEY
 reasoning_effort: fixed
+context:
+  observation: observation_json_text
+  execution_feedback: digest
+  decision_history: action_digest

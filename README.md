@@ -21,6 +21,9 @@ uv sync
 cp .env.example .env   # then add your provider's API key
 ```
 
+Run it from this checkout with `uv`. Installing it as a package, for example with `pip install .`,
+is not supported.
+
 Run any screenshot-capable model by its LiteLLM `provider/model-id`, then view the results. The
 first run builds the task images, which takes a while:
 

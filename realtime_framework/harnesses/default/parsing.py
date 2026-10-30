@@ -16,26 +16,31 @@ import shlex as shlex
 import xml.etree.ElementTree as ET
 from collections.abc import Callable as Callable
 from dataclasses import dataclass as dataclass
+from typing import Any as Any
 
 from realtime_framework.entity.actions import Action
+from realtime_framework.entity.actions import ActionTranslator
 
 logger = logging.getLogger(__name__)
 
-_ACTION_KEYS = frozenset(
-    {
-        "action",
-        "action_name",
-        "action_type",
-        "name",
-        "tool",
-        "tool_name",
-        "command",
-        "operation",
-        "function",
-        "function_call",
-        "tool_call",
-    }
+# The fields that name an action, in the order an action object's name is read from them.
+_SELECTOR_KEYS = (
+    "action",
+    "action_name",
+    "action_type",
+    "name",
+    "tool",
+    "tool_name",
+    "command",
+    "operation",
 )
+# The fields that hold a function call's object, in the order one is read from them.
+_FUNCTION_KEYS = ("function_call", "function", "tool_call")
+_ACTION_KEYS = frozenset({*_SELECTOR_KEYS, *_FUNCTION_KEYS})
+# The fields that hold an action's parameters.
+_PARAMETER_KEYS = ("arguments", "parameters", "params", "args", "input", "tool_input")
+# Transport envelopes whose one item is the action.
+_ENVELOPE_KEYS = ("actions", "tool_calls", "calls", "output", "response", "result", "content")
 _CANONICAL_ACTION_NAMES = frozenset(
     {
         "click",
@@ -55,6 +60,16 @@ _CANONICAL_ACTION_NAMES = frozenset(
         "fail",
     }
 )
+# The names an action object may give its action: the canonical ones, and the others
+# ActionTranslator maps (entity/actions.py).
+_KNOWN_ACTION_NAMES = _CANONICAL_ACTION_NAMES | {
+    "left_click",
+    "press",
+    "hotkey",
+    "keypress",
+    "mouse_move",
+    "give_up",
+}
 _CANONICAL_FIELDS = frozenset(
     {
         "action",
@@ -78,6 +93,8 @@ _CANONICAL_FIELDS = frozenset(
         "dy",
     }
 )
+# A streaming action also names the frame it is based on.
+_FRAMED_CANONICAL_FIELDS = _CANONICAL_FIELDS | {"frame"}
 _FENCE_RE = re.compile(
     r"^\s*```(?:json|javascript|js|python|yaml|yml|xml)?\s*(.*?)\s*```\s*$",
     re.IGNORECASE | re.DOTALL,
@@ -116,6 +133,11 @@ def _literal_object(body):
     return ast.literal_eval(tree)
 
 
+def _snake(name: str) -> str:
+    """``name`` in snake case: camelCase humps, spaces and hyphens become underscores."""
+    return re.sub(r"[\s-]+", "_", re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)).lower()
+
+
 def _unwrap_action(value: object, depth: int = 0) -> dict | None:
     """Recognized transport envelopes only; never select the first of several actions."""
     if depth > 8:
@@ -133,11 +155,7 @@ def _unwrap_action(value: object, depth: int = 0) -> dict | None:
         return value
     if isinstance(value.get("type"), str) and value["type"] in _CANONICAL_ACTION_NAMES:
         return {"action": value["type"], **{k: v for k, v in value.items() if k != "type"}}
-    containers = [
-        key
-        for key in ("actions", "tool_calls", "calls", "output", "response", "result", "content")
-        if key in value
-    ]
+    containers = [key for key in _ENVELOPE_KEYS if key in value]
     if len(containers) == 1:
         return _unwrap_action(value[containers[0]], depth + 1)
     return None
@@ -180,25 +198,18 @@ def _balanced_object_strings(text: str):
 def _looks_like_action_object(value: object) -> bool:
     if not isinstance(value, dict):
         return False
-    keys = {
-        re.sub(
-            r"[\s-]+",
-            "_",
-            re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key).strip()),
-        ).lower()
-        for key in value
-    }
+    keys = {_snake(str(key).strip()) for key in value}
     return bool(keys & (_ACTION_KEYS | _CANONICAL_ACTION_NAMES))
 
 
-def _is_canonical_json_action(value: object) -> bool:
+def _is_canonical_json_action(value: object, fields: frozenset) -> bool:
     if (
         not isinstance(value, dict)
         or not isinstance(value.get("action"), str)
         or value["action"] not in _CANONICAL_ACTION_NAMES
     ):
         return False
-    if not set(value) <= _CANONICAL_FIELDS:
+    if not set(value) <= fields:
         return False
     for key in ("target", "start", "end"):
         if key in value and not isinstance(value[key], str):
@@ -226,9 +237,7 @@ def _structured_object_candidate(
     value = _unwrap_action(original)
     if value is None:
         if isinstance(original, list) or (
-            isinstance(original, dict)
-            and set(original)
-            & {"actions", "tool_calls", "calls", "output", "response", "result", "content"}
+            isinstance(original, dict) and set(original).intersection(_ENVELOPE_KEYS)
         ):
             return _Candidate(json.dumps(original, ensure_ascii=False), "invalid_envelope")
         return None
@@ -383,11 +392,7 @@ def _function_call_object(text: str) -> dict | None:
     except (TypeError, ValueError):
         return None
 
-    normalized_name = re.sub(
-        r"[\s-]+",
-        "_",
-        re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", action_name.strip()),
-    ).lower()
+    normalized_name = _snake(action_name.strip())
     if (
         normalized_name == "hotkey"
         and positional
@@ -614,6 +619,353 @@ def _text_candidates(text: str):
             )
 
 
+def _load_action_object(value: str) -> dict | None:
+    try:
+        parsed = json.loads(value, object_pairs_hook=unique_object)
+    except (ValueError, RecursionError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _normalized_action_name(value: object) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    # The last segment of a dotted or slashed name, not stripped again.
+    name = _snake(re.split(r"[./]", value.strip())[-1])
+    aliases = {
+        "tap": "click",
+        "click_at": "click",
+        "leftclick": "left_click",
+        "rightclick": "right_click",
+        "doubleclick": "double_click",
+        "tripleclick": "triple_click",
+        "mousedown": "mouse_down",
+        "mouseup": "mouse_up",
+        "mousemove": "mouse_move",
+        "press_key": "key",
+        "key_press": "key",
+        "send_keys": "key",
+        "type_text": "type",
+        "input_text": "type",
+        "typewrite": "type",
+        "write": "type",
+        "move_to": "move",
+        "holdkey": "hold_key",
+        "press_and_hold": "hold_key",
+        "finish": "done",
+        "finished": "done",
+        "complete": "done",
+        "completed": "done",
+    }
+    return aliases.get(name, name)
+
+
+def _normalized_field_name(value: object) -> str:
+    return _snake(str(value).strip())
+
+
+def _normalize_action_key_shorthand(data: dict) -> dict:
+    """Expand shorthand ``{"click": "P1"}`` action objects.
+
+    Some text checkpoints follow the one-action constraint but serialize the verb as the
+    object's key instead of putting it in an ``action`` field.  Accept that form only when
+    exactly one known verb key is present, then translate its value conservatively into the
+    canonical field for that verb.  Keeping this at the adapter boundary leaves the core
+    action and executor contracts unchanged.
+    """
+    lowered = {_normalized_field_name(key): value for key, value in data.items()}
+    if _normalized_action_name(lowered.get("type")) in _KNOWN_ACTION_NAMES and len(lowered) > 1:
+        return data
+    if set(lowered) & _ACTION_KEYS:
+        return data
+
+    action_keys = [key for key in lowered if _normalized_action_name(key) in _KNOWN_ACTION_NAMES]
+    if len(action_keys) != 1:
+        return data
+
+    action_key = action_keys[0]
+    action_name = _normalized_action_name(action_key)
+    payload = lowered.pop(action_key)
+    parameters: dict = {}
+
+    if isinstance(payload, dict):
+        parameters = {_normalized_field_name(key): value for key, value in payload.items()}
+    elif action_name in {
+        "click",
+        "left_click",
+        "right_click",
+        "double_click",
+        "triple_click",
+        "mouse_down",
+        "mouse_up",
+        "move",
+        "mouse_move",
+    }:
+        if isinstance(payload, str):
+            parameters["target"] = payload
+        elif isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters["coordinate"] = list(payload)
+        elif payload is not None:
+            return data
+    elif action_name == "type":
+        if not isinstance(payload, str):
+            return data
+        parameters["text"] = payload
+    elif action_name in {"key", "press", "hotkey", "keypress", "hold_key"}:
+        if isinstance(payload, str):
+            parameters["key"] = payload
+        elif isinstance(payload, (list, tuple)):
+            parameters["keys"] = list(payload)
+        else:
+            return data
+    elif action_name == "scroll":
+        if isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters.update({"dx": payload[0], "dy": payload[1]})
+        elif payload is not None:
+            return data
+    elif action_name == "drag":
+        if isinstance(payload, (list, tuple)) and len(payload) == 2:
+            parameters.update({"start": payload[0], "end": payload[1]})
+        elif payload is not None:
+            return data
+    elif action_name == "wait":
+        if isinstance(payload, (int, float)) and not isinstance(payload, bool):
+            parameters["duration"] = payload
+        elif payload not in (None, True):
+            return data
+    elif action_name in {"done", "fail", "give_up"}:
+        if payload not in (None, True):
+            return data
+    elif payload is not None:
+        return data
+
+    if set(parameters) & set(lowered):
+        return data
+    return {"action": action_name, **lowered, **parameters}
+
+
+def _normalize_action_object(data: dict) -> dict | None:
+    """Flatten common JSON/tool envelopes into the canonical action object."""
+    data = _normalize_action_key_shorthand(data)
+    lowered = {_normalized_field_name(key): value for key, value in data.items()}
+    if len(lowered) != len(data):
+        return None
+    if "type" in lowered and _normalized_action_name(lowered["type"]) in _KNOWN_ACTION_NAMES:
+        if "action" in lowered and _normalized_action_name(
+            lowered["action"]
+        ) != _normalized_action_name(lowered["type"]):
+            return None
+        lowered.setdefault("action", lowered.pop("type"))
+    selectors = [lowered[k] for k in _SELECTOR_KEYS if isinstance(lowered.get(k), str)]
+    if len({_normalized_action_name(value) for value in selectors}) > 1:
+        return None
+    nested = None
+    if sum(isinstance(lowered.get(key), dict) for key in _FUNCTION_KEYS) > 1:
+        return None
+    for key in _FUNCTION_KEYS:
+        if isinstance(lowered.get(key), dict):
+            nested = lowered[key]
+            break
+    action_value = next(
+        (lowered[key] for key in _SELECTOR_KEYS if key in lowered),
+        None,
+    )
+    if isinstance(action_value, dict):
+        nested = action_value
+        action_value = None
+    top_action_name = _normalized_action_name(action_value)
+    if nested is not None:
+        nested_lowered = {_normalized_field_name(key): value for key, value in nested.items()}
+        nested_selectors = [
+            nested_lowered[key]
+            for key in _SELECTOR_KEYS
+            if isinstance(nested_lowered.get(key), str)
+        ]
+        if len({_normalized_action_name(value) for value in nested_selectors}) > 1:
+            return None
+        nested_action_value = next(
+            (nested_lowered[key] for key in _SELECTOR_KEYS if key in nested_lowered),
+            None,
+        )
+        nested_action_name = _normalized_action_name(nested_action_value)
+        if (
+            top_action_name in _KNOWN_ACTION_NAMES
+            and nested_action_name in _KNOWN_ACTION_NAMES
+            and top_action_name != nested_action_name
+        ):
+            return None
+        action_name = (
+            nested_action_name
+            if nested_action_name in _KNOWN_ACTION_NAMES
+            else top_action_name or nested_action_name
+        )
+    else:
+        nested_lowered = {}
+        action_name = top_action_name
+
+    if action_name is None:
+        return None
+
+    reserved = {*_ACTION_KEYS, "type", "id", "call_id", *_PARAMETER_KEYS}
+    parameters = {key: value for key, value in lowered.items() if key not in reserved}
+    nested_parameters = {key: value for key, value in nested_lowered.items() if key not in reserved}
+    if any(
+        key in parameters and parameters[key] != value for key, value in nested_parameters.items()
+    ):
+        return None
+    parameters.update(nested_parameters)
+    containers = [
+        source[key]
+        for source in (nested_lowered, lowered)
+        for key in _PARAMETER_KEYS
+        if key in source
+    ]
+    if len(containers) > 1:
+        return None
+    parameter_container = next(
+        (
+            source[key]
+            for source in (nested_lowered, lowered)
+            for key in _PARAMETER_KEYS
+            if key in source
+        ),
+        None,
+    )
+    if isinstance(parameter_container, str):
+        try:
+            parameter_container = json.loads(parameter_container, object_pairs_hook=unique_object)
+        except (TypeError, ValueError):
+            try:
+                parameter_container = _literal_object(parameter_container)
+            except (SyntaxError, ValueError, TypeError, RecursionError):
+                return None
+    if parameter_container is not None:
+        if not isinstance(parameter_container, dict):
+            return None
+        supplied = {
+            _normalized_field_name(key): value for key, value in parameter_container.items()
+        }
+        if any(key in parameters and parameters[key] != value for key, value in supplied.items()):
+            return None
+        parameters.update(supplied)
+    if "action" in parameters:
+        inner_name = _normalized_action_name(parameters.pop("action"))
+        if action_name in _KNOWN_ACTION_NAMES and inner_name != action_name:
+            return None
+        action_name = inner_name
+
+    field_aliases = {
+        "coordinates": "coordinate",
+        "coords": "coordinate",
+        "position": "coordinate",
+        "location": "coordinate",
+        "point": "coordinate",
+        "target_id": "target",
+        "reference": "target",
+        "ref": "target",
+        "duration_seconds": "duration",
+        "seconds": "duration",
+        "text_to_type": "text",
+        "delta_x": "dx",
+        "delta_y": "dy",
+    }
+    normalized_parameters = {}
+    for key, value in parameters.items():
+        key = field_aliases.get(key, key)
+        if key in normalized_parameters and normalized_parameters[key] != value:
+            return None
+        normalized_parameters[key] = value
+    parameters = normalized_parameters
+    duration_ms = parameters.pop("duration_ms", None)
+    if "duration" not in parameters and isinstance(duration_ms, (int, float, str)):
+        try:
+            parameters["duration"] = float(duration_ms) / 1000
+        except ValueError:
+            parameters["duration"] = duration_ms
+    if action_name == "type" and "text" not in parameters and "value" in parameters:
+        parameters["text"] = parameters.pop("value")
+    if isinstance(parameters.get("keys"), str) and "key" not in parameters:
+        parameters["key"] = parameters.pop("keys")
+    coordinate = parameters.get("coordinate")
+    if isinstance(coordinate, dict):
+        coordinate = {_normalized_field_name(key): value for key, value in coordinate.items()}
+        if "x" in coordinate and "y" in coordinate:
+            parameters.pop("coordinate")
+            parameters.setdefault("x", coordinate["x"])
+            parameters.setdefault("y", coordinate["y"])
+    if action_name == "drag":
+        for field, x_field, y_field in (
+            ("start", "x1", "y1"),
+            ("end", "x2", "y2"),
+        ):
+            point = parameters.get(field)
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                parameters.pop(field)
+                parameters.setdefault(x_field, point[0])
+                parameters.setdefault(y_field, point[1])
+            elif isinstance(point, dict):
+                point = {_normalized_field_name(key): value for key, value in point.items()}
+                if "x" in point and "y" in point:
+                    parameters.pop(field)
+                    parameters.setdefault(x_field, point["x"])
+                    parameters.setdefault(y_field, point["y"])
+
+    for key in (
+        "x",
+        "y",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "dx",
+        "dy",
+        "duration",
+        "repeat",
+    ):
+        value = parameters.get(key)
+        if not isinstance(value, str):
+            continue
+        try:
+            number = float(value)
+        except ValueError:
+            continue
+        parameters[key] = int(number) if number.is_integer() else number
+    for key in ("button", "modifier"):
+        if isinstance(parameters.get(key), str):
+            parameters[key] = parameters[key].strip().lower()
+    return {"action": action_name, **parameters}
+
+
+def _action_object(content: str) -> dict | None:
+    if not content:
+        return None
+    loaded = _load_action_object(content)
+    data = _normalize_action_object(loaded) if loaded is not None else None
+    if data is None or data.get("action") not in _KNOWN_ACTION_NAMES:
+        return None
+    return data
+
+
+def text_action(body: str, *, framed: bool) -> tuple[Action | None, object]:
+    """The action one body of text output reads as and, ``framed`` (a streaming action), the value
+    of its frame field: the frame it is based on. Unframed, a frame field stays one of the action's
+    fields, which no action takes."""
+    data = _action_object(body)
+    if data is None:
+        return None, None
+    reference = data.pop("frame", None) if framed else None
+    return ActionTranslator.from_json(data), reference
+
+
+def structured_action(body: str) -> tuple[Action | None, object]:
+    """The action of a function call or a Decision's choice, from the JSON action object its
+    channel gave (FunctionCallTurnCollector, the streaming agent's calls, the Decision encoder's
+    choice), and the value of its frame field."""
+    data = json.loads(body)
+    reference = data.pop("frame", None)
+    return ActionTranslator.from_json(data), reference
+
+
 def _action_key(action: Action) -> str:
     parameters = dict(action.parameters)
     defaults = {
@@ -637,56 +989,87 @@ def _action_key(action: Action) -> str:
 from realtime_framework.entity.harness import Decision as ActionOutputResolution
 
 
+@dataclass(frozen=True)
+class ResolvedOutput:
+    """The one action resolved from model output, and what grounding made of the action of each
+    body that read as one, in the order they were tried: the one the action is, and all of them."""
+
+    decision: ActionOutputResolution
+    chosen: Any = None  # the grounding whose action the decision holds; None unless it is valid
+    parses: tuple = ()
+
+
 def resolve_action_output(
     content: str,
-    parse_action: Callable[[str], Action | None],
-) -> ActionOutputResolution:
-    """Resolve one unambiguous action from canonical or commonly wrapped model output."""
+    ground: Callable[[Action, object], Any],
+    *,
+    framed: bool = False,
+) -> ResolvedOutput:
+    """Resolve one unambiguous action from canonical or commonly wrapped text output. Each body
+    tried is read as text_action reads it. ``ground(action, reference)`` is what the caller makes
+    of the action a body reads as and of the value of its frame field (None unless ``framed``):
+    its ``action`` is the action as grounded, None when it cannot be, as an action naming marks
+    its frame lacks, and the body is then a rejected candidate. ``framed``: a streaming action,
+    whose canonical form also carries its frame field."""
     text = (content or "").strip()
     if len(text) > 1_000_000:
-        return ActionOutputResolution(
-            action=Action.wait(),
-            action_text=None,
-            valid=False,
-            protocol_failure="action_output_too_large",
+        return ResolvedOutput(
+            ActionOutputResolution(
+                action=Action.wait(),
+                action_text=None,
+                valid=False,
+                protocol_failure="action_output_too_large",
+            )
         )
     if not text:
-        return ActionOutputResolution(
-            action=Action.wait(),
-            action_text=None,
-            valid=False,
-            protocol_failure="empty_action_output",
+        return ResolvedOutput(
+            ActionOutputResolution(
+                action=Action.wait(),
+                action_text=None,
+                valid=False,
+                protocol_failure="empty_action_output",
+            )
         )
+    parses = []
 
     def safe_parse(body):
+        """The grounding of the action a body reads as, if it grounds to an action, else None."""
         try:
-            return parse_action(body)
+            asked, reference = text_action(body, framed=framed)
+            parsed = None if asked is None else ground(asked, reference)
         except (ValueError, TypeError, KeyError, RecursionError):
             return None
+        if parsed is None:
+            return None
+        parses.append(parsed)
+        return parsed if parsed.action is not None else None
 
-    action = safe_parse(text)
-    if action is not None:
+    chosen = safe_parse(text)
+    if chosen is not None:
         try:
             complete_value = json.loads(text)
         except (TypeError, ValueError):
             complete_value = None
-        canonical = _is_canonical_json_action(complete_value)
-        return ActionOutputResolution(
-            action=action,
+        canonical = _is_canonical_json_action(
+            complete_value, _FRAMED_CANONICAL_FIELDS if framed else _CANONICAL_FIELDS
+        )
+        decision = ActionOutputResolution(
+            action=chosen.action,
             action_text=text,
             valid=True,
             parse_mode="canonical_json" if canonical else "json_envelope",
             candidate_count=1,
         )
+        return ResolvedOutput(decision, chosen, tuple(parses))
 
     # A complete literal call/shorthand is authoritative, including JSON *inside* text to type.
     whole_action = _shorthand_object(text)
     if whole_action is not None:
         serialized = json.dumps(whole_action, ensure_ascii=False)
-        recovered = safe_parse(serialized)
-        if recovered is not None:
-            return ActionOutputResolution(
-                action=recovered,
+        chosen = safe_parse(serialized)
+        if chosen is not None:
+            decision = ActionOutputResolution(
+                action=chosen.action,
                 action_text=serialized,
                 valid=True,
                 parse_mode="function_call"
@@ -694,8 +1077,9 @@ def resolve_action_output(
                 else "text_shorthand",
                 candidate_count=1,
             )
+            return ResolvedOutput(decision, chosen, tuple(parses))
 
-    candidates: list[tuple[_Candidate, Action]] = []
+    candidates: list[tuple[_Candidate, Any]] = []
     seen_text: set[str] = set()
     try:
         decoded = (*_structured_candidates(text), *_text_candidates(text))
@@ -712,18 +1096,19 @@ def resolve_action_output(
         else:
             rejected_candidate = True
 
-    unique: dict[str, tuple[_Candidate, Action]] = {}
+    unique: dict[str, tuple[_Candidate, Any]] = {}
     for candidate, recovered in candidates:
-        unique.setdefault(_action_key(recovered), (candidate, recovered))
+        unique.setdefault(_action_key(recovered.action), (candidate, recovered))
     if len(unique) == 1 and not rejected_candidate:
-        candidate, recovered = next(iter(unique.values()))
-        return ActionOutputResolution(
-            action=recovered,
+        candidate, chosen = next(iter(unique.values()))
+        decision = ActionOutputResolution(
+            action=chosen.action,
             action_text=candidate.text,
             valid=True,
             parse_mode=candidate.parse_mode,
             candidate_count=len(unique),
         )
+        return ResolvedOutput(decision, chosen, tuple(parses))
 
     failure = (
         "ambiguous_action_output"
@@ -735,13 +1120,45 @@ def resolve_action_output(
         failure,
         text[:200],
     )
-    return ActionOutputResolution(
+    decision = ActionOutputResolution(
         action=Action.wait(),
         action_text=None,
         valid=False,
         protocol_failure=failure,
         candidate_count=len(unique),
     )
+    return ResolvedOutput(decision, None, tuple(parses))
+
+
+def resolve_structured_output(
+    content: str, ground: Callable[[Action, object], Any]
+) -> ResolvedOutput:
+    """The one action of a function call or a Decision's choice, whose channel hands over the
+    action object itself: read as structured_action reads it and grounded as
+    resolve_action_output's ``ground`` grounds it; nothing is recovered from content that is no
+    action."""
+    try:
+        asked, reference = structured_action(content)
+        parsed = None if asked is None else ground(asked, reference)
+    except (ValueError, TypeError, KeyError, RecursionError):
+        parsed = None
+    parses = () if parsed is None else (parsed,)
+    if parsed is None or parsed.action is None:
+        decision = ActionOutputResolution(
+            action=Action.wait(),
+            action_text=None,
+            valid=False,
+            protocol_failure="invalid_action_output",
+        )
+        return ResolvedOutput(decision, None, parses)
+    decision = ActionOutputResolution(
+        action=parsed.action,
+        action_text=content,
+        valid=True,
+        parse_mode="canonical_json",
+        candidate_count=1,
+    )
+    return ResolvedOutput(decision, parsed, parses)
 
 
 # Native tool output
@@ -750,7 +1167,6 @@ def resolve_action_output(
 The tool is acknowledged as queued, never falsely as executed. Only terminal native usage
 authorizes the action. Audio transcription cannot supply an action.
 """
-import time as time
 
 from realtime_framework.entity.events import FunctionCall
 from realtime_framework.entity.events import GenerationBoundary
@@ -784,8 +1200,8 @@ class FunctionCallTurnCollector:
 
     def consume(self, event):
         received = {
-            "received_wall_time_ns": time.time_ns(),
-            "received_monotonic_ns": time.monotonic_ns(),
+            "received_wall_time_ns": self.agent.clock.time_ns(),
+            "received_monotonic_ns": self.agent.clock.monotonic_ns(),
             "receive_timestamp_source": "collector_consume",
         }
         if isinstance(event, UsageSnapshot):
@@ -893,14 +1309,16 @@ class FunctionCallTurnCollector:
             try:
                 action = canonical_function_action(call.name, call.arguments)
             except ValueError as exc:
-                # Preserve the provider's complete, charged turn and let the common action parser
-                # apply its ordinary protocol-fallback WAIT. A malformed action is model behavior,
-                # not a transport/accounting failure that should invalidate the benchmark cell.
+                # A call its function's schema rejects is no action: the turn stays, complete and
+                # charged, and the shared harness executes WAIT. A malformed action is model
+                # behavior, not a transport/accounting failure that should invalidate the
+                # benchmark cell.
                 function_validation_error = str(exc)
                 action = {
                     "action": call.name,
                     **(call.arguments if isinstance(call.arguments, dict) else {}),
                 }
+                protocol_failure = "invalid_action_output"
             text = json.dumps(action, ensure_ascii=False)
         fields = {
             "provider_token_normalization_schema": TOKEN_NORMALIZATION_SCHEMA,

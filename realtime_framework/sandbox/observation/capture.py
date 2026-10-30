@@ -73,9 +73,10 @@ def ensure_observation_geometry(
 
 import hashlib as hashlib
 import threading as threading
-import time as time
 from typing import Callable as Callable
 
+from realtime_framework.clock import Clock
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.config import SANDBOX_CONTAINER
 from realtime_framework.entity.actions import DESKTOP_SIZE
 from realtime_framework.sandbox.browser.cdp import close_port
@@ -100,9 +101,13 @@ class BrowserSceneCapture:
         probe: Callable[[dict], dict] | None = None,
         desktop_size: tuple[int, int] = DESKTOP_SIZE,
         text_observation: bool = False,
+        clock: Clock | None = None,
     ):
         self.guest = guest
         self.task = task
+        # The operational clock: under the token clock GuestEnvironment restamps the observation
+        # with world time.
+        self.clock = clock or SystemClock()
         self.task_id = getattr(task, "task_id", None)
         self.debug_port = debug_port
         self.container = container
@@ -113,6 +118,9 @@ class BrowserSceneCapture:
             self.spec = {**self.spec, "__text_observation": True}
         self.desktop_size = desktop_size
         self._probe_override = probe
+        # The CDP session of the DOM and AX probes (browser/cdp.py client_for): the shared one,
+        # unless a capture runs alongside the actions and must not wait for their calls.
+        self.cdp_session = ""
         self._lock = threading.Lock()
         self._sequence = 0
         self._target_hint = self._infer_target_hint(task)
@@ -163,6 +171,7 @@ class BrowserSceneCapture:
                 spec=payload["spec"],
                 desktop_size=tuple(payload["desktop_size"]),
                 include_ax_tree=include_ax_tree,
+                session=self.cdp_session,
             )
             if not isinstance(value, dict):
                 raise RuntimeError("CDP helper returned a non-object")
@@ -193,7 +202,7 @@ class BrowserSceneCapture:
         """Return keyboard focus to the page; True when it had moved to the browser toolbar."""
         if self.debug_port is None or self._probe_override is not None:
             return False
-        return ensure_page_focus(self.debug_port, target_hint=self._target_hint)
+        return ensure_page_focus(self.debug_port, clock=self.clock, target_hint=self._target_hint)
 
     def _page_rect(self, raw: dict) -> tuple[int, int, int, int] | None:
         metrics = raw.get("metrics") if raw.get("scene", {}).get("status") == "ok" else None
@@ -255,16 +264,16 @@ class BrowserSceneCapture:
             render_sync_attempts += 1
             frame_is_current = getattr(self.task, "captured_frame_is_current", None)
             if callable(frame_is_current):
-                deadline = time.monotonic() + 5.0
+                deadline = self.clock.monotonic() + 5.0
                 while not frame_is_current(screenshot):
-                    if time.monotonic() >= deadline:
+                    if self.clock.monotonic() >= deadline:
                         raise RuntimeError(
                             f"desktop capture never reached the render fence for {self.task_id}"
                         )
-                    time.sleep(0.01)
+                    self.clock.sleep(0.01)
                     screenshot = self.guest.screenshot()
                     render_sync_attempts += 1
-            captured_at = time.time()
+            captured_at = self.clock.time()
             post = self._probe() if pre.get("scene", {}).get("status") == "ok" else pre
             pre_binding = pre.setdefault("binding", {})
             if pre.get("scene", {}).get("status") != "ok":
@@ -309,21 +318,17 @@ class BrowserSceneCapture:
 
 # Frames
 """Shared screenshot encoding policy for VLM and native multimodal adapters."""
-import os as os
-
-from realtime_framework.entity.config import DEFAULT_FRAME_MAX_DIM
+from realtime_framework.entity.config import FrameEncodingConfig
 
 
-FRAME_SEND_MAX_DIM = int(os.environ.get("FRAME_MAX_DIM", str(DEFAULT_FRAME_MAX_DIM)))
-FRAME_JPEG_QUALITY = int(os.environ.get("FRAME_JPEG_QUALITY", "85"))
-FRAME_IMAGE_DETAIL = os.environ.get("FRAME_IMAGE_DETAIL", "auto")
+FRAME_ENCODING = FrameEncodingConfig.from_environ()  # read once, at import
 
 
 def prepare_for_model(png_bytes: bytes):
     """Prepare a chat-VLM frame and retain its exact coordinate transform."""
     return prepare_frame(
         png_bytes,
-        max_dimension=FRAME_SEND_MAX_DIM,
-        jpeg_quality=FRAME_JPEG_QUALITY,
-        detail=FRAME_IMAGE_DETAIL,
+        max_dimension=FRAME_ENCODING.max_dimension,
+        jpeg_quality=FRAME_ENCODING.jpeg_quality,
+        detail=FRAME_ENCODING.image_detail,
     )

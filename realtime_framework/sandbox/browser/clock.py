@@ -64,6 +64,32 @@ def _encoded_frame_has_render_fence(data: str, fence) -> bool:
         return False
 
 
+def _await_render_fence(client, fence, error: str) -> str:
+    """Screenshot the page until a frame shows ``fence``, for up to 5 s, and return that frame
+    (base64 PNG); RuntimeError(``error``) when none did."""
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        client.evaluate(
+            "document.documentElement && document.documentElement.offsetHeight",
+            await_promise=False,
+        )
+        result = _cdp_result(
+            client.call(
+                "Page.captureScreenshot",
+                {
+                    "format": "png",
+                    "fromSurface": True,
+                },
+            ),
+            "Page.captureScreenshot",
+        )
+        candidate = result.get("data")
+        if candidate and _encoded_frame_has_render_fence(candidate, fence):
+            return candidate
+        time.sleep(0.02)
+    raise RuntimeError(error)
+
+
 _RAF_CLOCK_SHIM = r"""
 (() => {
   if (window.__benchmarkClock) return;
@@ -245,7 +271,8 @@ def cdp_install_document_script(dbg_port, source, url=None):
     """Run ``source`` in every document created from now on, then optionally navigate to ``url``.
 
     The script executes before the document's own scripts, in each same-origin frame and again
-    after every reload, for as long as the persistent target session keeps the registration.
+    after every reload. Chrome keeps the registration on the persistent target session, and the
+    client registers it again on each session it reconnects (cdp.py _SESSION_REGISTRATIONS).
     """
     client = client_for(dbg_port)
     with client.transaction():
@@ -263,7 +290,8 @@ def cdp_install_document_script(dbg_port, source, url=None):
 def cdp_install_frame_clock(dbg_port, url):
     """Install the RAF clock before navigating to ``url``.
 
-    The registration and later clock/input/state commands share one persistent target session.
+    The registration and later clock/input/state commands share one persistent target session,
+    and a session the client reconnects registers it again (cdp.py _SESSION_REGISTRATIONS).
     Reload-reset games retain the new-document script; the defensive reset path reinstalls it only
     if Chrome replaces the target or loses the registration.
     """
@@ -424,7 +452,10 @@ def cdp_advance_rendered_frame(dbg_port, seconds, raf_hz=60.0, key_events=()):
         # the reached timestamp. Segmenting a simulated second around an action therefore cannot add,
         # remove, or phase-shift physics updates. Scheduled key events land before the first frame
         # whose timestamp is at or after them, so the game processes them in the frame a real
-        # keyboard would have delivered them to.
+        # keyboard would have delivered them to. The token clock sends an auto-repeat that falls
+        # on an advance's end with the next advance (sandbox/actions.py _pending_repeat_events):
+        # when that end is a frame's timestamp, this advance renders that frame first, and the
+        # repeat lands before the frame after it.
         while float(next_frame) <= target + 1e-7:
             dispatch_due_key_events(float(next_frame))
             advance_virtual_time(max(0.0, float(next_frame) - float(current)))
@@ -456,30 +487,9 @@ def cdp_advance_rendered_frame(dbg_port, seconds, raf_hz=60.0, key_events=()):
                 await_promise=False,
             )
 
-        data = None
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            client.evaluate(
-                "document.documentElement && document.documentElement.offsetHeight",
-                await_promise=False,
-            )
-            result = _cdp_result(
-                client.call(
-                    "Page.captureScreenshot",
-                    {
-                        "format": "png",
-                        "fromSurface": True,
-                    },
-                ),
-                "Page.captureScreenshot",
-            )
-            candidate = result.get("data")
-            if candidate and _encoded_frame_has_render_fence(candidate, fence):
-                data = candidate
-                break
-            time.sleep(0.02)
-    if not data:
-        raise RuntimeError("compositor did not publish the post-step render fence")
+        data = _await_render_fence(
+            client, fence, "compositor did not publish the post-step render fence"
+        )
     return {
         "ok": True,
         "advanced_ms": seconds * 1000.0,
@@ -516,30 +526,9 @@ def cdp_sync_realtime_frame(dbg_port, benchmark_frame, url_contains):
         fence = client.evaluate(_RENDER_FENCE_EXPRESSION, await_promise=False)
         if not isinstance(fence, dict):
             raise RuntimeError("realtime render fence installation failed")
-        data = None
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
-            client.evaluate(
-                "document.documentElement && document.documentElement.offsetHeight",
-                await_promise=False,
-            )
-            result = _cdp_result(
-                client.call(
-                    "Page.captureScreenshot",
-                    {
-                        "format": "png",
-                        "fromSurface": True,
-                    },
-                ),
-                "Page.captureScreenshot",
-            )
-            candidate = result.get("data")
-            if candidate and _encoded_frame_has_render_fence(candidate, fence):
-                data = candidate
-                break
-            time.sleep(0.02)
-        if not data:
-            raise RuntimeError("realtime compositor did not publish the render fence")
+        data = _await_render_fence(
+            client, fence, "realtime compositor did not publish the render fence"
+        )
     return {
         "ok": True,
         "benchmark_frame": expected,

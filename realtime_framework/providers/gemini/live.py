@@ -4,197 +4,374 @@ from __future__ import annotations
 """Gemini Live protocol driver for the shared realtime runtime."""
 
 import asyncio as asyncio
-import json as json
-import math as math
+import contextvars
+import logging as logging
 import os as os
-import time as time
+from dataclasses import dataclass
+from typing import Any
+from typing import ClassVar as ClassVar
 
+from realtime_framework.clock import Clock
+from realtime_framework.clock import SystemClock
+from realtime_framework.entity.config import merge_streaming_settings
+from realtime_framework.entity.model import Compat
 from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.events import FunctionCall
+from realtime_framework.entity.events import FunctionCallsCancelled
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
 from realtime_framework.entity.model import HistorySyncRequest
 from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.model import ProviderObservation
+from realtime_framework.entity.model import PushReceipt
 from realtime_framework.entity.model import RealtimeCapabilities
+from realtime_framework.entity.model import SessionSeed
 from realtime_framework.entity.model import SyncDisposition
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
-from realtime_framework.entity.actions import gui_function_declarations
 from realtime_framework.entity.events import EmptyInterruptedToolTurnError
-from realtime_framework.entity.model import ARCHIVED_ACTION_LEDGER_HEADER
-from realtime_framework.entity.model import FOLDED_VISUAL_PLACEHOLDER
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import QUOTA_EXHAUSTED
 from realtime_framework.entity.model import RATE_LIMITED
 from realtime_framework.entity.model import TRANSIENT
 from realtime_framework.entity.model import TransportFailure
+from realtime_framework.entity.model import exception_chain
+from realtime_framework.entity.records import current_trace_scope
+from realtime_framework.entity.records import enter_trace_scope
+from realtime_framework.entity.request import CanonicalRequest
+from realtime_framework.providers.capture import async_ws_connection
+from realtime_framework.providers.gemini.session import Connect
+from realtime_framework.providers.gemini.session import Content
+from realtime_framework.providers.gemini.session import Orphan
+from realtime_framework.providers.gemini.session import Part
+from realtime_framework.providers.gemini.session import Received
+from realtime_framework.providers.gemini.session import SessionCore
+from realtime_framework.providers.session_lifecycle import RenewalRequired
+from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
-_QUEUED_TOOL_RESPONSE = {
-    "status": "queued_not_executed",
-    "instruction": (
-        "End this turn silently. Await the next observation for the actual execution result."
-    ),
-}
+logger = logging.getLogger(__name__)
 
-# Gemini 3 requires a thought signature when a manually reconstructed history contains a model
-# function-call part. Live tool-call messages do not expose the original signature because bidi
-# function calls use the dedicated ToolCall message rather than model Content. Google documents
-# this sentinel for deterministic client-injected function-call history.
-_REPLAY_THOUGHT_SIGNATURE = "skip_thought_signature_validator"
-
-# Keep initial-history WebSocket messages small. HistoryConfig deliberately allows several
-# client-content messages terminated by one turn_complete=True boundary.
-_HISTORY_CONTENTS_PER_MESSAGE = 12
 _SESSION_RELEASE_GRACE_S = 2.0
-_GO_AWAY_CLOSE_MARGIN_S = 2.0
 _CONNECTION_CLOSE_TIMEOUT_S = 1.0
-_EXTENDED_THINKING_MODEL = "gemini-3.8-live-extended-thinking"
+# How long a connection may take to open and acknowledge its setup. websockets bounds the opening
+# alone, at 10 s; google-genai then waits for setupComplete without a bound.
+_HANDSHAKE_TIMEOUT_S = 30.0
 
 
-# Wire options carried in ModelConfig.provider_options. Gemini 3.8 Extended Thinking requires
-# asynchronous tool declarations and remains active across intermediate utterance-level
-# turnComplete messages until interaction_status becomes IDLE. Ordered screenshot/text turns
-# (client_content) avoid synthesizing an audio activity for GUI input.
+# Wire options carried in ModelConfig.provider_options: (default, allowed values). A model sets
+# each in its YAML (GeminiLiveDriver.compat). Gemini 3.8 Extended Thinking requires asynchronous
+# tool declarations and remains active across intermediate utterance-level turnComplete messages
+# until interaction_status becomes IDLE. Ordered screenshot/text turns (client_content) avoid
+# synthesizing an audio activity for GUI input. How past tool calls are replayed into a rebuilt
+# session is a context setting (tool_call_history), not an option.
 LIVE_OPTIONS = {
     "tool_behavior": ("blocking", ("blocking", "non_blocking")),
     "completion_signal": ("turn_complete", ("turn_complete", "interaction_idle")),
     "input_transport": ("realtime_input", ("realtime_input", "client_content")),
-    # when_idle and omit both send no scheduling field; omit names that choice for Extended Thinking.
+    # when_idle and omit both send no scheduling field; omit names that choice for the model
+    # without function scheduling (3.8 Extended Thinking).
     "tool_response_scheduling": ("when_idle", ("when_idle", "silent", "omit")),
-    "history_format": ("native_tools", ("native_tools", "tool_transcript")),
 }
 
 
+_RESPONSE_MESSAGES = {"serverContent", "toolCall", "toolCallCancellation", "usageMetadata"}
+
+
+def classify_live_message(direction: str, message: dict):
+    """Name a Gemini Live message for the agent trace; only setup is acknowledged.
+
+    client_content, realtime_input and tool_response have no acknowledgement in the protocol, so
+    they stay sent. goAway, sessionResumptionUpdate and voice activity come unsolicited.
+    """
+    kind = next(iter(message), "")
+    if direction == "client":
+        return kind, [("setup",)] if kind == "setup" else [], None
+    if "setupComplete" in message:
+        return kind, [("setup",)], "unsolicited"
+    return kind, [], "response" if _RESPONSE_MESSAGES & set(message) else "unsolicited"
+
+
 def live_options(config) -> dict:
-    """Resolve and validate Gemini Live options with their documented defaults."""
-    options = dict(getattr(config, "provider_options", None) or {})
-    unknown = set(options) - set(LIVE_OPTIONS)
-    if unknown:
-        raise ValueError(f"Unknown Gemini Live provider_options: {sorted(unknown)}")
-    resolved = {}
-    for name, (default, allowed) in LIVE_OPTIONS.items():
-        value = options.get(name, default)
-        if value not in allowed:
-            raise ValueError(f"Gemini Live {name} must be one of {list(allowed)}, got {value!r}")
-        resolved[name] = value
-    return resolved
+    """Resolve Gemini Live options with their documented defaults.
+
+    The values are validated before the run (providers/preflight.py).
+    """
+    options = config.provider_options
+    return {name: options.get(name, default) for name, (default, _) in LIVE_OPTIONS.items()}
+
+
+# reasoning_effort values the session setup maps (GeminiLiveDriver._thinking_config).
+LIVE_REASONING_EFFORTS = (None, "fixed", "none", "minimal", "low", "medium", "high")
+
+
+@dataclass(frozen=True, kw_only=True)
+class GeminiDeployment(Deployment):
+    """Where Gemini Live connections go: on the default key variable, a pool of keys (key_env,
+    else fallback_key_env, then key_env + "_2" to "_<key_pool_size>"), of which a driver takes
+    the one at the slot key_slot_env names, so that parallel runs can spread over keys."""
+
+    fallback_key_env: str
+    key_pool_size: int
+    key_slot_env: str
 
 
 class GoAwayDeadlineExceeded(RuntimeError):
     """An incomplete native turn must remain invalid, even without visible output."""
 
 
-class GeminiLiveDriver:
+class _Receiver:
+    """The one reader of a connection once it is set up: each server message, applied to the
+    session core, which stamps it with the connection and the generation whose reply was being
+    read, and hands it to that reply. The setup's acknowledgement (setupComplete), the only one
+    Gemini Live sends, is read by google-genai inside its connect, before the receiver exists.
+
+    google-genai's ``session.receive()`` iterator ends at every bare ``turn_complete`` and at
+    IDLE, so the receiver opens the next one and spans every generation on the connection.
+    Extended Thinking uses ``turn_complete`` for intermediate spoken fillers; the core decides
+    where a generation ends. Turn-based, it reads only when a generation asks for a message.
+    Streaming, it reads every message as it arrives (read_continuously), the orphans too
+    (SessionCore.arrived).
+
+    A read that fails or is cancelled leaves the connection unusable: every later read raises the
+    failure again. A cancelled read is kept as a RuntimeError caused by the cancellation, so that
+    a later caller is not reported as cancelled itself.
+    """
+
+    def __init__(self, session, number: int, core: SessionCore, clock: Clock):
+        self.number = number
+        self.session = session
+        self.failure: BaseException | None = None
+        self._core = core
+        self._clock = clock
+        self._messages = None  # the SDK's current receive() iterator
+        self._opened_empty = False  # it has given no message yet
+        self._read_one: asyncio.Event | None = None  # streaming: set as each read ends
+
+    async def next(self) -> Received | Orphan:
+        if self.failure is None:
+            try:
+                return await self._read()
+            except asyncio.CancelledError as exc:
+                self.failure = RuntimeError(
+                    f"Gemini Live connection {self.number}: a read was cancelled"
+                )
+                self.failure.__cause__ = exc
+                self._core.reader_failed(self.number)
+                raise
+            except Exception as exc:
+                self.failure = exc
+        self._core.reader_failed(self.number)
+        raise self.failure
+
+    async def receive_until(self, ready) -> None:
+        """Receive until ``ready()`` holds: turn-based, by reading, in the caller's context;
+        streaming, by waiting for the reads of read_continuously. A failed read raises in every
+        waiter, once it has taken what was read before."""
+        while not ready():
+            if self._read_one is None:
+                await self.next()
+            elif self.failure is not None:
+                raise self.failure
+            else:
+                self._read_one.clear()
+                await self._read_one.wait()
+
+    def read_continuously(self, on_failed, context: contextvars.Context) -> asyncio.Task:
+        """Streaming: the task, run in ``context``, that reads every message as it arrives,
+        until a read fails, which also calls ``on_failed()``, or the task is cancelled. Each goes
+        to the reply that takes it, or is an orphan; the core holds an orphan's cancellations for
+        the next reply to start, on this connection or a later one, and keeps its goAway and
+        resumption update; nothing else of it is taken. What it reads is recorded in the trace
+        scope of the reply it reads for, which start_generation hands to ``context``, until the
+        reply's end."""
+        self._read_one = asyncio.Event()
+        return asyncio.get_running_loop().create_task(self._read_all(on_failed), context=context)
+
+    async def _read_all(self, on_failed) -> None:
+        try:
+            while True:
+                arrived = await self.next()
+                if isinstance(arrived, Received) and arrived.ends:
+                    enter_trace_scope(None)  # until the next reply hands its own over
+                if isinstance(arrived, Orphan) and not arrived.cancelled:
+                    logger.debug(
+                        "Gemini Live connection %d: no generation takes %s",
+                        self.number,
+                        type(arrived.message).__name__,
+                    )
+                self._read_one.set()
+        except asyncio.CancelledError:
+            self._read_one.set()
+            raise
+        except Exception:  # noqa: BLE001 - kept as the failure every waiter raises
+            self._read_one.set()
+            on_failed()
+
+    async def _read(self) -> Received | Orphan:
+        while True:
+            if self._messages is None:
+                self._messages = self.session.receive().__aiter__()
+                self._opened_empty = True
+            try:
+                message = await anext(self._messages)
+            except StopAsyncIteration:
+                if self._opened_empty:
+                    raise RuntimeError(
+                        f"Gemini Live connection {self.number}: receive() ended without a message"
+                    ) from None
+                self._messages = None
+                continue
+            self._opened_empty = False
+            if self._core.streaming:
+                return self._core.arrived(self.number, message, self._clock.monotonic())
+            received = self._core.received(self.number, message, self._clock.monotonic())
+            if received is not None:
+                return received
+            logger.debug(
+                "Gemini Live connection %d: no generation takes %s",
+                self.number,
+                type(message).__name__,
+            )
+
+
+class GeminiLiveDriver(SessionLifecycle):
     capabilities = RealtimeCapabilities(
         protocol_family="gemini_live",
-        persistent_session=True,
+        # The system instruction goes into the session setup, not into a content role.
+        roles=("input", "model"),
+        feedback_placements=("separate_message",),
+        server_context="unknown",
+        # tool_transcript: text that keeps the wire fields of each call and its receipt.
+        tool_call_replay=("native_tools", "tool_transcript"),
         max_video_fps=1.0,
-        terminal_output_usage=True,
         action_channel="function_call",
+        interaction_modes=frozenset({"turn_based", "streaming"}),
     )
+    deployment = GeminiDeployment(
+        family="streaming",
+        provider="gemini",
+        key_env="GEMINI_API_KEY",
+        vendor="google",
+        fallback_key_env="GOOGLE_API_KEY",
+        key_pool_size=9,
+        key_slot_env="GEMINI_API_KEY_START_SLOT",
+    )
+    compat = Compat(
+        provider_options=LIVE_OPTIONS,
+        required_provider_options=tuple(LIVE_OPTIONS),
+        # Response scheduling applies to non-blocking functions only.
+        provider_option_requires={
+            ("tool_response_scheduling", "silent"): ("tool_behavior", "non_blocking")
+        },
+        reasoning_efforts=LIVE_REASONING_EFFORTS,
+    )
+    model_defaults: ClassVar[dict[str, dict]] = {}
+    # The API's native-streaming settings: the setup's context_window_compression. Once the
+    # session reaches compression_trigger_tokens, the server shortens it to
+    # compression_target_tokens, from the start of a user turn, and says nothing of what it
+    # removed; the system instruction stays (google-genai SlidingWindow: target_tokens "Should be
+    # < trigger_tokens", which the catalog requires). Placeholders until a smoke test against the
+    # real API: a trigger at half the 131,072-token input of these models in
+    # LiteLLM's model map, and a target at half the trigger, the server's default when none is
+    # set. A model YAML's streaming settings replace those they name (ModelConfig.streaming); a
+    # driver holds the values it runs with.
+    streaming_settings: ClassVar[dict] = {
+        "compression_trigger_tokens": 65_536,
+        "compression_target_tokens": 32_768,
+    }
 
-    def __init__(self, config):
+    def __init__(self, config, *, clock=None, streaming: bool = False):
+        """``streaming``: the session native streaming drives, which pushes frames, triggers
+        replies and reads every message as it arrives."""
         from google import genai as genai
         from google.genai import errors as errors
         from google.genai import types as types
         from websockets.exceptions import ConnectionClosed as ConnectionClosed
 
         self.options = live_options(config)
-        self._validate_model_contract(config)
+        deployment = self.deployment
         if config.api_key:
             keys = [config.api_key]
-        elif config.api_key_env and config.api_key_env != "GEMINI_API_KEY":
+        elif config.api_key_env and config.api_key_env != deployment.key_env:
             keys = [os.environ.get(config.api_key_env)]
         else:
-            keys = [os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")]
-            keys.extend(os.environ.get(f"GEMINI_API_KEY_{index}") for index in range(2, 10))
+            keys = [
+                os.environ.get(deployment.key_env) or os.environ.get(deployment.fallback_key_env)
+            ]
+            keys.extend(
+                os.environ.get(f"{deployment.key_env}_{index}")
+                for index in range(2, deployment.key_pool_size + 1)
+            )
         self._api_keys = tuple(dict.fromkeys(key for key in keys if key))
         if not self._api_keys:
             raise RuntimeError(
-                "Gemini Live needs GEMINI_API_KEY/GOOGLE_API_KEY or ModelConfig.api_key"
+                f"Gemini Live needs {deployment.key_env}/{deployment.fallback_key_env} or "
+                "ModelConfig.api_key"
             )
         self.config = config
+        self.clock = clock or SystemClock()
+        self.streaming = streaming
+        self.streaming_settings = merge_streaming_settings(type(self), config.streaming)
         self.types = types
         self._api_error_type = errors.APIError
         self._connection_closed_type = ConnectionClosed
         self._client_type = genai.Client
         self._clients = {}
-        requested_slot_raw = os.environ.get("GEMINI_API_KEY_START_SLOT", "1")
+        requested_slot_raw = os.environ.get(deployment.key_slot_env, "1")
         try:
             requested_slot = int(requested_slot_raw)
         except ValueError as exc:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer") from exc
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer") from exc
         if requested_slot < 1:
-            raise ValueError("GEMINI_API_KEY_START_SLOT must be a positive integer")
+            raise ValueError(f"{deployment.key_slot_env} must be a positive integer")
         self._api_key_requested_slot = requested_slot
         self._api_key_index = (requested_slot - 1) % len(self._api_keys)
+        self._ws_connection = async_ws_connection(self, "gemini_live.ws", classify_live_message)
         self.client = self._client_for_slot(self._api_key_index)
         self._cm = None
         self._session = None
+        self._opening: asyncio.Task | None = None  # a connect's _open, until it is done
+        self._opening_ws = None  # and its WebSocket, once google-genai returned the session
+        self._receiver: _Receiver | None = None  # the open connection's reader
+        self._reading: asyncio.Task | None = None  # streaming: the task reading it
+        self._reading_context: contextvars.Context | None = None  # and the context it runs in
+        # The WebSocket of the last connection opened, which the trace numbered
+        # (providers/capture.py), and of each one the core counted, by the core's number.
+        self._trace_connection = None
+        self._trace_connections: dict[int, Any] = {}
+        self._core = SessionCore(self.options, streaming=streaming, on_delivery=self._delivered)
         self._activity_open = False
         self._last_video_sent_at: float | None = None
-        self._resume_handle = None
-        self._candidate_resume_handle = None
-        self._resume_after_turn = False
+        # The goAway deadline the trace has a wait for, on the open connection.
+        self._go_away_wait_recorded: float | None = None
         self._connect_metadata: dict = {}
-        self._go_away_deadline: float | None = None
-        self._last_turn_clean = False
-
-    @staticmethod
-    def _validate_model_contract(config) -> None:
-        """Reject setup combinations that violate the selected Live model's API contract."""
-        options = live_options(config)
-        if (
-            options["tool_response_scheduling"] == "silent"
-            and options["tool_behavior"] != "non_blocking"
-        ):
-            raise ValueError("Silent Gemini tool responses require non-blocking tools")
-        model_name = str(config.model_name).rsplit("/", 1)[-1]
-        if model_name == "gemini-3.8-live" and config.reasoning_effort not in {None, "fixed"}:
-            raise ValueError(
-                "gemini-3.8-live requires omitting thinking_config; use reasoning_effort=fixed"
-            )
-        if model_name != _EXTENDED_THINKING_MODEL:
-            return
-        invalid = []
-        if config.reasoning_effort not in {"low", "medium", "high"}:
-            invalid.append("reasoning_effort must be low, medium, or high")
-        if options["tool_behavior"] != "non_blocking":
-            invalid.append("tool_behavior must be non_blocking")
-        if options["completion_signal"] != "interaction_idle":
-            invalid.append("completion_signal must be interaction_idle")
-        if options["tool_response_scheduling"] == "silent":
-            invalid.append("function scheduling is unsupported; use tool_response_scheduling=omit")
-        if invalid:
-            raise ValueError(f"{_EXTENDED_THINKING_MODEL} requires " + "; ".join(invalid))
 
     def _client_for_slot(self, index: int):
         client = self._clients.get(index)
         if client is None:
-            options = (
-                {"http_options": {"base_url": self.config.api_base_url}}
-                if self.config.api_base_url
-                else {}
-            )
-            client = self._client_type(api_key=self._api_keys[index], **options)
+            # google-genai passes create_connection only to the WebSocket connect.
+            http_options = {"async_client_args": {"create_connection": self._ws_connection}}
+            if self.config.api_base_url:
+                http_options["base_url"] = self.config.api_base_url
+            client = self._client_type(api_key=self._api_keys[index], http_options=http_options)
             self._clients[index] = client
         return client
 
-    @staticmethod
-    def _exception_chain(exc: BaseException):
-        current: BaseException | None = exc
-        seen: set[int] = set()
-        while current is not None and id(current) not in seen:
-            yield current
-            seen.add(id(current))
-            current = current.__cause__ or current.__context__
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
+
+    def _delivered(self, state: str, contents: list[tuple], connection: int | None) -> None:
+        """What became of writes the core recorded, on the trace's connection the core numbered
+        ``connection``: also an acknowledgement an abandoned reply wrote late on a connection
+        closed since. One being set up has no number yet: the connection opened last."""
+        socket = self._trace_connections.get(connection, self._trace_connection)
+        self._record_delivery(state, contents, socket.trace_connection_id)
 
     def _rate_limit_kind(self, exc: BaseException) -> str | None:
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             code = int(getattr(current, "code", 0) or 0)
             status = str(getattr(current, "status", "") or "").strip().lower()
             detail = (
@@ -214,9 +391,7 @@ class GeminiLiveDriver:
 
     def classify_transport_error(self, exc: BaseException) -> TransportFailure:
         """Classify a failed turn for the harness's shared retry policy."""
-        if any(
-            isinstance(current, GoAwayDeadlineExceeded) for current in self._exception_chain(exc)
-        ):
+        if any(isinstance(current, GoAwayDeadlineExceeded) for current in exception_chain(exc)):
             return TransportFailure(FATAL)
         limited = self._rate_limit_kind(exc)
         if limited is not None:
@@ -236,7 +411,7 @@ class GeminiLiveDriver:
         Generic ABORTED and service-unavailable closes are also transient candidates; other 1008
         policy violations and explicit GoAway deadline failures remain terminal.
         """
-        for current in self._exception_chain(exc):
+        for current in exception_chain(exc):
             if isinstance(current, EmptyInterruptedToolTurnError):
                 return True
             if isinstance(current, self._connection_closed_type):
@@ -275,10 +450,27 @@ class GeminiLiveDriver:
         return False
 
     def _realtime_input_config(self):
+        handling = self.types.ActivityHandling
         return self.types.RealtimeInputConfig(
             automatic_activity_detection=self.types.AutomaticActivityDetection(disabled=True),
-            activity_handling=self.types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            # Streaming sends no activity: its frames go in as video outside any, and a reply
+            # starts on client content (request_reply), which NO_INTERRUPTION does not cover. The
+            # setup is the one client content triggers were probed under (10-29).
+            activity_handling=(
+                handling.NO_INTERRUPTION
+                if self.streaming
+                else handling.START_OF_ACTIVITY_INTERRUPTS
+            ),
             turn_coverage=self.types.TurnCoverage.TURN_INCLUDES_ALL_INPUT,
+        )
+
+    def _context_window_compression(self):
+        settings = self.streaming_settings
+        return self.types.ContextWindowCompressionConfig(
+            trigger_tokens=settings["compression_trigger_tokens"],
+            sliding_window=self.types.SlidingWindow(
+                target_tokens=settings["compression_target_tokens"]
+            ),
         )
 
     def _thinking_config(self):
@@ -298,19 +490,12 @@ class GeminiLiveDriver:
             "medium": self.types.ThinkingLevel.MEDIUM,
             "high": self.types.ThinkingLevel.HIGH,
         }
-        try:
-            level = levels[effort]
-        except KeyError as exc:
-            raise ValueError(
-                "Gemini Live reasoning_effort must be one of "
-                "none, fixed, minimal, low, medium, or high"
-            ) from exc
-        return self.types.ThinkingConfig(thinking_level=level)
+        return self.types.ThinkingConfig(thinking_level=levels[effort])
 
-    def _function_declarations(self):
+    def _function_declarations(self, seed):
         behavior = self.options["tool_behavior"]
         declarations = []
-        for item in gui_function_declarations():
+        for item in seed.answer.function_declarations:
             values = dict(item)
             if behavior == "non_blocking":
                 values["behavior"] = self.types.Behavior.NON_BLOCKING
@@ -320,382 +505,207 @@ class GeminiLiveDriver:
             declarations.append(self.types.FunctionDeclaration(**values))
         return declarations
 
-    def _tool_response_options(self) -> dict:
-        if self.options["tool_response_scheduling"] == "silent":
-            return {
-                "will_continue": False,
-                "scheduling": self.types.FunctionResponseScheduling.SILENT,
-            }
-        return {}
-
-    def _live_config(self, request: ConnectRequest, *, resume_handle=None, has_history=False):
-        instruction = request.seed.system_instruction
+    def _live_config(self, seed: SessionSeed, connect: Connect):
+        """The setup of one planned connection. Streaming pushes its frames as realtime input
+        video whatever the model's transport, and has the server compress the context: without it
+        an audio-video session lasts two minutes."""
+        streaming = self.streaming
         return self.types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription=self.types.AudioTranscriptionConfig(),
-            tools=[self.types.Tool(function_declarations=self._function_declarations())],
+            tools=[self.types.Tool(function_declarations=self._function_declarations(seed))],
             thinking_config=self._thinking_config(),
-            system_instruction=self.types.Content(parts=[self.types.Part(text=instruction)]),
-            session_resumption=self.types.SessionResumptionConfig(handle=resume_handle),
+            system_instruction=self.types.Content(
+                parts=[self.types.Part(text=seed.system_instruction)]
+            ),
+            session_resumption=self.types.SessionResumptionConfig(handle=connect.resume_handle),
             history_config=(
                 self.types.HistoryConfig(initial_history_in_client_content=True)
-                if has_history
+                if connect.seed
                 else None
             ),
             realtime_input_config=(
                 self._realtime_input_config()
-                if self.options["input_transport"] == "realtime_input"
+                if streaming or self.options["input_transport"] == "realtime_input"
                 else None
             ),
+            context_window_compression=self._context_window_compression() if streaming else None,
         )
 
-    def _history(self, request: ConnectRequest):
-        contents = []
-        if request.executed_action_ledger:
-            contents.append(
-                self.types.Content(
-                    role="user",
-                    parts=[
-                        self.types.Part(
-                            text=ARCHIVED_ACTION_LEDGER_HEADER
-                            + "\n"
-                            + request.executed_action_ledger
-                        )
-                    ],
-                )
-            )
-        for index, turn in enumerate(request.turns):
-            observation = turn.observation
-            parts = [
-                self.types.Part(
-                    text=(FOLDED_VISUAL_PLACEHOLDER if turn.visual_folded else observation.prompt)
-                )
-            ]
-            if not turn.visual_folded:
-                parts.append(
-                    self.types.Part(
-                        inline_data=self.types.Blob(
-                            mime_type=observation.mime_type,
-                            data=observation.image_bytes,
-                        )
-                    )
-                )
-            contents.append(
-                self.types.Content(
-                    role="user",
-                    parts=parts,
-                )
-            )
-            native_exchanges = turn.provider_refs.get("native_tool_exchanges")
-            initial_text = turn.provider_refs.get("native_initial_text")
-            if initial_text:
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[self.types.Part(text=initial_text)],
-                    )
-                )
-            if not isinstance(native_exchanges, list):
-                native_call = turn.provider_refs.get("native_function_call")
-                native_exchanges = (
-                    [{"function_calls": [native_call]}] if isinstance(native_call, dict) else []
-                )
-            if native_exchanges and self.options["history_format"] == "tool_transcript":
-                # Live tool messages do not expose their original thought signatures. Replaying
-                # synthetic native calls can stall the next interaction even after setup succeeds.
-                # Preserve the complete past exchange as data, with current actions still required
-                # to use the declared native functions. Never replay it as a new tool request.
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[
-                            self.types.Part(
-                                text="Historical GUI tool exchanges, already acknowledged "
-                                "(current actions must use native functions):\n"
-                                + json.dumps(native_exchanges, ensure_ascii=False),
-                            )
-                        ],
-                    )
-                )
-                continue
-            replayed_native_exchange = False
-            for exchange_index, exchange in enumerate(native_exchanges):
-                if not isinstance(exchange, dict):
-                    continue
-                calls = exchange.get("function_calls")
-                if not isinstance(calls, list):
-                    continue
-                valid_calls = [
-                    call for call in calls if isinstance(call, dict) and call.get("name")
-                ]
-                if not valid_calls:
-                    continue
-                replayed_native_exchange = True
-                model_parts = []
-                response_parts = []
-                stored_responses = exchange.get("function_responses")
-                if not isinstance(stored_responses, list):
-                    stored_responses = []
-                responses_by_id = {
-                    str(response.get("id") or ""): response
-                    for response in stored_responses
-                    if isinstance(response, dict)
-                }
-                for call_index, call in enumerate(valid_calls):
-                    call_id = str(
-                        call.get("id") or f"history-{index}-{exchange_index}-{call_index}"
-                    )
-                    name = str(call["name"])
-                    arguments = call.get("arguments")
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-                    part_values = {
-                        "function_call": self.types.FunctionCall(
-                            id=call_id,
-                            name=name,
-                            args=arguments,
-                        )
-                    }
-                    # Gemini 3 parallel calls carry the thought signature only on the first
-                    # function-call part in one model Content.
-                    if call_index == 0:
-                        part_values["thought_signature"] = _REPLAY_THOUGHT_SIGNATURE
-                    model_parts.append(self.types.Part(**part_values))
-                    stored_response = responses_by_id.get(call_id, {})
-                    response = stored_response.get("response")
-                    if not isinstance(response, dict):
-                        response = dict(_QUEUED_TOOL_RESPONSE)
-                    response_options = self._tool_response_options()
-                    response_options.update(
-                        {
-                            key: stored_response[key]
-                            for key in ("will_continue", "scheduling")
-                            if key in stored_response
-                        }
-                    )
-                    response_parts.append(
-                        self.types.Part(
-                            function_response=self.types.FunctionResponse(
-                                id=call_id,
-                                name=str(stored_response.get("name") or name),
-                                response=response,
-                                **response_options,
-                            )
-                        )
-                    )
-                # Rebuild every provider-native tool exchange, including a response that had
-                # zero or multiple GUI calls and therefore became a benchmark WAIT. Replaying
-                # only a selected call would change the model-visible trajectory after reconnect.
-                contents.append(self.types.Content(role="model", parts=model_parts))
-                contents.append(self.types.Content(role="user", parts=response_parts))
-                if exchange.get("completion_text"):
-                    contents.append(
-                        self.types.Content(
-                            role="model",
-                            parts=[
-                                self.types.Part(text=exchange["completion_text"]),
-                            ],
-                        )
-                    )
-            if replayed_native_exchange:
-                continue
-            if turn.output:
-                native_call = turn.provider_refs.get("native_function_call")
-                if not isinstance(native_call, dict):
-                    try:
-                        action = json.loads(turn.output)
-                    except (TypeError, ValueError):
-                        action = None
-                    if isinstance(action, dict) and isinstance(action.get("action"), str):
-                        native_call = {
-                            "id": f"history-{index}",
-                            "name": action["action"],
-                            "arguments": {
-                                key: value for key, value in action.items() if key != "action"
-                            },
-                        }
-                if isinstance(native_call, dict) and native_call.get("name"):
-                    call_id = str(native_call.get("id") or f"history-{index}")
-                    name = str(native_call["name"])
-                    arguments = native_call.get("arguments")
-                    if not isinstance(arguments, dict):
-                        arguments = {}
-                    # Rebuild the provider-native tool exchange. Replaying the canonical action
-                    # as ordinary model text makes Gemini switch to spoken JSON after the first
-                    # visual-history fold, which also loses authoritative response-token usage.
-                    contents.append(
-                        self.types.Content(
-                            role="model",
-                            parts=[
-                                self.types.Part(
-                                    function_call=self.types.FunctionCall(
-                                        id=call_id,
-                                        name=name,
-                                        args=arguments,
-                                    ),
-                                    # Pydantic intentionally preserves Google's documented literal
-                                    # sentinel on the wire even though genuine signatures are bytes.
-                                    thought_signature=_REPLAY_THOUGHT_SIGNATURE,
-                                )
-                            ],
-                        )
-                    )
-                    contents.append(
-                        self.types.Content(
-                            role="user",
-                            parts=[
-                                self.types.Part(
-                                    function_response=self.types.FunctionResponse(
-                                        id=call_id,
-                                        name=name,
-                                        response=dict(_QUEUED_TOOL_RESPONSE),
-                                        **self._tool_response_options(),
-                                    )
-                                )
-                            ],
-                        )
-                    )
-                    continue
-                contents.append(
-                    self.types.Content(
-                        role="model",
-                        parts=[self.types.Part(text=turn.output)],
-                    )
-                )
-        return contents
+    def _content(self, content: Content):
+        """A planned Content as google-genai's Content."""
+        return self.types.Content(
+            role=content.role, parts=[self._part(part) for part in content.parts]
+        )
 
-    @staticmethod
-    def _history_batches(history: list, limit: int = _HISTORY_CONTENTS_PER_MESSAGE) -> list[list]:
-        """Pack history without splitting one observation/model/tool-response exchange."""
-        groups = []
-        group = []
-        for content in history:
-            parts = getattr(content, "parts", None) or []
-            is_function_response = any(
-                getattr(part, "function_response", None) is not None for part in parts
+    def _part(self, part: Part):
+        if part.image is not None:
+            return self.types.Part(
+                inline_data=self.types.Blob(mime_type=part.image.mime_type, data=part.image.data)
             )
-            has_function_call = any(
-                getattr(part, "function_call", None) is not None for part in parts
+        if part.function_call is not None:
+            values = {"function_call": self.types.FunctionCall(**part.function_call)}
+            if part.thought_signature is not None:
+                values["thought_signature"] = part.thought_signature
+            return self.types.Part(**values)
+        if part.function_response is not None:
+            return self.types.Part(
+                function_response=self.types.FunctionResponse(**part.function_response)
             )
-            if getattr(content, "role", None) == "user" and group and not is_function_response:
-                groups.append(group)
-                group = []
-            group.append(content)
-            if is_function_response or (
-                getattr(content, "role", None) == "model" and not has_function_call
-            ):
-                groups.append(group)
-                group = []
-        if group:
-            groups.append(group)
+        return self.types.Part(text=part.text)
 
-        batches = []
-        batch = []
-        for atomic_group in groups:
-            if batch and len(batch) + len(atomic_group) > limit:
-                batches.append(batch)
-                batch = []
-            batch.extend(atomic_group)
-        if batch:
-            batches.append(batch)
-        return batches
-
-    async def _close_current(self) -> None:
+    async def _close_current(self) -> bool:
+        """Close the open connection, if any, and end a connect still opening one, which holds
+        the session meanwhile; returns whether there was an open one."""
+        opening, self._opening = self._opening, None
+        if opening is not None:
+            opening.cancel()
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
+            try:
+                await self.clock.wait_for(asyncio.wait({opening}), _CONNECTION_CLOSE_TIMEOUT_S)
+            except TimeoutError:
+                # The connect closes its connection as it ends, and that close waits on a seed
+                # write that does not drain, as an open connection's does (below): drop the
+                # connection under both. Before google-genai returned the session, websockets'
+                # own close timeout bounds the close.
+                if self._opening_ws is not None:
+                    self._opening_ws.transport.abort()
+                await asyncio.wait({opening})
         cm, self._cm = self._cm, None
-        self._session = None
+        reading, self._reading = self._reading, None
+        session, self._session = self._session, None
+        self._receiver = None
         self._activity_open = False
         self._last_video_sent_at = None
-        self._candidate_resume_handle = None
-        self._go_away_deadline = None
+        self._go_away_wait_recorded = None
+        self._core.closed()
+        if reading is not None:
+            # Its replies end with the cancelled read, not with whatever the close would raise.
+            reading.cancel()
+            await asyncio.wait({reading})
         if cm is not None:
+            self._record_wait("connection_close", _CONNECTION_CLOSE_TIMEOUT_S)
             try:
-                await asyncio.wait_for(
+                await self.clock.wait_for(
                     cm.__aexit__(None, None, None),
                     _CONNECTION_CLOSE_TIMEOUT_S,
                 )
-            except Exception:  # noqa: BLE001, S110 - best-effort SDK cleanup
-                pass
+            except Exception:  # noqa: BLE001 - best-effort SDK cleanup
+                # A close stuck on a write that does not drain leaves that write stuck too, and
+                # a streaming push holds the session while it writes: drop the connection under
+                # both, which fails the write. google-genai keeps the WebSocket as ``_ws``.
+                session._ws.transport.abort()
+        return cm is not None
 
-    async def connect(self, request: ConnectRequest) -> None:
-        await self._connect_once(request)
-
-    async def _connect_once(self, request: ConnectRequest) -> None:
-        replacing_session = self._cm is not None
-        await self._close_current()
-        self._resume_handle = request.resume_handle
-        history = [] if request.resume_handle is not None else self._history(request)
-        history_batches = self._history_batches(history)
-        if replacing_session or history:
+    async def _connect(self, request: ConnectRequest) -> None:
+        """One attempt: a Gemini Live connect has no retry of its own."""
+        replacing = await self._close_current()
+        connect = self._core.connect(request.history, request.resume_handle, replacing=replacing)
+        if connect.release_grace:
             # Closing the local WebSocket and releasing the server-side Live session are not one
             # atomic operation. Apply the grace period to every reconnect/history replay, including
             # a retry whose failed predecessor no longer has a local context manager. This is
             # wall-clock-only and avoids briefly exceeding a one-session provider quota.
-            await asyncio.sleep(_SESSION_RELEASE_GRACE_S)
-        config = self._live_config(
-            request,
-            resume_handle=request.resume_handle,
-            has_history=bool(history),
-        )
+            await self._wait("session_release", _SESSION_RELEASE_GRACE_S)
+        config = self._live_config(request.seed, connect)
         cm = self.client.aio.live.connect(model=request.seed.model_name, config=config)
+        opening = self._opening = asyncio.ensure_future(self._open(cm, connect))
         try:
-            session = await cm.__aenter__()
+            session = await opening
+        except asyncio.CancelledError:
+            if self._opening is opening:
+                raise
+            # A close ended it while it opened, as an abort's does (SessionLifecycle).
+            self._stop_if_abandoned("its session opened")
+            raise RuntimeError("Gemini Live session closed while it opened") from None
+        finally:
+            if self._opening is opening:
+                self._opening = None
+        self._cm = cm
+        self._session = session
+        self._activity_open = False
+        self._last_video_sent_at = None
+        self._core.connected(connect)
+        self._trace_connections[self._core.connection] = self._trace_connection
+        self._receiver = _Receiver(session, self._core.connection, self._core, self.clock)
+        if self.streaming:
+            # The reader records what it reads in the scope of the reply it reads for
+            # (start_generation hands it over), not in the scope of the call that connected.
+            self._reading_context = contextvars.Context()
+            self._reading = self._receiver.read_continuously(self.mark_dirty, self._reading_context)
+        self._connect_metadata = {
+            "session_connect_mode": connect.mode,
+            "session_resume_handle_used": connect.resume_handle is not None,
+            "history_seed_contents": connect.contents,
+            "history_seed_messages": len(connect.seed),
+            "session_replacement_grace_s": (
+                _SESSION_RELEASE_GRACE_S if connect.release_grace else 0.0
+            ),
+            "api_key_slot": self._api_key_index + 1,
+            "api_key_requested_slot": self._api_key_requested_slot,
+            "api_key_pool_size": len(self._api_keys),
+        }
+        if self.streaming:
+            self._connect_metadata.update(
+                {
+                    "gemini_live_context_window_compression": dict(self.streaming_settings),
+                    # The server drops the oldest turns past the trigger and does not say which.
+                    "gemini_live_server_context": "unknown",
+                }
+            )
+
+    async def _open(self, cm, connect: Connect):
+        """The session ``cm`` opens, once the server acknowledged its setup and it took
+        ``connect``'s seed; one that fails on the way is closed again."""
+        self._opening_ws = None
+        try:
+            session = await self.clock.wait_for(cm.__aenter__(), _HANDSHAKE_TIMEOUT_S)
+            # google-genai keeps the WebSocket connection, which the trace numbered, as ``_ws``.
+            self._opening_ws = session._ws
             if getattr(session, "setup_complete", None) is None:
                 raise RuntimeError("Gemini Live did not acknowledge session setup")
-            if history:
-                # Seed history explicitly before either input transport. Merely leaving
-                # turn_complete=False can cause historical model content to be echoed as new
-                # output. HistoryConfig makes this a non-generating initialization boundary.
-                # Bound the messages so screenshots do not form one oversized WebSocket frame.
-                for index, batch in enumerate(history_batches):
+            self._trace_connection = session._ws
+            # Seed history explicitly before either input transport. Merely leaving
+            # turn_complete=False can cause historical model content to be echoed as new
+            # output. HistoryConfig makes this a non-generating initialization boundary.
+            # Bound the messages so screenshots do not form one oversized WebSocket frame.
+            index = 0
+            try:
+                for index, batch in enumerate(connect.seed):
                     await session.send_client_content(
-                        turns=batch,
-                        turn_complete=index == len(history_batches) - 1,
+                        turns=[self._content(content) for content in batch],
+                        turn_complete=index == len(connect.seed) - 1,
                     )
+            except BaseException:
+                self._core.seed_failed(connect, index)
+                raise
         except BaseException as exc:
             try:
                 await cm.__aexit__(type(exc), exc, exc.__traceback__)
             except Exception:  # noqa: BLE001, S110 - preserve the handshake failure
                 pass
             raise
-        self._cm = cm
-        self._session = session
-        self._activity_open = False
-        self._last_video_sent_at = None
-        self._resume_after_turn = False
-        self._last_turn_clean = request.resume_handle is not None or bool(history)
-        self._connect_metadata = {
-            "session_connect_mode": (
-                "session_resumption"
-                if request.resume_handle is not None
-                else "canonical_history_replay"
-                if history
-                else "new_session"
-            ),
-            "session_resume_handle_used": request.resume_handle is not None,
-            "history_seed_contents": len(history),
-            "history_seed_messages": len(history_batches),
-            "session_replacement_grace_s": (
-                _SESSION_RELEASE_GRACE_S if replacing_session or history else 0.0
-            ),
-            "api_key_slot": self._api_key_index + 1,
-            "api_key_requested_slot": self._api_key_requested_slot,
-            "api_key_pool_size": len(self._api_keys),
-        }
+        return session
 
     def connection_renewal_reason(self) -> str | None:
         # Let the provider-defined connection lifetime be observable. Reconnect only when Gemini
         # sends GoAway and supplies a resumption handle; there is no client-side age threshold.
-        if self._resume_after_turn:
+        if self._core.renewal_required:
             return "go_away"
         return None
 
     async def _before_go_away_deadline(self, operation):
         """Bound receive and tool acknowledgements by the server's connection-close deadline."""
-        if self._go_away_deadline is None:
+        deadline = self._core.go_away_deadline
+        if deadline is None:
             return await operation
-        remaining = max(0.0, self._go_away_deadline - time.monotonic())
+        remaining = max(0.0, deadline - self.clock.monotonic())
+        # One wait until the deadline, however many reads it bounds; none once it has passed.
+        if remaining > 0 and deadline != self._go_away_wait_recorded:
+            self._go_away_wait_recorded = deadline
+            self._record_wait("go_away_deadline", remaining, until=deadline)
         try:
-            return await asyncio.wait_for(operation, remaining)
+            return await self.clock.wait_for(operation, remaining)
         except asyncio.TimeoutError:
             await self._close_current()
             # A partial native turn cannot safely be replayed or charged as zero. This distinct
@@ -704,86 +714,182 @@ class GeminiLiveDriver:
                 "gemini_live_go_away_deadline_before_turn_complete"
             ) from None
 
-    async def send_observation(self, observation: ProviderObservation) -> dict:
-        """Send one decision's screenshot as one input activity."""
-        if self._resume_after_turn:
-            raise RuntimeError(
+    def _session_for_input(self):
+        """The open session, which takes input until a goAway asks for a new connection, and in
+        streaming while its reader reads."""
+        if self._core.renewal_required:
+            raise RenewalRequired(
                 "Gemini Live requires canonical history synchronization before input"
             )
         session = self._session
         if session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        if self.streaming and self._receiver.failure is not None:
+            raise self._receiver.failure
+        return session
+
+    def _audio_carrier(self):
+        # Native audio activity must contain audio. This fixed 100-ms silent carrier has no task
+        # information; its input usage is audited, never output-charged.
+        return self.types.Blob(data=bytes(3200), mime_type="audio/pcm;rate=16000")
+
+    async def push_frame(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> PushReceipt:
+        """Streaming: push the history view's newest frame, one the session does not hold yet,
+        on the realtime_input video stream, outside any activity, so that it starts no reply; the
+        next trigger carries its text with its screenshot (gemini/session.py Push). Its receipt
+        says when the video was written; Gemini Live confirms no frame (decision N43).
+
+        A push and a trigger hold the session as a connection operation does
+        (SessionLifecycle): their messages do not interleave, none goes to a connection being
+        replaced, and one given up while it waits has planned nothing. A trigger asked while a
+        push writes waits for it, and carries its frame.
+
+        After a goAway, a push and a trigger raise RenewalRequired until the session is renewed;
+        a frame so refused is not in the session until a push of a view it is the newest of.
+        The reply in flight then still ends on this connection, by the goAway deadline; renew()
+        once it has ended resumes the session with the latest resumable handle
+        (SessionCore.resume_handle_for), or rebuilds it from the history where there is none.
+        renew() before then closes the connection under the reply, whose events() raise."""
+        async with self._session_lock():
+            session = self._session_for_input()
+            push = self._core.push(history)
+            video = self.types.Blob(data=push.image.data, mime_type=push.image.mime_type)
+            try:
+                await session.send_realtime_input(video=video)
+            except BaseException:
+                self._core.send_failed(push.keys)
+                raise
+            written = self.clock.monotonic()
+            self._core.pushed(push)
+        return PushReceipt(written)
+
+    async def request_reply(self, request: GenerationRequest) -> GenerationHandle:
+        """Streaming: start the next reply with one client content turn, holding the execution
+        feedback of ``request.canonical`` that the session lacks and the newest frame written, its
+        text with its screenshot (SessionCore.trigger), once the events() of the reply before it
+        are done: a connection carries one reply at a time. Its generation starts before the
+        trigger goes out, so that the reader takes the reply's first message for it. Client
+        content interrupts what the model is generating, which NO_INTERRUPTION does not cover:
+        nothing should be generating once the reply before ended and its calls were
+        acknowledged, which only a real session shows. It holds the session as push_frame does.
+
+        After a goAway it raises RenewalRequired, as push_frame does, before it writes or starts
+        anything, also for a goAway read while it waited for the session: renew() resumes the
+        session, and the reply is asked for again."""
+        async with self._session_lock():
+            session = self._session_for_input()
+            if self._core.replying:
+                raise RuntimeError("Gemini Live has a reply in flight on the connection")
+            generation = await self.start_generation(request)
+            trigger = None
+            try:
+                trigger = self._core.trigger(request.canonical)
+                await session.send_client_content(
+                    turns=[self._content(content) for content in trigger.contents],
+                    turn_complete=True,
+                )
+            except BaseException:
+                # No reply comes, and what the session got of the trigger is not known: the
+                # agent leaves the session to be rebuilt before the next push or reply
+                # (harnesses/streaming/agent.py _reply), and its seed replays the feedback.
+                if trigger is not None:
+                    self._core.send_failed(trigger.keys)
+                self._core.reply_abandoned()
+                self._reading_context.run(enter_trace_scope, None)
+                raise
+        self._core.sent(trigger.keys)
+        return generation
+
+    async def send_observation(
+        self, observation: ProviderObservation, history: CanonicalRequest
+    ) -> dict:
+        """Send the history view's newest frame, after the feedback the session does not hold
+        yet, as one input activity."""
+        session = self._session_for_input()
         if self._activity_open:
             raise RuntimeError("Gemini Live input activity is already open")
-        self._last_turn_clean = False
-        self._resume_handle = None
-        self._candidate_resume_handle = None
+        frame = self._core.observe(history)
         if self.options["input_transport"] == "client_content":
-            # Send the screenshot with its grounding text in one Content that triggers generation
-            # after any seeded history has been ingested. A realtime text trigger mixed with
-            # synthetic silent audio can create a second user activity (including hallucinated
-            # speech) and leave synchronous tools unfinished.
-            await session.send_client_content(
-                turns=self.types.Content(
-                    role="user",
-                    parts=[
-                        self.types.Part(text=observation.prompt),
-                        self.types.Part(
-                            inline_data=self.types.Blob(
-                                data=observation.image_bytes,
-                                mime_type=observation.mime_type,
-                            )
-                        ),
-                    ],
-                ),
-                turn_complete=True,
-            )
-            return {"observation_id": observation.observation_id}
-        await session.send_realtime_input(activity_start=self.types.ActivityStart())
+            # Send the screenshot with its grounding text in one Content, after the feedback
+            # Contents, in one message that triggers generation after any seeded history has been
+            # ingested. A realtime text trigger mixed with synthetic silent audio can create a
+            # second user activity (including hallucinated speech) and leave synchronous tools
+            # unfinished.
+            try:
+                await session.send_client_content(
+                    turns=[self._content(content) for content in frame.contents],
+                    turn_complete=True,
+                )
+            except BaseException:
+                self._core.send_failed(frame.keys)
+                raise
+            self._core.sent(frame.keys)
+            return {"observation_id": frame.observation_id}
+        try:
+            await session.send_realtime_input(activity_start=self.types.ActivityStart())
+        except BaseException:
+            self._core.send_failed(frame.keys)
+            raise
         self._activity_open = True
         try:
-            loop = asyncio.get_running_loop()
             if self._last_video_sent_at is not None:
-                await asyncio.sleep(max(0.0, 1.0 - (loop.time() - self._last_video_sent_at)))
+                # Video frames arrive no faster than the model-input frame rate.
+                interval = 1.0 / self.config.fps
+                await self._wait(
+                    "video_interval",
+                    max(0.0, interval - (self.clock.monotonic() - self._last_video_sent_at)),
+                )
             await session.send_realtime_input(
                 video=self.types.Blob(
-                    data=observation.image_bytes,
-                    mime_type=observation.mime_type,
+                    data=frame.image.data,
+                    mime_type=frame.image.mime_type,
                 )
             )
-            self._last_video_sent_at = loop.time()
+            self._last_video_sent_at = self.clock.monotonic()
             # Let media ingestion catch up before the corresponding SoM text arrives.
-            await asyncio.sleep(1.0)
-            await session.send_realtime_input(text=observation.prompt)
-            # Native audio activity must contain audio. This fixed 100-ms silent carrier
-            # has no task information; its input usage is audited, never output-charged.
-            await session.send_realtime_input(
-                audio=self.types.Blob(data=bytes(3200), mime_type="audio/pcm;rate=16000")
-            )
+            await self._wait("video_ingestion", 1.0)
+            # Realtime input has no Contents: each feedback goes as its own text, before the
+            # frame's.
+            for content in frame.feedback:
+                await session.send_realtime_input(text=content.parts[0].text)
+            await session.send_realtime_input(text=frame.text)
+            await session.send_realtime_input(audio=self._audio_carrier())
             await session.send_realtime_input(activity_end=self.types.ActivityEnd())
             self._activity_open = False
         except BaseException:
             # An incomplete activity cannot be resumed as canonical context.
             self._activity_open = True
+            self._core.send_failed(frame.keys)
             raise
-        return {"observation_id": observation.observation_id}
+        self._core.sent(frame.keys)
+        return {"observation_id": frame.observation_id}
 
     async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
         if self._session is None:
             raise RuntimeError("Gemini Live session is not connected")
+        reply = self._core.start_generation(request.generation_id)
+        if self.streaming:
+            # What the reader reads from here is this reply's, as for a turn-based reply's read.
+            self._reading_context.run(enter_trace_scope, current_trace_scope())
+        transport = "client_content" if self.streaming else self.options["input_transport"]
         return GenerationHandle(
             request.generation_id,
+            # The connection's receiver, the reply's generation, and the policy's queued
+            # acknowledgement, sent for every call of this generation.
+            opaque=(
+                self._receiver,
+                reply,
+                request.canonical.policy.texts.gemini_queued_tool_response,
+            ),
             metadata={
                 **self._connect_metadata,
-                "input_audio_carrier_ms": (
-                    100 if self.options["input_transport"] == "realtime_input" else 0
-                ),
-                "video_ingestion_wait_ms": (
-                    1000 if self.options["input_transport"] == "realtime_input" else 0
-                ),
-                "gemini_live_input_transport": self.options["input_transport"],
+                "input_audio_carrier_ms": 100 if transport == "realtime_input" else 0,
+                "video_ingestion_wait_ms": 1000 if transport == "realtime_input" else 0,
+                "gemini_live_input_transport": transport,
                 "gemini_live_tool_response_scheduling": self.options["tool_response_scheduling"],
-                "gemini_live_history_format": self.options["history_format"],
+                "gemini_live_history_format": request.canonical.policy.tool_call_history,
                 "gemini_live_tool_behavior": self.options["tool_behavior"],
                 "gemini_live_completion_signal": self.options["completion_signal"],
                 "completed_turn_refs": {
@@ -863,8 +969,12 @@ class GeminiLiveDriver:
             native_response_exact = True
             response_source = "response_tokens_details"
         else:
+            # Protobuf omits a zero count. The total cannot stand in for it: whether it counts
+            # the thoughts differs between models (Gemini 3.1 Flash Live and 3.8 Live leave them
+            # out, 3.8 Live extended thinking mostly counts them).
             native_response = 0
-            native_response_exact = False
+            native_response_exact = True
+            response_source = "omitted_zero"
         audio_response = sum(
             detail_tokens(detail) for detail in details if modality(detail) == "AUDIO"
         )
@@ -879,25 +989,6 @@ class GeminiLiveDriver:
         reasoning_value = member(usage, "thoughts_token_count", "thoughtsTokenCount")
         reasoning = int(reasoning_value or 0)
         tool_prompt = int(tool_prompt_value or 0)
-        if (
-            not native_response_exact
-            and native_total_value is not None
-            and prompt_value is not None
-        ):
-            residual = native_total - int(prompt_value)
-            # With non-negative usage components, a zero residual proves that response,
-            # tool-use prompt, and thought counts are all zero even when protobuf omits those
-            # optional zero-valued fields. For a positive residual, derive only when both other
-            # components were explicitly reported so the response count remains exact.
-            if residual == 0 or (
-                residual >= 0 and tool_prompt_value is not None and reasoning_value is not None
-            ):
-                native_response = residual - tool_prompt - reasoning
-                native_response_exact = native_response >= 0
-                if native_response_exact:
-                    response_source = "total_minus_prompt_tool_use_and_thoughts"
-        if native_response < 0:
-            raise RuntimeError("Gemini response token count is negative")
         if audio_response > native_response:
             raise RuntimeError("Gemini response AUDIO token detail exceeds response token count")
         chargeable_response = native_response - audio_response
@@ -962,98 +1053,61 @@ class GeminiLiveDriver:
         text = getattr(transcript, "text", None)
         return [text] if text else []
 
-    @staticmethod
-    def _interaction_status(message) -> str | None:
-        # The current SDK exposes status on server_content. Accept the top-level spelling too so
-        # the driver remains compatible with the wire shape documented for tool-call messages.
-        status = getattr(message, "interaction_status", None)
-        if status is None:
-            status = getattr(getattr(message, "server_content", None), "interaction_status", None)
-        status = getattr(status, "value", status)
-        if status is None:
-            return None
-        return str(status).rsplit(".", 1)[-1].upper()
-
-    def _interaction_complete(self, message) -> bool:
-        if self.options["completion_signal"] == "interaction_idle":
-            return self._interaction_status(message) == "IDLE"
-        server = getattr(message, "server_content", None)
-        return bool(server is not None and getattr(server, "turn_complete", False))
-
-    async def _interaction_messages(self, session):
-        """Span all utterances that belong to one model interaction.
-
-        google-genai's ``session.receive()`` iterator ends at every ``turn_complete``. Extended
-        Thinking uses that marker for intermediate spoken fillers, so open another receive iterator
-        until the provider reports the interaction itself as IDLE.
-        """
-        while True:
-            received = False
-            messages = session.receive().__aiter__()
-            while True:
-                try:
-                    message = await self._before_go_away_deadline(anext(messages))
-                except StopAsyncIteration:
-                    break
-                received = True
-                yield message
-                if self._interaction_complete(message):
-                    return
-            if self.options["completion_signal"] != "interaction_idle":
-                return
-            if not received:
-                raise RuntimeError(
-                    "Gemini Live receive stream ended before interaction_status became IDLE"
-                )
-
-    def _capture_control(self, message, *, interaction_complete: bool) -> dict:
-        metadata = {}
-        update = getattr(message, "session_resumption_update", None)
-        if update is not None:
-            if not getattr(update, "resumable", False):
-                self._candidate_resume_handle = None
-            elif getattr(update, "new_handle", None):
-                self._candidate_resume_handle = update.new_handle
-        # Resumption updates often arrive before the final server-content message. Promote the
-        # latest candidate only at a clean turn boundary; a handle captured mid-generation may not
-        # represent the complete provider turn.
-        if interaction_complete and self._candidate_resume_handle:
-            self._resume_handle = self._candidate_resume_handle
-        go_away = getattr(message, "go_away", None)
-        if go_away is not None:
-            self._resume_after_turn = True
-            raw_time_left = getattr(go_away, "time_left", None)
-            try:
-                seconds = float(str(raw_time_left).removesuffix("s"))
-                if not math.isfinite(seconds) or seconds < 0:
-                    raise ValueError("invalid GoAway duration")
-            except (TypeError, ValueError):
-                # Missing or malformed provider deadlines cannot justify waiting indefinitely.
-                seconds = 0.0
-            deadline = time.monotonic() + max(0.0, seconds - _GO_AWAY_CLOSE_MARGIN_S)
-            self._go_away_deadline = (
-                deadline
-                if self._go_away_deadline is None
-                else min(deadline, self._go_away_deadline)
-            )
-            metadata.update(
-                {
-                    "reconnect_required": True,
-                    "reconnect_reason": "go_away",
-                    "go_away_time_left": getattr(go_away, "time_left", None),
-                }
-            )
-        return metadata
-
     async def events(self, generation: GenerationHandle):
-        session = self._session
-        if session is None:
-            raise RuntimeError("Gemini Live session is not connected")
+        """The reply's events, read on the connection it started on, whichever is open now: one
+        closed since ends it with its reader's failure."""
+        receiver, reply, response = generation.opaque
+
+        async def take() -> Received:
+            if not reply.messages:
+                receiving = receiver.receive_until(lambda: reply.messages)
+                # What was read already is taken at once, a failed read too: the goAway deadline
+                # bounds only the wait for a message not read yet.
+                if receiver.failure is None:
+                    receiving = self._before_go_away_deadline(receiving)
+                await receiving
+            return reply.messages.popleft()
+
+        def bound(operation):
+            # A reply read to its end is the server's whole turn, whatever the deadline.
+            return operation if reply.ended else self._before_go_away_deadline(operation)
+
+        try:
+            async for event in self._events(
+                generation, receiver.session, take, bound, reply.held, response
+            ):
+                yield event
+        finally:
+            self._core.reply_done(reply)
+
+    async def _events(self, generation: GenerationHandle, session, take, bound, held, response):
+        """The reply's events: the cancellations ``held`` for it first, in its own generation,
+        telling the connection they were read on (their calls, of any earlier reply, are told by
+        id only), then its messages, which ``take()`` gives one by one; ``bound(write)`` bounds a
+        tool acknowledgement by the goAway deadline where it applies, and ``response`` is the
+        queued acknowledgement each call gets."""
         sequence = 0
-        interrupted = False
         latest_usage = None
         tool_calls_seen = 0
-        async for message in self._interaction_messages(session):
+        for orphan in held:
+            sequence += 1
+            yield FunctionCallsCancelled(
+                generation.generation_id,
+                sequence,
+                type(orphan.message).__name__,
+                orphan.cancelled,
+                received_at=orphan.at,
+                connection=self._trace_connections[orphan.connection].trace_connection_number,
+            )
+        while True:
+            received = await take()
+            message = received.message
+            # The trace's number of the connection, as OpenAI Realtime's events carry; the core
+            # counts only the connections it set up and seeded.
+            numbers = {
+                "connection": self._trace_connections[received.connection].trace_connection_number,
+                "generation": received.generation,
+            }
             raw_type = type(message).__name__
             server = getattr(message, "server_content", None)
             turn = getattr(server, "model_turn", None)
@@ -1064,12 +1118,13 @@ class GeminiLiveDriver:
                 generation.metadata["native_output_received"] = True
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "started",
                     ProviderHistoryState.UNKNOWN,
                     {"native_output_received": True},
+                    **numbers,
                 )
             for part in parts:
                 audio = getattr(part, "inline_data", None)
@@ -1082,40 +1137,42 @@ class GeminiLiveDriver:
                 latest_usage = usage
                 sequence += 1
                 yield UsageSnapshot(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     usage,
+                    **numbers,
                 )
-            server = getattr(message, "server_content", None)
-            interaction_status = self._interaction_status(message)
-            interaction_complete = self._interaction_complete(message)
-            if interaction_status is not None:
-                generation.metadata["gemini_live_interaction_status"] = interaction_status
-            message_interrupted = bool(server is not None and getattr(server, "interrupted", False))
-            interrupted = interrupted or message_interrupted
-            metadata = self._capture_control(
-                message,
-                interaction_complete=interaction_complete and not interrupted,
-            )
-            if metadata:
-                generation.metadata.update(metadata)
+            if received.status is not None:
+                generation.metadata["gemini_live_interaction_status"] = received.status
+            if received.control:
+                generation.metadata.update(received.control)
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "go_away",
                     (
                         ProviderHistoryState.EXACT
-                        if interaction_complete
+                        if received.complete
                         else ProviderHistoryState.UNKNOWN
                     ),
-                    metadata,
+                    received.control,
+                    **numbers,
                 )
-            cancellation = getattr(message, "tool_call_cancellation", None)
-            if cancellation is not None and getattr(cancellation, "ids", None):
-                raise RuntimeError("Gemini cancelled a queued GUI function call")
+            if received.cancelled:
+                if not self.streaming:
+                    raise RuntimeError("Gemini cancelled a queued GUI function call")
+                sequence += 1
+                yield FunctionCallsCancelled(
+                    received.generation_id,
+                    sequence,
+                    raw_type,
+                    received.cancelled,
+                    received_at=received.at,
+                    **numbers,
+                )
             # A transcript delivered with a new call precedes that call's acknowledgement.
             # Keep it with the previous exchange (or initial model text), in provider order.
             for text in self._text_parts(message):
@@ -1128,48 +1185,40 @@ class GeminiLiveDriver:
                     refs["native_initial_text"] = refs.get("native_initial_text", "") + text
                 sequence += 1
                 yield TextDelta(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     text,
                     "visible",
+                    **numbers,
                 )
             calls = getattr(getattr(message, "tool_call", None), "function_calls", None) or []
             if calls:
                 tool_calls_seen += len(calls)
-                call_records = []
-                for call in calls:
-                    arguments = dict(call.args or {})
-                    call_record = {
+                self._core.calls_received(
+                    [(call.id, call.name) for call in calls], received.connection
+                )
+                call_records = [
+                    {
                         "id": call.id or "",
                         "name": call.name or "",
-                        "arguments": arguments,
+                        "arguments": dict(call.args or {}),
                     }
-                    call_records.append(call_record)
-                    sequence += 1
-                    yield FunctionCall(
-                        generation.generation_id,
-                        sequence,
-                        raw_type,
-                        call.id or "",
-                        call.name or "",
-                        arguments,
-                    )
-                function_responses = [
-                    self.types.FunctionResponse(
-                        id=call.id,
-                        name=call.name,
-                        response=dict(_QUEUED_TOOL_RESPONSE),
-                        **self._tool_response_options(),
-                    )
                     for call in calls
                 ]
-                # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
-                # prevents its acknowledgement from triggering another model generation while
-                # the current decision drains through authoritative terminal usage.
-                await self._before_go_away_deadline(
-                    session.send_tool_response(function_responses=function_responses),
-                )
+                # Acknowledge every pending call as queued; the next observation carries its
+                # execution result.
+                function_responses = [
+                    self.types.FunctionResponse(
+                        id=call_id,
+                        name=name,
+                        response=dict(response),
+                        **self._core.tool_response_options,
+                    )
+                    for call_id, name in self._core.unacknowledged(received.connection)
+                ]
+                # The round is recorded before its calls are handed over: a streaming reply
+                # given up while its acknowledgement is written keeps it (agent.py _give_up).
                 completed_refs = generation.metadata["completed_turn_refs"]
                 completed_refs["native_function_calls"].extend(call_records)
                 completed_refs["native_tool_exchanges"].append(
@@ -1189,14 +1238,41 @@ class GeminiLiveDriver:
                 generation.metadata["tool_response_policy"] = (
                     "queue_acknowledgement_before_execution"
                 )
-            if message_interrupted:
+                for call_record in call_records:
+                    sequence += 1
+                    yield FunctionCall(
+                        received.generation_id,
+                        sequence,
+                        raw_type,
+                        call_record["id"],
+                        call_record["name"],
+                        call_record["arguments"],
+                        received_at=received.at if self.streaming else None,
+                        **numbers,
+                    )
+                acknowledged = self._core.acknowledging(received.connection)
+                # Finalize the queue request, not GUI execution. SILENT on a non-blocking tool
+                # prevents its acknowledgement from triggering another model generation while
+                # the current decision drains through authoritative terminal usage. Calls read on
+                # a connection closed since have none to write, which google-genai refuses.
+                if acknowledged:
+                    try:
+                        await bound(
+                            session.send_tool_response(function_responses=function_responses)
+                        )
+                    except BaseException:
+                        self._core.acknowledgement_failed(acknowledged, received.connection)
+                        raise
+                    self._core.acknowledgement_sent(acknowledged, received.connection)
+            if received.interrupted:
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "interrupted",
                     ProviderHistoryState.CONTAMINATED,
+                    **numbers,
                 )
             if (
                 server is not None
@@ -1205,19 +1281,19 @@ class GeminiLiveDriver:
             ):
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "generation_complete",
                     (
                         ProviderHistoryState.CONTAMINATED
-                        if interrupted
+                        if received.contaminated
                         else ProviderHistoryState.UNKNOWN
                     ),
+                    **numbers,
                 )
-            if interaction_complete:
-                generation.metadata["clean_turn_complete"] = not interrupted
-                self._last_turn_clean = not interrupted
+            if received.complete:
+                generation.metadata["clean_turn_complete"] = not received.contaminated
                 generation.metadata["function_calls_seen"] = tool_calls_seen
                 if (
                     generation.metadata.get("audio_bytes_received", 0)
@@ -1229,13 +1305,13 @@ class GeminiLiveDriver:
                     )
                 sequence += 1
                 yield GenerationBoundary(
-                    generation.generation_id,
+                    received.generation_id,
                     sequence,
                     raw_type,
                     "turn_complete",
                     (
                         ProviderHistoryState.CONTAMINATED
-                        if interrupted
+                        if received.contaminated
                         else ProviderHistoryState.EXACT
                     ),
                     {
@@ -1249,57 +1325,56 @@ class GeminiLiveDriver:
                             else "native_turn_complete"
                         ),
                     },
+                    **numbers,
                 )
+            if received.ends:
                 return
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
+    async def interrupt(self, generation: GenerationHandle) -> None:
         if self._session is None or self._activity_open:
-            return InterruptResult(ProviderHistoryState.UNKNOWN)
-        if self.options["input_transport"] == "client_content":
-            # This transport does not opt into manual audio activity detection. Closing the
-            # connection cancels the incomplete turn without injecting an invalid ActivityStart.
+            return
+        if self.streaming or self.options["input_transport"] == "client_content":
+            # client_content does not opt into manual audio activity detection, and streaming's
+            # NO_INTERRUPTION lets an ActivityStart cut nothing off. Closing the connection
+            # cancels the incomplete turn without injecting an ActivityStart.
             await self._close_current()
-            return InterruptResult(
-                ProviderHistoryState.CONTAMINATED,
-                {"interrupt_method": "connection_close"},
-            )
+            return
         try:
             await self._session.send_realtime_input(activity_start=self.types.ActivityStart())
             self._activity_open = True
-            self._resume_handle = None
-            return InterruptResult(ProviderHistoryState.CONTAMINATED)
-        except Exception as exc:  # noqa: BLE001 - provider control boundary
-            return InterruptResult(
-                ProviderHistoryState.UNKNOWN,
-                {"interrupt_error": repr(exc)[:300]},
-            )
+        except Exception:  # noqa: BLE001, S110 - provider control boundary; the close follows
+            pass
 
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
+    async def _sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
         resume_error = None
         try:
-            can_resume = bool(
-                request.reason == "go_away"
-                and not request.force_rebuild
-                and self._resume_handle
-                and self._last_turn_clean
-                and (
-                    request.current_generation is None
-                    or request.current_generation.metadata.get("clean_turn_complete")
-                )
+            current = request.current_generation
+            handle = self._core.resume_handle_for(
+                request.reason,
+                force_rebuild=request.force_rebuild,
+                generation_clean=current is None
+                or bool(current.metadata.get("clean_turn_complete")),
             )
-            if can_resume:
-                handle = self._resume_handle
+            if handle:
                 try:
-                    await self._connect_once(
+                    await self._connect(
                         ConnectRequest(
                             seed=request.seed,
                             resume_handle=handle,
                         )
                     )
+                    # Streaming resumes at the latest resumable handle, not at a clean boundary
+                    # (SessionCore.resume_handle_for); the session takes the next reply all the
+                    # same, and what the server keeps of its context is not known anyway.
+                    resumed = (
+                        "resumed Gemini Live session at its latest resumable handle"
+                        if self.streaming
+                        else "resumed clean Gemini Live session"
+                    )
                     return HistorySyncResult(
                         SyncDisposition.EXACT,
                         ProviderHistoryState.EXACT,
-                        detail=f"resumed clean Gemini Live session: {request.reason}",
+                        detail=f"{resumed}: {request.reason}",
                         provider_metadata={
                             **self._connect_metadata,
                             "session_resumed": True,
@@ -1309,13 +1384,7 @@ class GeminiLiveDriver:
                 except Exception as exc:  # noqa: BLE001 - fall through to canonical replay
                     resume_error = repr(exc)[:300]
             # Renew and replay with the same task credential, including resume failure fallback.
-            await self._connect_once(
-                ConnectRequest(
-                    seed=request.seed,
-                    turns=request.turns,
-                    executed_action_ledger=request.executed_action_ledger,
-                )
-            )
+            await self._connect(ConnectRequest(seed=request.seed, history=request.history))
             return HistorySyncResult(
                 SyncDisposition.REBUILT,
                 ProviderHistoryState.EXACT,
@@ -1326,17 +1395,5 @@ class GeminiLiveDriver:
                     **({"resume_error": resume_error} if resume_error else {}),
                 },
             )
-        except Exception as exc:
-            # Preserve typed transport failures so the outer zero-output retry gate can safely
-            # rebuild the session. Converting them to a string-only BROKEN result would discard the
-            # WebSocket close code and make a later retry impossible to classify.
-            if self.classify_transport_error(exc).retryable:
-                raise
-            return HistorySyncResult(
-                SyncDisposition.BROKEN,
-                ProviderHistoryState.UNKNOWN,
-                detail=repr(exc)[:500],
-            )
-
-    async def close(self) -> None:
-        await self._close_current()
+        except Exception as exc:  # noqa: BLE001 - raised again or kept by _failed_sync
+            return self._failed_sync(request, exc)

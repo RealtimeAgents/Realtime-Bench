@@ -230,8 +230,9 @@ def _start_screen_recording(run_dir=None):
 
 def _stop_screen_recording(run_dir: Path, frames_dir: Path, fps: float):
     """Stop the recording (SIGINT so the MP4 is finalized) and copy it out as
-    video.mp4. Falls back to compositing the captured frames if the recording is
-    missing or empty."""
+    video.mp4. Falls back to compositing the frames captured once per decision if the
+    recording is missing or empty. ``fps`` is the model-input rate, a ceiling on the decision
+    rate: the composite runs faster than the episode wherever decisions were further apart."""
     out = run_dir / "video.mp4"
     try:
         subprocess.run(
@@ -262,8 +263,8 @@ def _stop_screen_recording(run_dir: Path, frames_dir: Path, fps: float):
             apptainer.copy_out(CONTAINER_NAME, "/tmp/recording.mp4", out)
             # X11's first input PTS is the recording origin; process-launch time is not.
             try:
-                from realtime_framework.evaluation.reporting import read_json
                 from realtime_framework.evaluation.reporting import atomic_json
+                from realtime_framework.evaluation.run_records import read_json
 
                 apptainer.copy_out(
                     CONTAINER_NAME, "/tmp/ffmpeg.log", run_dir / "recording-ffmpeg.log"

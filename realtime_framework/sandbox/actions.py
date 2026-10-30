@@ -8,19 +8,32 @@ import math as math
 import shlex as shlex
 import string as string
 import threading as threading
-import time as time
 import traceback as traceback
+from contextlib import contextmanager as contextmanager
+from dataclasses import dataclass as dataclass
 from pathlib import Path as Path
+from typing import Any as Any
 
+from realtime_framework.clock import episode_clocks
 from realtime_framework.entity.actions import Action
 from realtime_framework.entity.actions import ActionType
+from realtime_framework.entity.actions import FrameGeometry
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.actions import normalize_action
+from realtime_framework.entity.config import EnvironmentBudgetConfig
+from realtime_framework.sandbox.budget import BudgetExceeded
+from realtime_framework.sandbox.budget import Deadline
+from realtime_framework.sandbox.budget import operation_budget
+from realtime_framework.sandbox.guest import GuestRefused
+from realtime_framework.sandbox.guest import action_timeout
 from realtime_framework.sandbox.observation.capture import ensure_observation_geometry
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 
-# A tapped key (KEY action under the token clock) stays down for this many ticks so that one
-# rendered frame observes it; 1/60 tick is one 60 Hz rAF at 1 fps.
-TAP_HOLD_TICKS = 1.0 / 60.0
+ENVIRONMENT_BUDGET = EnvironmentBudgetConfig()
+
+# A tapped key (KEY action under the token clock) stays down for this many seconds so that one
+# rendered frame observes it: one 60 Hz rAF at any environment fps.
+TAP_HOLD_S = 1.0 / 60.0
 
 # Reloading a browser game discards episode state. Reject F5/BrowserRefresh and
 # Ctrl/Meta+R for browser_game tasks; server-backed Web tasks may reload safely.
@@ -56,6 +69,29 @@ POINTER_ACTIONS = frozenset(
 
 class ActionRejected(ValueError):
     """The runtime refused a well-formed action; the model is told why and the run stays valid."""
+
+
+@dataclass(frozen=True)
+class Execution:
+    """What one execute() did, all of it from that call, for the kernel's shells, which answer
+    their Execute with it (evaluation/shell.py, env_lanes.py)."""
+
+    # "applied", or "failed" with its rejection or its error; the legacy loop's environment also
+    # answers "wait" for the WAIT it runs.
+    status: str
+    result: Any = None  # the execution record; {"error"} for a failed action
+    coordinate_trace: Any = None  # the guest's, for an applied action the guest ran
+    # Token clock: the key identities a hold_key now holds; () otherwise.
+    held_keys: tuple[str, ...] = ()
+    # The state reads of the end checks made inside the action, in order, each (ended, reason,
+    # error): what check_end() answered with no error, or (False, None, the error) for one that
+    # failed; also of an action that then failed. Only a token-clock key tap makes them.
+    end_checks: tuple[tuple[bool, str | None, str | None], ...] = ()
+    # The refusal's own words when the runtime or the guest refused the action, which leaves the
+    # run valid; else the failure, for which the environment latched the run invalid. Either may
+    # be "": which of the two is not None says which it is.
+    rejection: str | None = None
+    error: str | None = None
 
 
 # Match keyboard repeat behavior under both clocks: repeat only the newest held
@@ -115,57 +151,80 @@ class GuestEnvironment:
     def __init__(
         self,
         guest,
-        fps,
-        deadline,
+        task,
         frames_dir=None,
-        honor_fail=True,
         stop_check=None,
         scene_capture=None,
         action_audit_path=None,
         clock_mode="token",
-        task=None,
         wall_start_time=None,
+        clocks=None,
     ):
         self.g = guest
+        # One environment tick, from the task clock the task and its service advance by.
+        fps = task.clock_snapshot()["fps"]
         self.d = 1.0 / fps
-        self.t0 = time.time() if wall_start_time is None else float(wall_start_time)
-        self.deadline = deadline
+        # Wall-clock time, waits and key releases read the semantic clock; under the token clock
+        # it is the FrameClock that holds the logical tick. Records read the operational clock.
+        self.clocks = clocks or episode_clocks(clock_mode, fps)
+        if clock_mode == "token" and self.clocks.semantic.frame_seconds != self.d:
+            raise ValueError(
+                f"the frame clock counts {self.clocks.semantic.frame_seconds:g} s frames, "
+                f"the task {self.d:g} s ticks"
+            )
+        if clock_mode != "token" and self.clocks.semantic is not self.clocks.operational:
+            raise ValueError("the wall clock reads one clock for world and real time")
+        self.t0 = (
+            self.clocks.operational.time() if wall_start_time is None else float(wall_start_time)
+        )
         self.clock_mode = clock_mode
         self.task = task
-        self._logical_tick = 0
+        # Which hooks the task has, which the environment and the kernel's shells ask.
+        self.task_lifecycle = TaskLifecycle(task)
         self._episode_horizon_tick = None
         # Token-clock holds are leases on individual keys. This lets a movement hold survive later
         # actions and lets overlapping chords extend shared keys without an early keyUp.
         self._held_keys = {}
         # The one held key whose auto-repeat presses are currently scheduled (see AUTOREPEAT_*).
         self._repeat_key = None
-        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (time.time())}.
+        # What the execute() in hand reports as Execution.held_keys: the identities of the keys
+        # a token-clock hold_key leased, for the kernel's shell, which ends the leases itself; ()
+        # on the wall clock, whose release timer ends them.
+        self._action_held_keys = ()
+        # ... and as Execution.end_checks: the end checks its key tap made, for the kernel's
+        # shell, which counts failed state reads: each (ended, reason, error) as check_end()
+        # answered or failed, (False, None, None) also when the task has no end check.
+        self._action_end_checks = ()
+        # Wall-clock leases: identity -> {"wire", "keysym", "expires_at" (semantic clock time)},
+        # and "stuck" once the release timer gave up on the key, left for the cleanup to release.
+        # _wall_lock guards them and the release timer and is never held over a guest request,
+        # so the key checks and the hold snapshot do not wait for one; _wall_commands serializes
+        # the xdotool commands that press and release leased keys with the lease changes they make.
         self._wall_holds = {}
         self._wall_lock = threading.RLock()
+        self._wall_commands = threading.RLock()
         self._wall_timer = None
+        self._wall_timer_generation = 0
         self._wall_closed = False
         self._wall_release_failures = 0
+        # Set by the kernel's shell: called with the invalid-run record when the release timer
+        # invalidates the run.
+        self.on_invalid = None
         # Result of pinning the wall display's auto-repeat to AUTOREPEAT_* (set on first use).
         self._wall_autorepeat = None
         self._held_mouse_buttons = set()
         self.scene_capture = scene_capture
-        self._done = False
         self.actions = 0
         self.frames_dir = frames_dir
         self.fi = 0
         self._fi_lock = threading.Lock()
-        self.honor_fail = honor_fail
         self.stop_check = stop_check
         self._episode_over = False
         self._terminal_reason = None
-        self._terminal_action = None
         self.failed = 0
-        self._last_exec_error = None
         self.capture_latencies = []
         self.capture_times = []
         self.frame_ages = []
-        self._last_execution_result = None
-        self._last_coordinate_trace = None
         self.action_audit_path = Path(action_audit_path) if action_audit_path else None
         self._audit_lock = threading.Lock()
 
@@ -176,6 +235,15 @@ class GuestEnvironment:
             raise ValueError("episode horizon must be a non-negative finite tick")
         self._episode_horizon_tick = value
 
+    @property
+    def _logical_tick(self):
+        """The token clock's tick (frames advanced), kept by the semantic FrameClock."""
+        return self.clocks.semantic.frame
+
+    @_logical_tick.setter
+    def _logical_tick(self, value):
+        self.clocks.semantic.frame = value
+
     def tick_index(self):
         if self.clock_mode == "token":
             return self._logical_tick
@@ -185,19 +253,24 @@ class GuestEnvironment:
         """Return the current clock in frames without quantizing wall time."""
         if self.clock_mode == "token":
             return self._logical_tick
-        return max(0.0, (time.time() - self.t0) / self.d)
+        return max(0.0, (self.clocks.semantic.time() - self.t0) / self.d)
 
     def capture(self):
-        started = time.time()
-        obs = (
-            self.scene_capture.capture(self.tick_index())
-            if self.scene_capture is not None
-            else Observation(self.g.screenshot(), time.time(), self.tick_index())
-        )
+        started = self.clocks.operational.time()
+        with operation_budget(
+            "capture", ENVIRONMENT_BUDGET.capture_s, clock=self.clocks.operational
+        ):
+            obs = (
+                self.scene_capture.capture(self.tick_index())
+                if self.scene_capture is not None
+                else Observation(
+                    self.g.screenshot(), self.clocks.operational.time(), self.tick_index()
+                )
+            )
         ensure_observation_geometry(obs)
         if self.clock_mode == "token":
-            obs.timestamp = self._logical_tick * self.d
-        finished = time.time()
+            obs.timestamp = self.clocks.semantic.monotonic()
+        finished = self.clocks.operational.time()
         self.capture_latencies.append(finished - started)
         self.capture_times.append(getattr(obs, "timestamp", finished))
         obs.metadata["capture_latency_s"] = round(finished - started, 6)
@@ -226,40 +299,71 @@ class GuestEnvironment:
                     if step <= 1e-9:
                         self._release_expired_clock_keys()
                         continue
-                repeat_events, repeats_sent = self._pending_repeat_events(step)
-                try:
-                    if repeat_events:
-                        self.task.advance_clock(step, key_events=repeat_events)
-                    else:
-                        self.task.advance_clock(step)
-                except Exception as exc:
-                    self._invalid_run = {
-                        "category": "environment",
-                        "reason": "clock_advance_failed",
-                        "detail": str(exc),
-                    }
-                    raise
-                if repeat_events and self._repeat_key in self._held_keys:
-                    self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
-                self._logical_tick += step
-                if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
-                    self._logical_tick = int(round(self._logical_tick))
+                self._advance_clock(step)
                 self._release_expired_clock_keys()
-                if self.done():
+                if self._ended_after_step():
                     break
-            return
-        while self.tick_index() < target and time.time() < self.deadline:
-            time.sleep(0.03)
+
+    def _ended_after_step(self):
+        """The end check after each token step of wait_until_tick: the kernel counts failed reads,
+        so every check goes to the action's end checks as (ended, reason, error), and after a
+        failed one, (False, None, its traceback), the advance goes on."""
+        try:
+            ended, reason = self.check_end()
+        except Exception:  # noqa: BLE001 - the kernel counts the failed read
+            self._action_end_checks += ((False, None, traceback.format_exc()),)
+            return False
+        self._action_end_checks += ((ended, reason, None),)
+        return ended
+
+    def step_clock(self, step):
+        """Token clock, for the kernel's shell: advance ``step`` ticks, never past the episode
+        horizon. Leases are not cut, no key is released and the end is not checked: the kernel
+        does each (evaluation/shell.py)."""
+        step = float(step)
+        if self._episode_horizon_tick is not None:
+            step = min(step, self._episode_horizon_tick - self._logical_tick)
+        if step > 0:
+            self._advance_clock(step)
+
+    def _advance_clock(self, step):
+        """Advance the task clock ``step`` ticks, with the repeating key's presses due meanwhile."""
+        repeat_events, repeats_sent = self._pending_repeat_events(step)
+        try:
+            with operation_budget(
+                "clock advance",
+                ENVIRONMENT_BUDGET.clock_advance_s,
+                clock=self.clocks.operational,
+            ):
+                if repeat_events:
+                    self.task.advance_clock(step, key_events=repeat_events)
+                else:
+                    self.task.advance_clock(step)
+        except Exception as exc:
+            self._invalid_run = {
+                "category": "environment",
+                "reason": "clock_advance_failed",
+                "detail": str(exc),
+            }
+            raise
+        if repeat_events and self._repeat_key in self._held_keys:
+            self._held_keys[self._repeat_key]["repeats_sent"] = repeats_sent
+        self._logical_tick += step
+        if abs(self._logical_tick - round(self._logical_tick)) < 1e-9:
+            self._logical_tick = int(round(self._logical_tick))
 
     def render_current_frame(self):
         """Publish action-visible pixels without advancing the token clock."""
         if self.clock_mode != "token":
             return None
-        renderer = getattr(self.task, "render_current_frame", None)
-        if not callable(renderer):
+        renderer = self.task_lifecycle.frame_renderer
+        if renderer is None:
             return None
         try:
-            return renderer()
+            with operation_budget(
+                "frame render", ENVIRONMENT_BUDGET.clock_advance_s, clock=self.clocks.operational
+            ):
+                return renderer()
         except Exception as exc:
             self._invalid_run = {
                 "category": "environment",
@@ -267,12 +371,6 @@ class GuestEnvironment:
                 "detail": str(exc),
             }
             raise
-
-    def time_remaining(self):
-        return None if self.clock_mode == "token" else self.deadline - time.time()
-
-    def past_deadline(self):
-        return False if self.clock_mode == "token" else time.time() >= self.deadline
 
     @staticmethod
     def _key_identity(key):
@@ -319,25 +417,38 @@ class GuestEnvironment:
             if identity in self._held_keys and identity not in exclude
         ]
 
-    def _release_clock_keys(self, identities=None):
-        selected = (
-            list(self._held_keys)
-            if identities is None
-            else [identity for identity in identities if identity in self._held_keys]
-        )
+    def _clock_key_event(self, event_type, chord, held_modifiers):
+        """Send one token-clock key event within its own budget."""
+        with operation_budget(
+            "key press" if event_type == "keyDown" else "key release",
+            ENVIRONMENT_BUDGET.key_event_s,
+            clock=self.clocks.operational,
+        ):
+            self.task.clock_key_event(event_type, chord, held_modifiers=held_modifiers)
+
+    def release_keys(self, keys):
+        """Token clock, for the kernel's shell: release these held keys, by identity, whose lease
+        ended; a key that is not held is skipped."""
+        self._release_clock_keys(keys)
+
+    def _clock_key_up(self, identities):
+        """Release these held token-clock keys in one keyUp, in the order they were pressed; a key
+        that is not held is skipped."""
+        wanted = set(identities)
+        selected = [identity for identity in self._held_keys if identity in wanted]
         if not selected:
             return
+        chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
+        self._clock_key_event("keyUp", chord, held_modifiers=self._held_modifiers(exclude=selected))
+        for identity in selected:
+            self._held_keys.pop(identity, None)
+        if self._repeat_key in selected:
+            self._repeat_key = None
+
+    def _release_clock_keys(self, identities):
+        """_clock_key_up, invalidating the run when it fails."""
         try:
-            chord = "+".join(self._held_keys[identity]["wire"] for identity in selected)
-            self.task.clock_key_event(
-                "keyUp",
-                chord,
-                held_modifiers=self._held_modifiers(exclude=selected),
-            )
-            for identity in selected:
-                self._held_keys.pop(identity, None)
-            if self._repeat_key in selected:
-                self._repeat_key = None
+            self._clock_key_up(identities)
         except Exception as exc:
             self._invalid_run = {
                 "category": "environment",
@@ -369,6 +480,9 @@ class GuestEnvironment:
         Repeat k fires at ``origin + delay + k * interval``; computing every tick from the press
         instead of accumulating an interval keeps a repeat that sits on an advance boundary from
         drifting a few ulps below the next advance's start (which the frame scheduler rejects).
+        A repeat on the end of this advance goes with the next one. When that end is on the page's
+        frame grid this advance renders the frame there, and the game sees the repeat a frame later
+        than a keyboard would deliver it (sandbox/browser/clock.py cdp_advance_rendered_frame).
         """
         item = self._held_keys.get(self._repeat_key) if self._repeat_key else None
         if not item or "repeat_origin_tick" not in item:
@@ -397,7 +511,7 @@ class GuestEnvironment:
 
     def _active_hold_snapshot(self):
         if self.clock_mode != "token":
-            now = time.time()
+            now = self.clocks.semantic.time()
             with self._wall_lock:
                 return [
                     {
@@ -422,7 +536,7 @@ class GuestEnvironment:
 
     def _reject_page_reload(self, action):
         """Refuse the page-reload shortcuts in game tasks (see PAGE_RELOAD_KEYS)."""
-        if getattr(self.task, "category", None) != "browser_game":
+        if not self.task_lifecycle.reload_discards_episode:
             return
         try:
             parts, chord = self._key_chord(action)
@@ -469,6 +583,23 @@ class GuestEnvironment:
                 "ctrl/meta+scroll is disabled: it zooms the browser instead of scrolling the page"
             )
 
+    def _reject_outside_screenshot(self, action):
+        """Refuse a point outside the screenshot the model was sent, which the conversion to
+        desktop pixels would clamp onto the screen's edge (FrameGeometry.image_to_screen_point)."""
+        if action.coordinate_space != "model_image_px":
+            return
+        width, height = FrameGeometry.from_dict(action.coordinate_transform).image_size
+        params = action.parameters or {}
+        for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
+            x, y = params.get(x_key), params.get(y_key)
+            if not (isinstance(x, (int, float)) and isinstance(y, (int, float))):
+                continue
+            if not (0 <= x < width and 0 <= y < height):
+                raise ActionRejected(
+                    f"{action.action_type.value} point ({x}, {y}) lands outside the screenshot, "
+                    f"which is {width}x{height} pixels"
+                )
+
     def _reject_outside_page(self, action):
         """Refuse pointer input outside the page viewport (browser toolbar, tabs, desktop)."""
         rect = getattr(self.scene_capture, "page_rect", None)
@@ -487,10 +618,30 @@ class GuestEnvironment:
                     "be used, not the browser's address bar, tabs or the desktop around it"
                 )
 
+    def _reject(self, action):
+        """Run the _reject_* checks that apply to the action."""
+        if action.action_type in (ActionType.KEY, ActionType.HOLD_KEY):
+            self._reject_page_reload(action)
+            self._reject_browser_shortcut(action)
+        elif action.action_type.value in POINTER_ACTIONS:
+            self._reject_zoom_scroll(action)
+            self._reject_outside_screenshot(action)
+            self._reject_outside_page(action)
+
     def _ensure_page_focus(self):
         """Keep desktop key input on the page; returns True when focus had to be restored."""
         ensure = getattr(self.scene_capture, "ensure_page_focus", None)
         return bool(ensure()) if callable(ensure) else False
+
+    def _count_as_held(self, parts):
+        """Keys whose press or release failed may still be down on the page: count them as held,
+        so that the cleanup releases them (a key held already keeps its lease). A key that was up
+        gets that keyUp as an event too, but the cleanup comes after the scored snapshot is
+        frozen."""
+        for identity, wire in parts:
+            self._held_keys.setdefault(
+                identity, {"wire": wire, "expires_at_tick": self._logical_tick}
+            )
 
     def _execute_clock_key(self, action):
         parts, chord = self._key_chord(action)
@@ -501,24 +652,28 @@ class GuestEnvironment:
             # Modifiers held by an earlier hold_key stay down: they only flag the tap's events.
             inherited_modifiers = self._held_modifiers(exclude=requested_identities)
             for _ in range(repeat):
-                self.task.clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
-                # A new press of a repeatable key takes over auto-repeat on a real keyboard; the
-                # tap is released before its first repeat could fire, so nothing repeats
-                # afterwards. Modifier keys do not repeat and leave the repeating key alone.
-                if any(identity not in MODIFIER_KEYS for identity, _ in parts):
-                    self._repeat_key = None
-                # Games that poll key state once per draw (reading a keys-down map in draw())
-                # never see a keyDown+keyUp delivered inside one frozen instant. Render
-                # one frame with the key down before releasing it (~17 ms of virtual time).
-                self.wait_until_tick(self._logical_tick + TAP_HOLD_TICKS)
-                self.task.clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                try:
+                    self._clock_key_event("keyDown", chord, held_modifiers=inherited_modifiers)
+                    # A new press of a repeatable key takes over auto-repeat on a real keyboard;
+                    # the tap is released before its first repeat could fire, so nothing repeats
+                    # afterwards. Modifier keys do not repeat and leave the repeating key alone.
+                    if any(identity not in MODIFIER_KEYS for identity, _ in parts):
+                        self._repeat_key = None
+                    # Games that poll key state once per draw (reading a keys-down map in draw())
+                    # never see a keyDown+keyUp delivered inside one frozen instant. Render
+                    # one frame with the key down before releasing it (~17 ms of virtual time).
+                    self.wait_until_tick(self._logical_tick + TAP_HOLD_S / self.d)
+                    self._clock_key_event("keyUp", chord, held_modifiers=inherited_modifiers)
+                except Exception:
+                    self._count_as_held(parts)
+                    raise
             # A tap of an already-held key must not terminate its outstanding lease. The lease may
             # have expired during the rendered frame above, so only keys still held are pressed
             # again.
             restore_identities = [item for item in overlapping if item in self._held_keys]
             if restore_identities:
                 restore = "+".join(self._held_keys[item]["wire"] for item in restore_identities)
-                self.task.clock_key_event(
+                self._clock_key_event(
                     "keyDown",
                     restore,
                     held_modifiers=self._held_modifiers(exclude=restore_identities),
@@ -554,10 +709,15 @@ class GuestEnvironment:
         extended = [identity for identity, _ in parts if identity in self._held_keys]
         new_chord = "+".join(wire for _, wire in new_parts)
         if new_parts:
-            self.task.clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+            try:
+                self._clock_key_event("keyDown", new_chord, held_modifiers=inherited_modifiers)
+                if duration <= 1e-9:
+                    self._clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
+            except Exception:
+                self._count_as_held(new_parts)
+                raise
         if duration <= 1e-9:
             if new_parts:
-                self.task.clock_key_event("keyUp", new_chord, held_modifiers=inherited_modifiers)
                 # The transient press took over auto-repeat and was released at once.
                 self._repeat_key = None
         else:
@@ -574,6 +734,7 @@ class GuestEnvironment:
             for identity, _ in new_parts:
                 if identity not in MODIFIER_KEYS:
                     self._start_autorepeat(identity)
+            self._action_held_keys = tuple(identity for identity, _ in parts)
         return {
             "logical_key": chord,
             "effective_chord": "+".join(
@@ -590,7 +751,7 @@ class GuestEnvironment:
             "extended_keys": [
                 self._held_keys[item]["wire"] for item in extended if item in self._held_keys
             ],
-            "hold_frames": duration / self.d,
+            "hold_ticks": duration / self.d,
             "duration_simulated_seconds": duration,
             "auto_repeat": {
                 "delay_seconds": AUTOREPEAT_DELAY_S,
@@ -613,68 +774,88 @@ class GuestEnvironment:
             raise RuntimeError(f"{argv[0]} {argv[1]} failed: {str(detail).strip()[:200]}")
         return result
 
+    @contextmanager
+    def _wall_commands_within_budget(self):
+        """Hold ``_wall_commands``. The release timer holds it during its guest request, which an
+        operation waits for no longer than its budget lasts."""
+        deadline = Deadline(None, "wall key commands")
+        left = deadline.remaining()
+        if not self._wall_commands.acquire(timeout=-1 if left is None else left):
+            raise deadline.exceeded()
+        try:
+            yield
+        finally:
+            self._wall_commands.release()
+
     def _wall_release(self, identities):
-        """Release the given wall-clock leases (caller holds ``_wall_lock``)."""
-        selected = [identity for identity in identities if identity in self._wall_holds]
+        """Release the given wall-clock leases (caller holds ``_wall_commands``)."""
+        with self._wall_lock:
+            selected = [identity for identity in identities if identity in self._wall_holds]
+            keysyms = [self._wall_holds[identity]["keysym"] for identity in selected]
         if not selected:
             return
-        self._wall_command(
-            [
-                "xdotool",
-                "keyup",
-                "--",
-                *(self._wall_holds[identity]["keysym"] for identity in selected),
-            ]
-        )
-        for identity in selected:
-            self._wall_holds.pop(identity, None)
-
-    def _wall_release_due(self):
+        self._wall_command(["xdotool", "keyup", "--", *keysyms])
         with self._wall_lock:
-            self._wall_timer = None
-            if self._wall_closed:
-                return
-            now = time.time()
-            expired = [
-                identity
-                for identity, item in self._wall_holds.items()
-                if item["expires_at"] <= now + 1e-3
-            ]
+            for identity in selected:
+                self._wall_holds.pop(identity, None)
+
+    def _wall_release_due(self, generation):
+        invalid = None
+        with self._wall_commands:
+            with self._wall_lock:
+                if self._wall_closed or generation != self._wall_timer_generation:
+                    return
+                now = self.clocks.semantic.time()
+                expired = [
+                    identity
+                    for identity, item in self._wall_holds.items()
+                    if not item.get("stuck") and item["expires_at"] <= now + 1e-3
+                ]
             try:
                 self._wall_release(expired)
-                self._wall_release_failures = 0
             except Exception as exc:
                 # A key the guest cannot release stays physically down (and auto-repeating). Retry
                 # briefly with a floor between attempts; then treat the stuck key as an
-                # environment failure instead of hammering the guest from this timer forever.
-                self._wall_release_failures += 1
-                if self._wall_release_failures >= WALL_RELEASE_MAX_ATTEMPTS:
+                # environment failure instead of hammering the guest from this timer forever, and
+                # leave it to the cleanup.
+                with self._wall_lock:
+                    self._wall_release_failures += 1
+                    if self._wall_release_failures < WALL_RELEASE_MAX_ATTEMPTS:
+                        self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
+                        return
                     for identity in expired:
-                        self._wall_holds.pop(identity, None)
+                        self._wall_holds[identity]["stuck"] = True
                     if not getattr(self, "_invalid_run", None):
-                        self._invalid_run = {
+                        self._invalid_run = invalid = {
                             "category": "environment",
                             "reason": "wall_key_release_failed",
                             "detail": str(exc),
                         }
-                else:
-                    self._schedule_wall_release(min_delay=WALL_RELEASE_RETRY_S)
-                    return
-            self._schedule_wall_release()
+            else:
+                with self._wall_lock:
+                    self._wall_release_failures = 0
+            with self._wall_lock:
+                self._schedule_wall_release()
+        # On this timer's thread and outside the locks: the callback is the shell's.
+        if invalid is not None and self.on_invalid is not None:
+            self.on_invalid(invalid)
 
     def _schedule_wall_release(self, min_delay=0.0):
-        """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``)."""
+        """Arm one timer for the earliest outstanding wall lease (caller holds ``_wall_lock``).
+
+        A timer that fired already cannot be cancelled and may be waiting for _wall_commands: the
+        generation it was armed with tells it that it has been replaced."""
         if self._wall_timer is not None:
             self._wall_timer.cancel()
             self._wall_timer = None
-        if self._wall_closed or not self._wall_holds:
+        self._wall_timer_generation += 1
+        due = [item["expires_at"] for item in self._wall_holds.values() if not item.get("stuck")]
+        if self._wall_closed or not due:
             return
-        earliest = min(item["expires_at"] for item in self._wall_holds.values())
-        delay = max(float(min_delay), earliest - time.time())
-        timer = threading.Timer(delay, self._wall_release_due)
-        timer.daemon = True
-        self._wall_timer = timer
-        timer.start()
+        clock = self.clocks.semantic
+        delay = max(float(min_delay), min(due) - clock.time())
+        generation = self._wall_timer_generation
+        self._wall_timer = clock.timer(delay, lambda: self._wall_release_due(generation))
 
     def _ensure_wall_autorepeat(self):
         """Pin the wall display's auto-repeat to the values the token clock emulates (once).
@@ -699,8 +880,15 @@ class GuestEnvironment:
             }
         return self._wall_autorepeat
 
-    def _execute_wall_hold(self, action):
-        """Press the chord now and release it when the lease expires; never block the loop."""
+    def _execute_wall_hold(self, action, release_at=None):
+        """Press the chord now and release it when the lease expires; never block the loop.
+
+        The lease lasts ``duration`` from the press, or to ``release_at`` (semantic seconds since
+        the origin) when the kernel's shell gives it, but at least min(duration, TAP_HOLD_S)
+        after its keydown returned, past that time when the press came that late: TAP_HOLD_S is
+        the token clock's tap, 1/60 s (the guest's wall-clock tap is 1/30 s), and a press never
+        holds longer late than on time.
+        """
         parts, chord = self._key_chord(action)
         duration = float(action.parameters.get("duration", 1.0))
         if not math.isfinite(duration) or duration <= 0:
@@ -708,25 +896,42 @@ class GuestEnvironment:
         keysyms = {identity: _xdotool_keysym(identity) for identity, _ in parts}
         if any(value is None for value in keysyms.values()):
             return None
-        with self._wall_lock:
+        with self._wall_commands_within_budget():
             autorepeat = self._ensure_wall_autorepeat()
-            now = time.time()
-            new_parts = [
-                (identity, wire) for identity, wire in parts if identity not in self._wall_holds
-            ]
+            now = self.clocks.semantic.time()
+            with self._wall_lock:
+                new_parts = [
+                    (identity, wire) for identity, wire in parts if identity not in self._wall_holds
+                ]
             if new_parts:
-                self._wall_command(
-                    ["xdotool", "keydown", "--", *(keysyms[identity] for identity, _ in new_parts)]
-                )
-            for identity, wire in parts:
-                current = self._wall_holds.get(identity)
-                self._wall_holds[identity] = {
-                    "wire": current["wire"] if current else wire,
-                    "keysym": keysyms[identity],
-                    "expires_at": max(current["expires_at"] if current else now, now + duration),
-                }
-            self._schedule_wall_release()
-            return {
+                try:
+                    self._wall_command(
+                        [
+                            "xdotool",
+                            "keydown",
+                            "--",
+                            *(keysyms[identity] for identity, _ in new_parts),
+                        ]
+                    )
+                except Exception:
+                    self._count_as_held_on_the_wall(action)
+                    raise
+            pressed_at = self.clocks.semantic.time()
+            expires_at = (
+                now + duration
+                if release_at is None
+                else max(self.t0 + release_at, pressed_at + min(duration, TAP_HOLD_S))
+            )
+            with self._wall_lock:
+                for identity, wire in parts:
+                    current = self._wall_holds.get(identity)
+                    self._wall_holds[identity] = {
+                        "wire": current["wire"] if current else wire,
+                        "keysym": keysyms[identity],
+                        "expires_at": max(current["expires_at"] if current else now, expires_at),
+                    }
+                self._schedule_wall_release()
+            result = {
                 "status": "ok",
                 "timestamp": now,
                 "logical_key": chord,
@@ -740,33 +945,78 @@ class GuestEnvironment:
                 "active_holds": self._active_hold_snapshot(),
                 "active_mouse_buttons": sorted(self._held_mouse_buttons),
             }
+            if release_at is not None:
+                # The lease this hold set, from its keydown request to the release the timer will
+                # send: about how long its keys stay down, the keyup's trip to the desktop taking
+                # about as long as the keydown's (longer on a retry). A key an earlier hold keeps
+                # down longer goes up at that one's end.
+                result["lease_seconds"] = round(expires_at - now, 3)
+            return result
+
+    def _count_as_held_on_the_wall(self, action):
+        """The keys of an action whose press or release failed may still be down on the desktop:
+        count those xdotool can name as held, so that the cleanup releases them (a key held
+        already keeps its lease). The X server drops the release of a key that is up."""
+        try:
+            parts, _ = self._key_chord(action)
+        except ValueError:
+            return
+        # The release timer may hold _wall_commands for its guest request: wait no longer than the
+        # action's budget lasts, and record nothing without it (the run is invalid already).
+        try:
+            left = Deadline(None, "wall key commands").remaining()
+        except BudgetExceeded:
+            left = 0.0
+        if not self._wall_commands.acquire(timeout=-1 if left is None else left):
+            return
+        try:
+            with self._wall_lock:
+                now = self.clocks.semantic.time()
+                for identity, wire in parts:
+                    keysym = _xdotool_keysym(identity)
+                    if keysym is not None:
+                        self._wall_holds.setdefault(
+                            identity, {"wire": wire, "keysym": keysym, "expires_at": now}
+                        )
+        finally:
+            self._wall_commands.release()
 
     def _restore_wall_holds(self, action):
         """Press wall-held keys again after a guest action released them.
 
         A `key` tap goes to the guest as a press and release, which ends the X hold of any key
-        in its chord; the token path re-presses such keys so the lease survives, and the wall
-        path must do the same. Returns the wires pressed again, if any.
+        in its chord, as does a pointer action's modifier, which the guest presses and releases
+        around it (guest_server/server.py _with_modifier); the token path re-presses such keys
+        so the lease survives, and the wall path must do the same. Returns the wires pressed
+        again, if any.
         """
-        if not self._wall_holds:
-            return []
-        try:
-            parts, _ = self._key_chord(action)
-        except ValueError:
-            return []
+        modifier = action.parameters.get("modifier")
+        if modifier:
+            identities = [self._key_identity(part.strip()) for part in modifier.split("+")]
+        else:
+            try:
+                parts, _ = self._key_chord(action)
+            except ValueError:
+                return []
+            identities = [identity for identity, _ in parts]
+        # Only actions add leases and the release timer only ends them: a chord with no key held
+        # now has none to press again.
         with self._wall_lock:
-            selected = [identity for identity, _ in parts if identity in self._wall_holds]
+            if not any(identity in self._wall_holds for identity in identities):
+                return []
+        with self._wall_commands_within_budget():
+            with self._wall_lock:
+                selected = [
+                    self._wall_holds[identity]
+                    for identity in identities
+                    if identity in self._wall_holds
+                ]
             if not selected:
                 return []
             self._wall_command(
-                [
-                    "xdotool",
-                    "keydown",
-                    "--",
-                    *(self._wall_holds[identity]["keysym"] for identity in selected),
-                ]
+                ["xdotool", "keydown", "--", *(item["keysym"] for item in selected)]
             )
-            return [self._wall_holds[identity]["wire"] for identity in selected]
+            return [item["wire"] for item in selected]
 
     def _release_wall_holds(self):
         with self._wall_lock:
@@ -774,166 +1024,161 @@ class GuestEnvironment:
             if self._wall_timer is not None:
                 self._wall_timer.cancel()
                 self._wall_timer = None
+        with self._wall_commands:
             self._wall_release(list(self._wall_holds))
 
     def _release_mouse_inputs(self):
+        """Release each held mouse button on its own: one that fails stays held, and the failures
+        are raised together once every button was tried."""
+        errors = []
         for button in list(self._held_mouse_buttons):
-            self.g.execute_action(Action(ActionType.MOUSE_UP, {"button": button}))
-            self._held_mouse_buttons.discard(button)
+            try:
+                self.g.execute_action(Action(ActionType.MOUSE_UP, {"button": button}))
+            except Exception as exc:  # noqa: BLE001 - the other buttons are still released
+                errors.append(exc)
+            else:
+                self._held_mouse_buttons.discard(button)
+        if errors:
+            raise ExceptionGroup("held mouse buttons were not released", errors)
 
     def release_inputs(self):
-        """Best-effort episode cleanup for every stateful input primitive."""
+        """Best-effort episode cleanup for every stateful input primitive. It runs once the
+        outcome is latched: a failure raises for the caller to log and leaves the run as it was."""
         try:
-            if self.clock_mode == "token" and hasattr(self.task, "clock_key_event"):
-                self._release_clock_keys()
+            if self.clock_mode == "token" and self.task_lifecycle.takes_clock_keys:
+                self._clock_key_up(list(self._held_keys))
             if self.clock_mode != "token":
                 self._release_wall_holds()
         finally:
             self._release_mouse_inputs()
 
     @staticmethod
-    def _rejected_by_guest(exc) -> bool:
-        """True when the guest agent refused the action as malformed (HTTP 4xx).
+    def _refusal(exc):
+        """The refusal of the model's action, the runtime's (ActionRejected) or the guest agent's
+        (GuestRefused), if ``exc`` is one.
 
         The guest validates every action body (unknown key names such as ``ctrl+plus``,
-        unexpected parameters, ...) and answers 400. That is the model's action being
-        rejected, not an environment failure, so it must not invalidate the run.
+        unexpected parameters, ...) and answers 400 on /action. That is the model's action being
+        rejected, not an environment failure, so it must not invalidate the run. The guest's
+        refusal that comes after the action's budget ran out is one too, and the BudgetExceeded
+        keeps it as its cause: the late answer still shows that the guest works. The runtime's own
+        checks wait for nothing and refuse first. A 4xx from another endpoint, such as the
+        /execute of the xdotool commands, does not show that the environment works, and the run
+        is invalid.
         """
-        status = getattr(getattr(exc, "response", None), "status_code", None)
-        return isinstance(status, int) and 400 <= status < 500
+        if isinstance(exc, (ActionRejected, GuestRefused)):
+            return exc
+        if isinstance(exc.__cause__, GuestRefused):
+            return exc.__cause__
+        return None
 
     def _execution_failed(self, exc):
         self.failed += 1
-        self._last_exec_error = str(exc)
-        self._last_rejected_by_guest = self._rejected_by_guest(exc) or isinstance(
-            exc, ActionRejected
-        )
-        if not self._last_rejected_by_guest and not getattr(self, "_invalid_run", None):
+        refusal = self._refusal(exc)
+        if refusal is None and not getattr(self, "_invalid_run", None):
             self._invalid_run = {
                 "category": "environment",
                 "reason": "action_execution_failed",
                 "detail": str(exc),
             }
-        self._last_execution_result = {"error": str(exc)}
-        self._last_coordinate_trace = None
-        return "failed"
+        # The model is told the refusal's own words; the execution result keeps the whole failure.
+        return Execution(
+            "failed",
+            {"error": str(exc)},
+            held_keys=self._action_held_keys,
+            end_checks=self._action_end_checks,
+            rejection=None if refusal is None else str(refusal),
+            error=str(exc) if refusal is None else None,
+        )
 
-    def execute(self, action):
-        """Apply one action and return its lifecycle status to the scheduler."""
+    def execute(self, action, *, release_at=None):
+        """Apply one action and return what it did (Execution). The kernel's shell gives a
+        wall-clock hold_key the time to release its keys, ``release_at``."""
+        self._action_held_keys = ()
+        self._action_end_checks = ()
         action_type = action.action_type
-        if action_type in (ActionType.DONE, ActionType.FAIL):
-            if self.honor_fail:
-                self._done = True
-                self._terminal_action = action_type
-                return "terminal"
-            return "terminal_ignored"
-        if action_type == ActionType.WAIT:
-            try:
-                duration = float(action.parameters.get("duration", 0.0))
-                started_at = self.clock_position()
-                requested_target = (
-                    self._logical_tick + duration / self.d if self.clock_mode == "token" else None
-                )
-                horizon_truncates = bool(
-                    requested_target is not None
-                    and self._episode_horizon_tick is not None
-                    and requested_target > self._episode_horizon_tick + 1e-9
-                )
-                if duration > 0:
-                    if self.clock_mode == "token":
-                        self.wait_until_tick(self._logical_tick + duration / self.d)
-                    else:
-                        remaining = max(0.0, self.deadline - time.time())
-                        time.sleep(min(duration, remaining))
-                elapsed = round(
-                    max(0.0, (self.clock_position() - started_at) * self.d),
-                    9,
-                )
-                self._last_execution_result = {
-                    "duration_simulated_seconds": elapsed,
-                    "requested_duration_simulated_seconds": duration,
-                    "truncated_by_episode_horizon": bool(
-                        horizon_truncates
-                        and self._logical_tick >= self._episode_horizon_tick - 1e-9
-                    ),
-                    "truncated_by_terminal_condition": bool(
-                        self.clock_mode == "token"
-                        and elapsed + 1e-9 < duration
-                        and not (
-                            horizon_truncates
-                            and self._logical_tick >= self._episode_horizon_tick - 1e-9
-                        )
-                    ),
-                    "active_holds": self._active_hold_snapshot(),
-                    "active_mouse_buttons": sorted(self._held_mouse_buttons),
-                }
-                return "wait"
-            except Exception as exc:
-                return self._execution_failed(exc)
         try:
-            if action_type in (ActionType.KEY, ActionType.HOLD_KEY):
-                self._reject_page_reload(action)
-                self._reject_browser_shortcut(action)
-            elif action_type.value in POINTER_ACTIONS:
-                self._reject_zoom_scroll(action)
-                self._reject_outside_page(action)
             if (
                 self.clock_mode == "token"
-                and hasattr(self.task, "clock_key_event")
+                and self.task_lifecycle.takes_clock_keys
                 and action_type in (ActionType.KEY, ActionType.HOLD_KEY)
             ):
-                self._last_execution_result = self._execute_clock_key(action)
+                self._reject(action)
+                result = self._execute_clock_key(action)
                 self.actions += 1
-                return "applied"
-            # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
-            focus_restored = action_type in (
-                ActionType.KEY,
-                ActionType.HOLD_KEY,
-                ActionType.TYPE,
-            ) and self._ensure_page_focus()
-            begin_barrier = getattr(self.task, "begin_gui_action", None)
-            complete_barrier = getattr(self.task, "complete_gui_action", None)
-            barrier_snapshot = (
-                begin_barrier() if callable(begin_barrier) and callable(complete_barrier) else None
-            )
-            result = None
-            if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
-                # Keys xdotool cannot name and zero-length holds fall through to the guest, which
-                # validates them (HTTP 400 for unsupported names).
-                result = self._execute_wall_hold(action)
-            if result is None:
-                result = self.g.execute_action(action)
-                if self.clock_mode != "token" and action_type in (
+                return Execution(
+                    "applied",
+                    result,
+                    held_keys=self._action_held_keys,
+                    end_checks=self._action_end_checks,
+                )
+            budget = action_timeout(action, ENVIRONMENT_BUDGET.action_s)
+            with operation_budget(
+                f"{action_type.value} action", budget, clock=self.clocks.operational
+            ):
+                # On the wall clock the hold, the re-press after a guest tap and counting the keys
+                # of a failed guest request as held wait for the release timer's guest request in
+                # flight only while the budget lasts; the key and scroll checks and the hold
+                # snapshot below read the leases without waiting for it.
+                self._reject(action)
+                # Remaining keyboard input travels through the desktop to whatever Chrome focuses.
+                focus_restored = action_type in (
                     ActionType.KEY,
                     ActionType.HOLD_KEY,
-                ):
-                    restored = self._restore_wall_holds(action)
-                    if restored:
-                        if not isinstance(result, dict):
-                            result = {"guest_result": result}
-                        result["restored_wall_holds"] = restored
-            if barrier_snapshot is not None:
-                barrier_result = complete_barrier(barrier_snapshot)
-                if not isinstance(result, dict):
-                    result = {"guest_result": result}
-                result["business_action_barrier"] = barrier_result
+                    ActionType.TYPE,
+                ) and self._ensure_page_focus()
+                barrier_snapshot = self.task_lifecycle.begin_gui_action()
+                result = None
+                if self.clock_mode != "token" and action_type == ActionType.HOLD_KEY:
+                    # Keys xdotool cannot name and zero-length holds fall through to the guest,
+                    # which validates them (HTTP 400 for unsupported names).
+                    result = self._execute_wall_hold(action, release_at)
+                if result is None:
+                    wall_key = self.clock_mode != "token" and action_type in (
+                        ActionType.KEY,
+                        ActionType.HOLD_KEY,
+                    )
+                    try:
+                        result = self.g.execute_action(action)
+                    except Exception as exc:
+                        # The guest presses and releases these keys itself; a refusal pressed none.
+                        if wall_key and self._refusal(exc) is None:
+                            self._count_as_held_on_the_wall(action)
+                        raise
+                    if wall_key or (
+                        self.clock_mode != "token" and action.parameters.get("modifier")
+                    ):
+                        restored = self._restore_wall_holds(action)
+                        if restored:
+                            if not isinstance(result, dict):
+                                result = {"guest_result": result}
+                            result["restored_wall_holds"] = restored
+                if barrier_snapshot is not None:
+                    barrier_result = self.task_lifecycle.complete_gui_action(barrier_snapshot)
+                    if not isinstance(result, dict):
+                        result = {"guest_result": result}
+                    result["business_action_barrier"] = barrier_result
+                active_holds = self._active_hold_snapshot()
             if focus_restored:
                 if not isinstance(result, dict):
                     result = {"guest_result": result}
                 result["page_focus_restored"] = True
-            self._last_execution_result = result
-            self._last_coordinate_trace = (result or {}).get("coordinate_trace")
+            coordinate_trace = (result or {}).get("coordinate_trace")
             if action_type == ActionType.MOUSE_DOWN:
                 self._held_mouse_buttons.add(action.parameters.get("button", "left"))
             elif action_type == ActionType.MOUSE_UP:
                 self._held_mouse_buttons.discard(action.parameters.get("button", "left"))
-            if isinstance(self._last_execution_result, dict):
-                self._last_execution_result["active_holds"] = self._active_hold_snapshot()
-                self._last_execution_result["active_mouse_buttons"] = sorted(
-                    self._held_mouse_buttons
-                )
+            if isinstance(result, dict):
+                result["active_holds"] = active_holds
+                result["active_mouse_buttons"] = sorted(self._held_mouse_buttons)
             self.actions += 1
-            return "applied"
+            return Execution(
+                "applied",
+                result,
+                coordinate_trace,
+                held_keys=self._action_held_keys,
+                end_checks=self._action_end_checks,
+            )
         except Exception as exc:
             return self._execution_failed(exc)
 
@@ -944,27 +1189,29 @@ class GuestEnvironment:
             with self.action_audit_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
-    def done(self):
-        if getattr(self, "_invalid_run", None):
-            return True
-        if self._done or (self.clock_mode != "token" and time.time() >= self.deadline):
-            return True
-        if self.stop_check is not None:
-            try:
-                terminal = self.stop_check()
-                if terminal:
-                    self._episode_over = True
-                    if isinstance(terminal, str):
-                        self._terminal_reason = terminal
-                    return True
-            except Exception:
-                self._invalid_run = {
-                    "category": "environment",
-                    "reason": "terminal_state_check_failed",
-                    "detail": traceback.format_exc(),
-                }
-                return True
-        return False
+    def check_end(self):
+        """Ask the task whether the episode is over, for the kernel's shell: ``(ended, reason)``.
+
+        ``_invalid_run`` is neither read nor written: a failed read raises, and the kernel counts
+        it (evaluation/shell.py). An end is latched in ``_episode_over`` and ``_terminal_reason``.
+        On the wall clock one read has its own, shorter budget.
+        """
+        if self.stop_check is None:
+            return False, None
+        budget = (
+            ENVIRONMENT_BUDGET.state_read_s
+            if self.clock_mode == "token"
+            else ENVIRONMENT_BUDGET.wall_state_read_s
+        )
+        with operation_budget("state read", budget, clock=self.clocks.operational):
+            terminal = self.stop_check()
+        if not terminal:
+            return False, None
+        self._episode_over = True
+        reason = terminal if isinstance(terminal, str) else None
+        if reason is not None:
+            self._terminal_reason = reason
+        return True, reason
 
 
 # Ports

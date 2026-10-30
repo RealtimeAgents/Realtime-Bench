@@ -126,7 +126,13 @@ def suite_dataset(suite: str, selected: list[str]) -> dict:
         link = folder / task
         if not (link.is_symlink() and link.resolve() == sources[0]):
             link.unlink(missing_ok=True)
-            link.symlink_to(sources[0], target_is_directory=True)
+            try:
+                link.symlink_to(sources[0], target_is_directory=True)
+            except FileExistsError:
+                # Concurrent jobs on other lanes that select as many tasks share this folder, and
+                # one of them made the same link between the unlink and here.
+                if link.resolve() != sources[0]:
+                    raise
     for entry in folder.iterdir():
         if entry.name not in categories:
             entry.unlink()
@@ -220,10 +226,13 @@ def plan_job(path: Path) -> dict:
     kwargs = {
         "suite": plan["suite"],
         "fps": runtime["fps"],
+        "interaction_mode": runtime["interaction_mode"],
         "duration_minutes": runtime["duration_minutes"],
         "seed": runtime["seed"],
         "clock": runtime["clock_mode"],
     }
+    if runtime["model_input_fps"] is not None:
+        kwargs["model_input_fps"] = runtime["model_input_fps"]
     if runtime["clock_mode"] == "token":
         kwargs["tokens_per_frame"] = runtime["tokens_per_frame"]
     return {
@@ -279,23 +288,34 @@ def run_arguments(arguments: list[str]) -> list[str]:
                     k: v for k, v in base_agents[0]["kwargs"].items() if k != "reasoning_effort"
                 }}
             ]
+        # -m names the model: the preset a saved job's agent resolved to (describe_agent's
+        # catalog_model) does not carry over to it.
         base_agents = [
-            {**agent, "kwargs": dict(agent.get("kwargs") or {}), "model_name": model}
+            {
+                **agent,
+                "kwargs": {
+                    k: v for k, v in (agent.get("kwargs") or {}).items() if k != "catalog_model"
+                },
+                "model_name": model,
+            }
             for agent in base_agents
             for model in models
         ]
     from harbor.cli.utils import parse_kwargs
 
+    from realtime_framework.evaluation.run_spec import run_spec
+
     # Harbor merges --ak into every agent after this point; read them without consuming them.
     cli_kwargs = parse_kwargs(_take(list(arguments), "--ak", "--agent-kwarg"))
+    default = run_spec("harbor")
     for agent in base_agents:
         if agent.get("name") in {None, AGENT_NAME, *AGENT_ALIASES}:
             agent.setdefault("import_path", AGENT)
         if agent.get("import_path") == AGENT:
             describe_agent(agent)
             kwargs = {**(agent.get("kwargs") or {}), **cli_kwargs}
-            if kwargs.get("clock") == "token":
-                scored_s = 60 * float(kwargs.get("duration_minutes", 5.0))
+            if kwargs.get("clock", default.clock_mode) == "token":
+                scored_s = 60 * float(kwargs.get("duration_minutes", default.duration_minutes))
                 agent.setdefault(
                     "override_timeout_sec",
                     TASK_AGENT_TIMEOUT_S + TOKEN_CLOCK_REAL_TIME_FACTOR * scored_s,

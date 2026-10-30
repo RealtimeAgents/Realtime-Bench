@@ -39,56 +39,27 @@ def load_project_secrets(path: Path = DEFAULT_SECRETS_FILE) -> bool:
     return True
 
 
-# Model profiles
-"""Per-model settings no external source supplies, independent of user connection YAMLs.
+# Catalog policy
+"""Leaderboard status of catalog cells, independent of user connection YAMLs.
 
-As in Harbor's LiteLLM agents, nothing here restates what LiteLLM's bundled model map knows: the
-native output limit comes from that map (see litellm_output_limit), and reasoning_effort is the
-connection YAML's value, passed through for the driver or provider to accept or reject. Entries
-only carry wire protocol options, experimental-system status and measured context accounting.
-Pricing is not inferred here; unreported cost remains unknown.
+Per-model settings no external source supplies (routes, measured context accounting) are
+declared by each API's driver class as ``model_defaults``; a model's wire options are its YAML's
+provider_options. The native output limit is the connection YAML's; only the generic litellm API,
+whose model ids are LiteLLM's own, takes an undeclared one from LiteLLM's bundled model map (see
+litellm_output_limit). reasoning_effort is the connection YAML's value, passed through for the
+driver or provider to accept or reject. Pricing is not inferred here; unreported cost remains
+unknown.
 """
 
-_LIVE_TOOL_TRANSCRIPT = {
-    "tool_behavior": "non_blocking",
-    "completion_signal": "turn_complete",
-    "input_transport": "client_content",
-    "tool_response_scheduling": "silent",
-    "history_format": "tool_transcript",
-}
-
-MODEL_PROFILES = {
-    ("gemini_live", "gemini-3.1-flash-live-preview"): {
-        "defaults": {"provider_options": _LIVE_TOOL_TRANSCRIPT},
-    },
-    ("gemini_live", "gemini-3.8-live"): {
-        "defaults": {"provider_options": _LIVE_TOOL_TRANSCRIPT},
-    },
-    ("gemini_live", "gemini-3.8-live-extended-thinking"): {
-        "defaults": {
-            "provider_options": {
-                **_LIVE_TOOL_TRANSCRIPT,
-                "completion_signal": "interaction_idle",
-                "tool_response_scheduling": "omit",
-            },
-        },
-    },
+CATALOG_POLICY = {
     # JEV is a text-only choice model, and its scores are not pooled with the screenshot
     # leaderboard.
     ("jev_decisions", "typesafe/jev-1.13"): {
-        "defaults": {"upstream_provider": "typesafe"},
         "benchmark_eligible": False,
         "comparison_scope": "experimental_system",
     },
+    # Candidate enumeration and composition are a system-level policy.
     ("openai_decisions", "openai/gpt-6-luna-decisions"): {
-        "defaults": {
-            # OpenRouter's published window. A 768 px screenshot measured 337 input tokens; the
-            # reserve covers one question's criteria (at most 255 candidates) and instructions.
-            "context_window_tokens": 1050000,
-            "context_image_tokens": 512,
-            "context_reserve_tokens": 32768,
-        },
-        # Candidate enumeration and composition are a system-level policy.
         "benchmark_eligible": False,
         "comparison_scope": "experimental_system",
     },
@@ -105,78 +76,49 @@ from urllib.parse import urlsplit as urlsplit
 
 import yaml
 
-from dataclasses import dataclass as dataclass
 from functools import lru_cache
 
+from realtime_framework.entity.config import merge_streaming_settings
+from realtime_framework.entity.context_policy import ContextLayers, layer_error, resolve_context
 
-@dataclass(frozen=True)
-class ApiSpec:
-    """One registered model API: its lazy driver target and catalog/runner capabilities."""
-
-    driver: str  # "package.module:Class"; imported only when the API is selected
-    family: str
-    provider: str
-    key_env: str | None  # default credential variable
-    finite_frame_budget: bool = True  # reports complete usage for a finite token clock
-    wall_clock_only: bool = False
-    endpoint: bool = True  # selectable as endpoint.api in a model YAML
-    action_channel: str = "text_json"  # static driver capability used for harness selection
-    vendor: str | None = None  # model maker, when the API's model ids carry no vendor prefix
-    # LiteLLM provider whose bundled model map supplies native output limits; "" means the model
-    # id carries its own provider prefix, None means the endpoint must declare any limit.
-    litellm_provider: str | None = None
-    # False: the driver sends no reasoning setting, so `fixed` is the only truthful effort label.
-    reasoning_effort: bool = True
+# The removed context_preset, refused wherever it is set.
+CONTEXT_PRESET_REMOVED = (
+    "context_preset was removed; set the model's context settings in a context section "
+    "(kimi_k3 was context: {reasoning_replay: true}); see docs/model_configuration.md"
+)
 
 
-LITELLM_DRIVER = "realtime_framework.providers.litellm:LiteLLMDriver"
+_LITELLM = "realtime_framework.providers.litellm:"
 
-# The adapter_type of every ModelConfig is one of these keys. Adding a protocol means adding a
-# driver module and one row here; the harness selects behavior from driver capabilities.
+# The adapter_type of a ModelConfig is one of these keys, each naming its driver class
+# ("package.module:Class"), imported when the API is first looked up (loading the catalog looks
+# up every API a model YAML names), or an external driver (below).
+# The class declares the API's capabilities, deployment, compat flags and per-model defaults;
+# adding a protocol means adding a driver module and one row here.
 APIS = {
-    "litellm": ApiSpec(
-        LITELLM_DRIVER, "vlm", "litellm", None,
-        finite_frame_budget=False, wall_clock_only=True, litellm_provider="",
-    ),
-    "chat_completions": ApiSpec(
-        LITELLM_DRIVER, "vlm", "compatible", "OPENAI_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-    ),
-    "openrouter": ApiSpec(
-        LITELLM_DRIVER, "vlm", "openrouter", "OPENROUTER_API_KEY", litellm_provider="openrouter"
-    ),
-    "anthropic_messages": ApiSpec(
-        LITELLM_DRIVER, "vlm", "anthropic", "ANTHROPIC_API_KEY", vendor="anthropic",
-        litellm_provider="anthropic",
-    ),
-    "moonshot": ApiSpec(
-        LITELLM_DRIVER, "vlm", "moonshot", "MOONSHOT_API_KEY", vendor="moonshot",
-        litellm_provider="moonshot",
-    ),
-    "openai_realtime": ApiSpec(
-        "realtime_framework.providers.openai_realtime:OpenAIRealtimeDriver", "streaming", "openai",
-        "OPENAI_API_KEY", vendor="openai", litellm_provider="openai",
-    ),
-    "gemini_live": ApiSpec(
-        "realtime_framework.providers.gemini.live:GeminiLiveDriver", "streaming", "gemini", "GEMINI_API_KEY",
-        action_channel="function_call", vendor="google", litellm_provider="gemini",
-    ),
+    "litellm": _LITELLM + "DirectLiteLLMDriver",
+    "chat_completions": _LITELLM + "ChatCompletionsDriver",
+    "openrouter": _LITELLM + "OpenRouterDriver",
+    "anthropic_messages": _LITELLM + "AnthropicMessagesDriver",
+    "moonshot": _LITELLM + "MoonshotDriver",
+    "openai_realtime": "realtime_framework.providers.openai_realtime:OpenAIRealtimeDriver",
+    "gemini_live": "realtime_framework.providers.gemini.live:GeminiLiveDriver",
     # OpenRouter Decisions API (choice questions), wall clock only.
-    "jev_decisions": ApiSpec(
-        "realtime_framework.providers.jev.decisions:JevDecisionsClient", "streaming", "openrouter",
-        "OPENROUTER_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-        action_channel="choice", reasoning_effort=False,
-    ),
+    "jev_decisions": "realtime_framework.providers.jev.decisions:JevDecisionsClient",
     # OpenAI Decisions models through OpenRouter's Decisions API, wall clock only.
-    "openai_decisions": ApiSpec(
-        "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
-        "vlm", "openrouter", "OPENROUTER_API_KEY",
-        finite_frame_budget=False, wall_clock_only=True,
-        action_channel="choice", reasoning_effort=False,
-    ),
+    "openai_decisions": "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
 }
 DEFAULT_EFFORTS = ["provider_default", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+# A model YAML may instead name a driver class kept outside the repository, as endpoint.api
+# "package.module:Class"; registered names contain no colon.
+_EXTERNAL_DRIVER = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*"
+)
+
+
+def is_external_driver(api) -> bool:
+    """Whether an API names an external driver class ("package.module:Class")."""
+    return isinstance(api, str) and _EXTERNAL_DRIVER.fullmatch(api) is not None
 
 
 def api_reasoning_efforts(api: str) -> list[str]:
@@ -184,20 +126,26 @@ def api_reasoning_efforts(api: str) -> list[str]:
 
     `fixed` records a model whose reasoning is not configurable, so no setting is sent.
     """
-    return [*DEFAULT_EFFORTS, "fixed"] if APIS[api].reasoning_effort else ["fixed"]
+    if adapter_class(api).capabilities.accepts_reasoning_effort:
+        return [*DEFAULT_EFFORTS, "fixed"]
+    return ["fixed"]
 
 
 @lru_cache(maxsize=1)
 def _litellm_model_map() -> dict:
-    """LiteLLM's bundled model map, read from the pinned package without importing it.
+    """LiteLLM's bundled model map, read from the pinned package's own file, so the limits read
+    here stay fixed by the locked version.
 
-    Importing litellm may fetch a newer map over the network; the bundled file keeps a run's
-    limits fixed by the locked LiteLLM version.
+    Locating that file imports litellm (importlib.resources imports the package), which
+    import_litellm does first, so that importing it neither loads a .env nor fetches a map.
     """
     import json
     from importlib.resources import files
 
+    from realtime_framework.providers.litellm import import_litellm
+
     try:
+        import_litellm()
         text = files("litellm").joinpath("model_prices_and_context_window_backup.json").read_text()
     except (ModuleNotFoundError, FileNotFoundError):
         return {}
@@ -206,7 +154,7 @@ def _litellm_model_map() -> dict:
 
 def litellm_output_limit(api: str, model: str) -> int | None:
     """Return LiteLLM's max_output_tokens for an API's model id, or None when unlisted."""
-    provider = APIS[api].litellm_provider
+    provider = adapter_class(api).deployment.litellm_provider
     if provider is None:
         return None
     if not provider:
@@ -222,7 +170,8 @@ def litellm_output_limit(api: str, model: str) -> int | None:
 
 
 def resolve_output_limit(definition: dict, declared: int | None = None) -> None:
-    """Set the native output limit: the endpoint's declaration, else LiteLLM's map."""
+    """Set the native output limit: the endpoint's declaration, else LiteLLM's map for an API
+    whose deployment names a LiteLLM provider (the generic litellm API)."""
     if declared is not None:
         definition["native_output_limit"] = declared
         definition["native_output_limit_source"] = "endpoint"
@@ -256,9 +205,19 @@ def validate_connection(connection):
         elif not isinstance(value, str) or not value.strip() or any(c in value for c in "\n\r\t\0"):
             raise ValueError(f"endpoint.{name} must be a nonempty single-line string")
     api = settings.get("api", "chat_completions")
-    if api not in APIS or not APIS[api].endpoint:
-        choices = [name for name, spec in APIS.items() if spec.endpoint]
-        raise ValueError(f"endpoint.api must be one of {choices}")
+    if is_external_driver(api):
+        # A framework class is reached by its registered name, which keeps the name's rules.
+        module = api.partition(":")[0]
+        if module.partition(".")[0] == "realtime_framework":
+            names = [name for name, target in APIS.items() if target == api]
+            use = f"endpoint.api: {names[0]}" if names else f"one of {list(APIS)}"
+            raise ValueError(f"endpoint.api {api!r} is a framework class; use {use}")
+    elif ":" in api:
+        raise ValueError(
+            f'endpoint.api {api!r} is neither a registered API nor a "package.module:Class" target'
+        )
+    elif api not in APIS:
+        raise ValueError(f"endpoint.api must be one of {list(APIS)}")
     if api == "litellm" and not all(settings["model"].partition("/")[::2]):
         raise ValueError("LiteLLM models use provider/model-id names")
     if api == "chat_completions" and "base_url" not in settings:
@@ -283,37 +242,28 @@ def validate_connection(connection):
         raise ValueError("endpoint.api_key_env must name an environment variable")
     if api != "chat_completions" and {"stream", "include_usage"} & settings.keys():
         raise ValueError("stream/include_usage are transport options for chat_completions only")
-    if api in {"openrouter", "openai_decisions"} and not settings.get("upstream_provider"):
-        raise ValueError(f"{api} requires upstream_provider to keep the route fixed")
-    if api not in {"openrouter", "openai_decisions"} and "upstream_provider" in settings:
-        raise ValueError("upstream_provider is only valid for OpenRouter APIs")
+    # Where the deployment requires one, it may come from the driver's model_defaults instead
+    # (_load_entries).
+    if (
+        "upstream_provider" in settings
+        and not adapter_class(api).deployment.requires_upstream_provider
+    ):
+        raise ValueError(f"The {api} API takes no upstream_provider")
     return settings
 
 
 def bridge_definition(key):
     """Placeholder entry for the launcher's inline-endpoint keys (remote-vlm, litellm-vlm)."""
-    if key == "litellm-vlm":
-        return {
-            "key": key,
-            "family": "vlm",
-            "provider": "litellm",
-            "adapter_type": "litellm",
-            "model_name": key,
-            "key_env": None,
-            "reasoning_efforts": api_reasoning_efforts("litellm"),
-            "defaults": {
-                "temperature_policy": "provider_default",
-                "reasoning_effort": "provider_default",
-            },
-        }
+    api = "litellm" if key == "litellm-vlm" else "chat_completions"
+    deployment = adapter_class(api).deployment
     return {
         "key": key,
-        "family": "vlm",
-        "provider": "compatible",
-        "adapter_type": "chat_completions",
+        "family": deployment.family,
+        "provider": deployment.provider,
+        "adapter_type": api,
         "model_name": key,
-        "key_env": "OPENAI_API_KEY",
-        "reasoning_efforts": api_reasoning_efforts("chat_completions"),
+        "key_env": deployment.key_env,
+        "reasoning_efforts": api_reasoning_efforts(api),
         "defaults": {
             "temperature_policy": "provider_default",
             "reasoning_effort": "provider_default",
@@ -329,8 +279,19 @@ def load_definitions(directory):
     ]:
         if not isinstance(value, dict):
             raise ValueError(f"{filename}: model definition must be a mapping")  # noqa: TRY004
-        if set(value) - {"endpoint", "reasoning_effort"} or "endpoint" not in value:
-            raise ValueError(f"{filename}: use an endpoint block, plus optional reasoning_effort")
+        if "context_preset" in value:
+            raise ValueError(f"{filename}: {CONTEXT_PRESET_REMOVED}")
+        if (
+            set(value) - {
+                "endpoint", "reasoning_effort", "reasoning_efforts", "provider_options",
+                "context", "streaming",
+            }
+            or "endpoint" not in value
+        ):
+            raise ValueError(
+                f"{filename}: use an endpoint block, plus optional reasoning_effort, "
+                "reasoning_efforts, provider_options, context and streaming"
+            )
         key = Path(filename).stem
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", key) or key in seen:
             raise ValueError(f"{filename}: invalid, duplicate or reserved model name {key!r}")
@@ -339,15 +300,20 @@ def load_definitions(directory):
         definition = bridge_definition("remote-vlm")
         definition.update(key=key)
         api = settings.get("api", "chat_completions")
-        spec = APIS[api]
-        profile = deepcopy(MODEL_PROFILES.get((api, settings["model"]), {}))
+        try:
+            driver = adapter_class(api)
+        except ValueError as exc:  # an external driver that cannot be imported or is incomplete
+            raise ValueError(f"{filename}: endpoint.api {exc}") from exc
+        model_defaults = driver.model_defaults.get(settings["model"])
+        profile = {} if model_defaults is None else {"defaults": deepcopy(model_defaults)}
+        profile.update(CATALOG_POLICY.get((api, settings["model"]), {}))
         definition.update(
             adapter_type=api,
-            family=spec.family,
-            provider=spec.provider,
+            family=driver.deployment.family,
+            provider=driver.deployment.provider,
             model_name=settings["model"],
             api_base_url=settings.get("base_url"),
-            key_env=settings.get("api_key_env", spec.key_env),
+            key_env=settings.get("api_key_env", driver.deployment.key_env),
             reasoning_efforts=api_reasoning_efforts(api),
             **profile,
         )
@@ -356,45 +322,133 @@ def load_definitions(directory):
         definition["defaults"].setdefault("temperature_policy", "provider_default")
         definition["defaults"]["model_revision"] = settings.get("revision")
         if api == "chat_completions":
-            definition["defaults"].update(
-                chat_stream=settings.get("stream", True),
-                chat_include_usage=settings.get("include_usage", True),
-            )
-        if api in {"openrouter", "openai_decisions"}:
+            definition["defaults"]["chat_stream"] = settings.get("stream", True)
+            if "include_usage" in settings:
+                definition["defaults"]["chat_include_usage"] = settings["include_usage"]
+        if "upstream_provider" in settings:
             definition["defaults"]["upstream_provider"] = settings["upstream_provider"]
+        if "provider_options" in value:
+            # Checked against the driver's compat before the run (providers/preflight.py
+            # check_provider_options), as options that come another way are.
+            if not driver.compat.provider_options:
+                raise ValueError(f"{filename}: the {api} API takes no provider_options")
+            if not isinstance(value["provider_options"], dict):
+                raise ValueError(f"{filename}: provider_options must be a mapping")
+            if "history_format" in value["provider_options"]:
+                raise ValueError(
+                    f"{filename}: provider_options.history_format was removed; set "
+                    "tool_call_history in the context section instead (context: "
+                    "{tool_call_history: tool_transcript})"
+                )
+            definition["defaults"]["provider_options"] = dict(value["provider_options"])
+        if "reasoning_efforts" in value:
+            # The efforts this model takes, some of its API's: a model may reject a setting its
+            # API sends.
+            narrowed = value["reasoning_efforts"]
+            if (
+                not isinstance(narrowed, list)
+                or not narrowed
+                or any(effort not in definition["reasoning_efforts"] for effort in narrowed)
+                or len(set(narrowed)) != len(narrowed)
+            ):
+                raise ValueError(
+                    f"{filename}: reasoning_efforts must be distinct values among "
+                    f"{definition['reasoning_efforts']}"
+                )
+            definition["reasoning_efforts"] = narrowed
         effort = value.get(
-            "reasoning_effort", "provider_default" if spec.reasoning_effort else "fixed"
+            "reasoning_effort",
+            "provider_default" if driver.capabilities.accepts_reasoning_effort else "fixed",
         )
         if not isinstance(effort, str) or effort not in definition["reasoning_efforts"]:
             raise ValueError(
                 f"{filename}: reasoning_effort must be one of {definition['reasoning_efforts']}"
             )
         definition["defaults"]["reasoning_effort"] = effort
+        # Nor may the driver's model_defaults name one (merged above).
+        defaults = definition["defaults"]
+        if "context_preset" in defaults:
+            raise ValueError(f"{filename}: {CONTEXT_PRESET_REMOVED}")
+        if "context" in value:
+            # The settings a model may set, those that apply to its API (resolve_context).
+            error = layer_error("model", api, value["context"])
+            if error:
+                raise ValueError(f"{filename}: context {error}")
+            definition["context"] = dict(value["context"])
+        if "streaming" in value:
+            defaults["streaming"] = _streaming_settings(filename, api, driver, value["streaming"])
         result.append((filename, definition))
     return result
 
 
+def _streaming_settings(filename: str, api: str, driver: type, settings) -> dict:
+    """A model YAML's streaming settings: some of the keys its driver's streaming_settings
+    declares, each a positive integer. Merged over the driver's, a sliding window that names both
+    thresholds keeps fewer tokens than set it off (google.genai SlidingWindow.target_tokens)."""
+    declared = getattr(driver, "streaming_settings", None)
+    if declared is None:
+        raise ValueError(f"{filename}: the {api} API takes no streaming settings")
+    if not isinstance(settings, dict):
+        raise ValueError(f"{filename}: streaming must be a mapping")  # noqa: TRY004
+    unknown = set(settings) - set(declared)
+    if unknown:
+        raise ValueError(
+            f"{filename}: unknown streaming settings {sorted(unknown)}; the {api} API takes "
+            f"{sorted(declared)}"
+        )
+    for name, setting in settings.items():
+        if type(setting) is not int or setting <= 0:
+            raise ValueError(f"{filename}: streaming.{name} must be a positive integer")
+    merged = merge_streaming_settings(driver, settings)
+    if (
+        {"compression_target_tokens", "compression_trigger_tokens"} <= merged.keys()
+        and merged["compression_target_tokens"] >= merged["compression_trigger_tokens"]
+    ):
+        raise ValueError(
+            f"{filename}: streaming.compression_target_tokens must be below "
+            "compression_trigger_tokens"
+        )
+    return dict(settings)
+
+
 # Factory
-"""Lazy driver resolution and API-level interaction rules.
+"""Lazy driver resolution: the one lookup of an API's driver class, registered or external.
 
 Only the selected implementation is imported, so optional SDKs never affect other APIs.
 """
 
+import inspect as inspect
 from importlib import import_module as import_module
 
-from realtime_framework.entity.model import ModelClient
+from realtime_framework.entity.model import (
+    ChoiceClient,
+    Compat,
+    Deployment,
+    ModelEncoder,
+    RealtimeCapabilities,
+    SessionEncoder,
+    StatelessEncoder,
+    interface_methods,
+)
+
+_DRIVER_DECLARATIONS = (
+    ("capabilities", RealtimeCapabilities),
+    ("deployment", Deployment),
+    ("compat", Compat),
+    ("model_defaults", dict),
+)
+# What the native-streaming agent pushes frames and asks for replies with
+# (harnesses/streaming/agent.py).
+_STREAMING_METHODS = ("push_frame", "request_reply")
 
 
-def api_spec(adapter_type: str) -> ApiSpec:
-    try:
-        return APIS[adapter_type]
-    except KeyError as exc:
-        raise ValueError(f"Unknown adapter type: {adapter_type!r}") from exc
-
-
-def adapter_class(adapter_type: str) -> type[ModelClient]:
-    """Resolve one registered driver without importing unrelated provider stacks."""
-    return _driver_class(api_spec(adapter_type).driver)
+def adapter_class(adapter_type: str) -> type[ModelEncoder]:
+    """Resolve one driver without importing unrelated provider stacks."""
+    if adapter_type in APIS:
+        return _driver_class(APIS[adapter_type])
+    if is_external_driver(adapter_type):
+        return _external_class(adapter_type)
+    raise ValueError(f"Unknown adapter type: {adapter_type!r}")
 
 
 def _driver_class(target: str) -> type:
@@ -405,23 +459,94 @@ def _driver_class(target: str) -> type:
     return implementation
 
 
-adapter_capabilities = api_spec
+def _external_class(target: str) -> type:
+    """Import an external driver from the current environment and check its declarations."""
+    module_name, _, class_name = target.partition(":")
+    try:
+        module = import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(
+            f"{target!r}: cannot import module {module_name!r}: {type(exc).__name__}: {exc}"
+        ) from exc
+    if not hasattr(module, class_name):
+        raise ValueError(f"{target!r}: module {module_name!r} has no attribute {class_name!r}")
+    driver = getattr(module, class_name)
+    if not isinstance(driver, type):
+        raise ValueError(f"{target!r} is not a class")  # noqa: TRY004
+    _check_driver(target, driver)
+    return driver
 
 
-def validate_model_interaction(adapter_type, *, clock_mode, fps, tokens_per_frame=None):
-    """Validate API interaction requirements before starting an episode."""
-    del fps, tokens_per_frame
-    spec = api_spec(adapter_type)
-    if spec.wall_clock_only and clock_mode != "wall":
-        raise ValueError(f"The {adapter_type} API requires a wall clock")
+def _check_driver(target: str, driver: type) -> None:
+    """Check that a driver class has what the catalog, the pre-run checks, the harness and the
+    runtime read from it, and takes what the harness builds it with; registered drivers meet the
+    same contract."""
+    # The runtime manages a SessionEncoder's session and only aborts a StatelessEncoder
+    # (harnesses/default/context.py RealtimeRuntime): a driver is exactly one of them.
+    stateless, session = issubclass(driver, StatelessEncoder), issubclass(driver, SessionEncoder)
+    if not stateless and not session:
+        raise ValueError(
+            f"{target!r} is not a model encoder: subclass StatelessEncoder or SessionEncoder"
+        )
+    if stateless and session:
+        raise ValueError(f"{target!r} subclasses both StatelessEncoder and SessionEncoder")
+    interface = SessionEncoder if session else StatelessEncoder
+    missing = [name for name in interface_methods(interface) if name in driver.__abstractmethods__]
+    if missing:
+        raise ValueError(f"{target!r} is not a model encoder: missing {', '.join(missing)}")
+    try:
+        inspect.signature(driver).bind(None, clock=None)
+    except TypeError as exc:
+        raise ValueError(
+            f"{target!r} cannot be built as {driver.__name__}(config, clock=clock): {exc}"
+        ) from None
+    for name, kind in _DRIVER_DECLARATIONS:
+        if not isinstance(getattr(driver, name, None), kind):
+            declaration = f"a {kind.__name__} class attribute"
+            raise ValueError(f"{target!r} declares no {name} ({declaration})")  # noqa: TRY004
+    if "streaming" in driver.capabilities.interaction_modes:
+        # The native-streaming agent builds it so (harnesses/streaming/agent.py).
+        try:
+            inspect.signature(driver).bind(None, clock=None, streaming=True)
+        except TypeError as exc:
+            raise ValueError(
+                f"{target!r} declares streaming but cannot be built as "
+                f"{driver.__name__}(config, clock=clock, streaming=True): {exc}"
+            ) from None
+        if not isinstance(getattr(driver, "streaming_settings", None), dict):
+            raise ValueError(
+                f"{target!r} declares streaming but no streaming_settings (a dict class attribute)"
+            )
+        # Held to what a model YAML's are, which replace them.
+        _streaming_settings(repr(target), target, driver, driver.streaming_settings)
+        for method in _STREAMING_METHODS:
+            if not callable(getattr(driver, method, None)):
+                raise ValueError(  # noqa: TRY004
+                    f"{target!r} declares streaming but has no {method}()"
+                )
+    if driver.capabilities.action_channel == "choice":
+        for method in interface_methods(ChoiceClient):
+            if not callable(getattr(driver, method, None)):
+                raise ValueError(  # noqa: TRY004
+                    f"{target!r} declares the choice action channel but has no {method}()"
+                )
+    if session and hasattr(driver, "request_context_status"):
+        raise ValueError(
+            f"{target!r} has request_context_status() on a session encoder, whose context the "
+            "runtime cannot archive"
+        )
 
 
 # Catalog
-"""Load model connection YAMLs and resolve internal API capabilities.
+"""Load model connection YAMLs and resolve API facts from the driver classes.
 
 Every file in configs/models uses the same endpoint schema. Its filename is the
-catalog identifier. Wire policies live in MODEL_PROFILES above; users configure
-connections and reasoning effort. No optional model SDK is imported by this loader.
+catalog identifier. Users configure connections, reasoning effort and the efforts a model takes,
+wire options (provider_options) and the model's context settings; the drivers' model_defaults add
+what no YAML states. The loader imports the driver module of each API it reads, an external
+driver's included, with what those modules import (the OpenAI SDK, websockets and Pillow among
+them), and reading LiteLLM's model map imports litellm (_litellm_model_map). The Gemini SDK is
+imported only when its driver is constructed.
 """
 
 import difflib as difflib
@@ -434,6 +559,8 @@ from realtime_framework.entity.config import ModelConfig
 
 # All maintained runs omit temperature and use the provider default.
 TEMPERATURE_POLICIES = frozenset({"provider_default"})
+# The connection YAMLs, the user's own (external drivers included) beside the built-in presets.
+MODELS_DIR = PROJECT_ROOT / "configs" / "models"
 
 
 from realtime_framework.entity.model import ModelSpec as ModelEntry
@@ -448,9 +575,8 @@ def _load_entries() -> list[ModelEntry]:
     root = Path(__file__).resolve().parents[2]
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
-    models_dir = root / "configs" / "models"
     out: list[ModelEntry] = []
-    definitions = load_definitions(models_dir)
+    definitions = load_definitions(MODELS_DIR)
     definitions += [
         (key, bridge_definition(key)) for key in ("remote-vlm", "litellm-vlm")
     ]
@@ -492,16 +618,13 @@ def _load_entries() -> list[ModelEntry]:
             )
         defaults["temperature"] = None
         upstream_provider = defaults.get("upstream_provider")
-        if d.get("provider") == "openrouter":
+        api = d["adapter_type"]
+        if adapter_class(api).deployment.requires_upstream_provider:
             if not isinstance(upstream_provider, str) or not upstream_provider.strip():
-                raise ValueError(
-                    f"{_fname}: OpenRouter entries must pin defaults.upstream_provider"
-                )
+                raise ValueError(f"{_fname}: the {api} API requires endpoint.upstream_provider")
             defaults["upstream_provider"] = upstream_provider.strip()
         elif upstream_provider is not None:
-            raise ValueError(
-                f"{_fname}: defaults.upstream_provider is only valid for OpenRouter entries"
-            )
+            raise ValueError(f"{_fname}: the {api} API takes no upstream_provider")
         d["defaults"] = defaults
         d["python_env"] = os.environ.get("REALTIMEBENCH_PYTHON") or sys.executable
         # Bridge keys are placeholders; the trial launcher supplies the actual endpoint.
@@ -576,16 +699,12 @@ def vendor(key: str) -> str:
     entry = get(key)
     if "/" in entry.model_name:
         return entry.model_name.split("/", 1)[0]
-    return APIS[entry.adapter_type].vendor or entry.provider
+    return adapter_class(entry.adapter_type).deployment.vendor or entry.provider
 
 
 def python_env(key: str) -> str:
     """Return the Python interpreter configured for model subprocesses."""
     return get(key).python_env
-
-
-def supports_finite_frame_budget(adapter_type: str) -> bool:
-    return adapter_capabilities(adapter_type).finite_frame_budget
 
 
 def benchmark_eligible(key: str) -> bool:
@@ -606,8 +725,12 @@ def validate_reasoning_effort(key: str, value: str) -> str:
     return value
 
 
-def to_model_config(key: str, **overrides) -> ModelConfig:
+def to_model_config(key: str, *, context: ContextLayers | None = None, **overrides) -> ModelConfig:
     """Build a ModelConfig for a catalog key, layering: entry.defaults < overrides.
+
+    The context settings are resolved once from the defaults file, the experiment file of
+    ``context``, the model's YAML and the command line of ``context``, in that order
+    (resolve_context).
 
     Runtime overrides such as fps win over entry defaults. Provider-default temperature
     and each entry's upstream provider are
@@ -616,6 +739,7 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     (each adapter resolves its own key_env at backend setup).
     """
     e = get(key)
+    context = context or ContextLayers()
     if "temperature" in overrides:
         raise ValueError("temperature must be omitted; all models use the provider default")
     if "temperature_policy" in overrides:
@@ -631,11 +755,8 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
     if fields.get("reasoning_effort") == "provider_default":
         fields["reasoning_effort"] = None
     if e.adapter_type == "chat_completions":
-        fields["api_key_env"] = e.key_env
         if key == "remote-vlm":
             fields["model_revision"] = os.environ.get("BENCHMARK_MODEL_REVISION") or None
-            # Same default as YAML presets; STREAM_CHAT_INCLUDE_USAGE below can still override.
-            fields.setdefault("chat_include_usage", True)
         for field in (
             "context_window_tokens",
             "context_counter",
@@ -645,8 +766,6 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
             value = os.environ.get("BENCHMARK_" + field.upper())
             if value:
                 fields[field] = value
-        if fields.get("reasoning_effort") == "provider_default":
-            fields["reasoning_effort"] = None
         for field, env_name in (
             ("chat_stream", "STREAM_CHAT_STREAM"),
             ("chat_include_usage", "STREAM_CHAT_INCLUDE_USAGE"),
@@ -661,5 +780,13 @@ def to_model_config(key: str, **overrides) -> ModelConfig:
         adapter_type=e.adapter_type,
         model_name=e.model_name,
         api_base_url=e.api_base_url,
+        context=resolve_context(
+            e.adapter_type,
+            e.model_name,
+            experiment=context.experiment,
+            experiment_file=context.experiment_file,
+            model_layer=e.context,
+            run=context.run,
+        ),
         **fields,
     )

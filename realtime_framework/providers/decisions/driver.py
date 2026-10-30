@@ -1,11 +1,13 @@
-"""Present a stateless ChoiceClient to the realtime runtime as one generation per decision.
+"""Present a stateless Decisions protocol to the realtime runtime as one generation per decision.
 
-The harness binds each observation's structured state (candidates, focused input, composition
-inventory) by observation_id; the client receives Choice questions over text and optional images.
+The canonical request of each decision carries the current observation's candidates, the material
+of its follow-up questions and the history; the protocol receives Choice questions over the
+history rendered as Decisions state.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from realtime_framework.entity.events import (
@@ -16,32 +18,29 @@ from realtime_framework.entity.events import (
 )
 from realtime_framework.entity.model import (
     FATAL,
+    ChoiceClient,
     GenerationHandle,
-    HistorySyncResult,
-    InterruptResult,
-    SyncDisposition,
+    RetryCancelled,
+    StatelessEncoder,
     TransportFailure,
     TransportFailureError,
     exception_chain,
+    retry_cancel_event,
 )
-from realtime_framework.harnesses.jev.selection import SELECTION_POLICY, ChoiceDecision
+from realtime_framework.providers.decisions.selection import SELECTION_POLICY, ChoiceDecision
+
+# The logged history labels predate the context policy's names for the two forms.
+HISTORY_REPLAY_LABELS = {"turns": "canonical", "action_digest": "action_digest"}
 
 
-class ChoiceDecisionDriver:
-    def __init__(self, client, observation_states: dict[str, dict]):
-        self.client = client
-        self.capabilities = client.capabilities
-        self.observation_states = observation_states
-        self.observation = None
-        if self.capabilities.history_replay != "canonical":
-            # A digest is not the canonical request, so the runtime cannot measure or archive it.
-            self.request_context_status = None
+class DecisionEncoder(StatelessEncoder, ChoiceClient):
+    """The StatelessEncoder half of a Decisions encoder.
 
-    async def request_context_status(self, request):
-        return await self.client.request_context_status(request)
-
-    async def connect(self, request):
-        return None
+    A registered Decision API subclasses it with its protocol (ChoiceClient's ``decide`` and
+    ``classify_question_error``, ``bind_trace``, ``close``), capabilities (with ``max_choices``),
+    deployment and the ``clock`` its constructor takes, so the registered class is the complete
+    driver.
+    """
 
     @staticmethod
     def classify_transport_error(exc):
@@ -51,19 +50,26 @@ class ChoiceDecisionDriver:
                 return current.failure
         return TransportFailure(FATAL)
 
-    async def send_observation(self, observation):
-        state = self.observation_states.get(observation.observation_id)
-        if state is None or state["observation_id"] != observation.observation_id:
-            raise ValueError("Action choices belong to a different observation")
-        self.observation = state
-        return {"observation_id": observation.observation_id}
-
     async def start_generation(self, request):
-        if request.clock_mode != "wall":
-            raise ValueError("Choice Decisions supports wall clock only")
-        if self.observation is None:
-            raise RuntimeError("Choice Decisions requires a current observation")
-        metadata = await ChoiceDecision(self.client, self.observation, request.messages).run()
+        decision = ChoiceDecision(self, request.canonical, trace=self._trace, clock=self.clock)
+        try:
+            metadata = await decision.run()
+        except (Exception, RetryCancelled) as exc:
+            # The questions answered before the decision failed or was given up on; the harness
+            # counts them as its usage (harnesses/default/harness.py, decisions 19 and 37).
+            if decision.calls:
+                exc.partial_usage = dict(decision.usage)
+            raise
+        except asyncio.CancelledError:
+            # Stopping the execution thread cancels a decision given up on that is still under
+            # way, which it would report as a RetryCancelled without that usage
+            # (harnesses/default/execution_thread.py run).
+            if not (decision.calls and retry_cancel_event().is_set()):
+                raise
+            cancelled = RetryCancelled("generation abandoned while its operation ran")
+            cancelled.partial_usage = dict(decision.usage)
+            raise cancelled from None
+        metadata["history_form"] = request.canonical.history_form
         return GenerationHandle(request.generation_id, metadata=metadata)
 
     async def events(self, generation):
@@ -97,8 +103,8 @@ class ChoiceDecisionDriver:
                     else "ax_tree_plus_interactables_text"
                 ),
                 "choice_protocol_family": self.capabilities.protocol_family,
-                "choice_history_replay": self.capabilities.history_replay,
-                "choice_max_choices": self.client.max_choices,
+                "choice_history_replay": HISTORY_REPLAY_LABELS[data["history_form"]],
+                "choice_max_choices": self.capabilities.max_choices,
                 "jev_transport_retries": data["retries"],
                 "jev_calls": data["jev_calls"],
                 "jev_candidate_count": data["candidate_count"],
@@ -108,7 +114,6 @@ class ChoiceDecisionDriver:
                 "jev_selected_candidate_audit": data["selected_candidate_audit"],
                 "jev_selection_policy": SELECTION_POLICY,
                 "jev_context_splits": data["context_splits"],
-                "jev_history_reductions": data["history_reductions"],
                 "jev_text_composition": data["text_composition"],
                 "jev_pointer_composition": data["pointer_composition"],
                 "jev_key_composition": data["key_composition"],
@@ -116,14 +121,4 @@ class ChoiceDecisionDriver:
         )
 
     async def interrupt(self, generation):
-        return InterruptResult(ProviderHistoryState.EXACT)
-
-    async def sync_history(self, request):
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request uses canonical retained history",
-        )
-
-    async def close(self):
-        await self.client.close()
+        """Nothing is left to cut short: start_generation asked every question of the decision."""

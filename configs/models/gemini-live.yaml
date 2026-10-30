@@ -2,4 +2,16 @@ endpoint:
   api: gemini_live
   model: gemini-3.1-flash-live-preview
   api_key_env: GEMINI_API_KEY
+  native_output_limit: 65536
 reasoning_effort: low
+# v1.0's settings, which its published results used. Google documents no asynchronous function
+# calling for 3.1 Flash Live, but blocking calls measured about 0.8 s more per decision, so its
+# functions stay non-blocking (jytang0621/Realtime-Bench#75).
+provider_options:
+  tool_behavior: non_blocking
+  completion_signal: turn_complete
+  input_transport: client_content
+  tool_response_scheduling: silent
+context:
+  # Past calls replayed as native tool calls can stall a rebuilt session's next interaction.
+  tool_call_history: tool_transcript

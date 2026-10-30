@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 # LiteLLM
-"""One driver for every HTTP model API, configured by a per-API wire policy.
+"""One driver for every HTTP chat API; each registered API is a subclass declaring its settings.
 
-LiteLLM supplies the provider transports. Each policy preserves the benchmark's request shaping
-and accounting rules for one registered API: pinned OpenRouter routes, explicit cache
-breakpoints, provider quirks, and provider-reported usage only. The pinned SDK can synthesize
-usage at stream completion; the driver observes raw provider payloads before LiteLLM transforms
-them, and only those counters reach the token clock.
+LiteLLM supplies the provider transports. Each subclass declares, for one registered API, its
+protocol (request and response shape), deployment (gateway, address, key, route) and compat flags
+(provider restrictions), preserving the benchmark's request shaping and accounting rules: pinned
+OpenRouter routes, explicit cache breakpoints, provider quirks, and provider-reported usage only.
+The pinned SDK can synthesize usage at stream completion; the driver observes raw provider
+payloads before LiteLLM transforms them, and only those counters reach the token clock.
 """
 
 import asyncio as asyncio
@@ -17,75 +18,101 @@ import json as json
 import os as os
 import re as re
 import threading as threading
-import time as time
 import uuid as uuid
-from collections.abc import Iterator as Iterator
 from dataclasses import dataclass as dataclass
 from dataclasses import field as field
 from dataclasses import replace as replace
 from importlib.metadata import version as version
+from typing import ClassVar as ClassVar
 from urllib.parse import urlsplit as urlsplit
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.entity.events import GenerationBoundary
 from realtime_framework.entity.events import ProviderHistoryState
 from realtime_framework.entity.events import TextDelta
 from realtime_framework.entity.events import UsageSnapshot
 from realtime_framework.entity.model import FATAL
 from realtime_framework.entity.model import TRANSIENT
+from realtime_framework.entity.model import RetryCancelled
 from realtime_framework.entity.model import TransportFailure
 from realtime_framework.entity.model import classify_http_failure
 from realtime_framework.entity.model import exception_chain
 from realtime_framework.entity.model import retry_after_seconds
-from realtime_framework.entity.model import ConnectRequest
+from realtime_framework.entity.model import retry_cancel_event
+from realtime_framework.entity.model import Compat
+from realtime_framework.entity.model import Deployment
 from realtime_framework.entity.model import GenerationHandle
 from realtime_framework.entity.model import GenerationRequest
-from realtime_framework.entity.model import HistorySyncRequest
-from realtime_framework.entity.model import HistorySyncResult
-from realtime_framework.entity.model import InterruptResult
-from realtime_framework.entity.model import ProviderObservation
 from realtime_framework.entity.model import RealtimeCapabilities
-from realtime_framework.entity.model import SyncDisposition
+from realtime_framework.entity.model import StatelessEncoder
+from realtime_framework.entity.records import TraceEvent
+from realtime_framework.providers.capture import HttpCapture
+from realtime_framework.providers.capture import LoggerCapture
+from realtime_framework.providers.capture import replayed_reasoning
+from realtime_framework.providers.capture import response_statuses
+from realtime_framework.providers.capture import traced_post
 from realtime_framework.providers.context import context_status
 from realtime_framework.providers.context import estimated_request_tokens
-from realtime_framework.providers.context import validate_context_reserve
 
-LITELLM_VERSION = "1.104.1"
+LITELLM_VERSION = "1.106.1"
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# reasoning_effort values anthropic_thinking maps.
+ANTHROPIC_REASONING_EFFORTS = (None, "fixed", "none", *ANTHROPIC_EFFORT_LEVELS)
 _REQUEST_GATE = threading.Lock()
 _LAST_REQUEST_AT = [0.0]
-_END = object()
 
 
 # Helpers
-def pace_request() -> None:
-    """Apply the optional process-wide minimum interval between provider requests."""
+def import_litellm():
+    """Import LiteLLM without the two things its import does by default: load the first .env
+    found above its package directory (litellm/__init__.py:29-30, skipped unless LITELLM_MODE is
+    DEV) and replace its bundled model map with one fetched over the network
+    (litellm/litellm_core_utils/get_model_cost_map.py:646, skipped when
+    LITELLM_LOCAL_MODEL_COST_MAP is true). LiteLLM reads both settings at its first import and
+    checks requests against the map (whether a Moonshot model takes reasoning_effort, for one), so
+    a run then depends only on its own environment and the locked version. Nor does it print its
+    help banner as it maps an error (litellm_core_utils/exception_mapping_utils.py
+    exception_type), the abort's close of a request included: the trace records each failed
+    attempt with its error."""
+    os.environ["LITELLM_MODE"] = "PRODUCTION"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "true"
+    import litellm as litellm
+
+    litellm.suppress_debug_info = True
+    return litellm
+
+
+def pace_request(owner) -> None:
+    """Apply the optional process-wide minimum interval between provider requests.
+
+    ``owner`` is the driver. A wait runs on its clock and is written to its trace before it
+    starts, as the session encoders record theirs (providers/session_lifecycle.py _record_wait).
+    Only a wait reads the trace, which the harness binds as it builds the driver
+    (harnesses/default/harness.py _setup_backend). Like RequestRetry's backoff, the wait ends
+    once the generation is abandoned (the enclosing retry_cancellation), and RetryCancelled stops
+    the request unsent.
+    """
     interval = float(os.environ.get("STREAM_MIN_REQUEST_INTERVAL", "0"))
     if interval <= 0:
         return
+    clock = owner.clock
     with _REQUEST_GATE:
-        wait = _LAST_REQUEST_AT[0] + interval - time.time()
+        wait = _LAST_REQUEST_AT[0] + interval - clock.time()
         if wait > 0:
-            time.sleep(wait)
-        _LAST_REQUEST_AT[0] = time.time()
-
-
-def _next_or_end(iterator: Iterator):
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _END
-
-
-async def iterate_blocking(iterator: Iterator):
-    """Expose a blocking SDK iterator without blocking the runtime event loop."""
-    while True:
-        value = await asyncio.to_thread(_next_or_end, iterator)
-        if value is _END:
-            return
-        yield value
+            owner._trace.capture(
+                TraceEvent.SESSION_WAIT,
+                {
+                    "wait": "request_pacing",
+                    "seconds": wait,
+                    "until_monotonic_ns": clock.monotonic_ns() + round(wait * 1e9),
+                },
+            )
+            if clock.wait(retry_cancel_event(), wait):
+                raise RetryCancelled("generation abandoned during the request_pacing wait")
+        _LAST_REQUEST_AT[0] = clock.time()
 
 
 def object_dict(value) -> dict | None:
@@ -113,10 +140,8 @@ def validate_endpoint(url: str | None) -> str:
 
 
 # Usage
-def kimi_usage(usage: dict, base_url: str) -> dict:
+def kimi_usage(usage: dict) -> dict:
     """Expose Kimi's default 5m cache and undivided input to cost accounting."""
-    if base_url.rstrip("/") != DEFAULT_MOONSHOT_BASE_URL:
-        return usage
     usage = copy.deepcopy(usage)
     details = usage.get("prompt_tokens_details") or {}
     if not isinstance(details, dict):
@@ -263,20 +288,23 @@ def anthropic_usage(start_usage, delta_usage, *, stop_reason: str | None = None)
 def anthropic_thinking(reasoning_effort: str | None) -> dict:
     """Map the catalog's model-native ``reasoning_effort`` onto Messages API parameters.
 
-    ``none`` explicitly disables thinking and sends no effort. Every other accepted value keeps
-    adaptive thinking and sets ``output_config.effort``. Omitting the effort keeps the provider's
-    default adaptive thinking. ``display`` only controls whether a thinking summary is returned for
-    the audit trail; billing and the token clock are unaffected.
+    ``none`` explicitly disables thinking and sends no effort. ``fixed``, a model whose reasoning
+    is not configurable, sends neither parameter. Every other accepted value keeps adaptive
+    thinking and sets ``output_config.effort``. Omitting the effort keeps the provider's default
+    adaptive thinking. ``display`` only controls whether a thinking summary is returned for the
+    audit trail; billing and the token clock are unaffected.
     """
     adaptive = {"type": "adaptive", "display": "summarized"}
     if reasoning_effort is None:
         return {"thinking": adaptive}
+    if reasoning_effort == "fixed":
+        return {}
     if reasoning_effort == "none":
         return {"thinking": {"type": "disabled"}}
     if reasoning_effort in ANTHROPIC_EFFORT_LEVELS:
         return {"thinking": adaptive, "output_config": {"effort": reasoning_effort}}
     raise ValueError(
-        f"Anthropic reasoning_effort must be one of {('none', *ANTHROPIC_EFFORT_LEVELS)}, "
+        f"Anthropic reasoning_effort must be one of {('none', 'fixed', *ANTHROPIC_EFFORT_LEVELS)}, "
         f"got {reasoning_effort!r}"
     )
 
@@ -302,123 +330,122 @@ def _mark_cache_breakpoint(messages: list[dict]) -> None:
             break
 
 
-# Policies
+# Chat protocol mapping
+# The canonical request's neutral roles (entity/request.py Role) as chat roles.
+CHAT_ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
+
+
+def frame_text(prefix: str, prompt: str) -> str:
+    """A session frame's text: the pending execution feedback, then the frame prompt."""
+    return f"{prefix}\n{prompt}" if prefix else prompt
+
+
+def chat_messages(request) -> tuple[dict, ...]:
+    """The canonical request as the OpenAI-format message list, before the compat flags apply.
+
+    Luna's size estimate counts it and the trajectory summary shows it. The ledger, at index 1,
+    takes the role the policy gives it. Live tool exchanges have no message form here.
+    """
+    messages = []
+    prefix = ""
+    for item in request.items:
+        block = item.block
+        if block.kind == "system_instruction":
+            messages.append({"role": "system", "content": block.text})
+        elif block.kind == "action_ledger":
+            messages.append(
+                {
+                    "role": CHAT_ROLES[item.intent.role],
+                    "content": request.policy.texts.ledger_header + "\n" + block.text,
+                }
+            )
+        elif item.intent.position == "frame_prefix":
+            prefix = block.text
+        elif block.kind == "frame":
+            if block.folded:
+                messages.append({"role": "user", "content": frame_text(prefix, block.text)})
+            else:
+                encoded = base64.b64encode(block.image.data).decode("ascii")
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": frame_text(prefix, block.text)},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{block.image.mime_type};base64,{encoded}",
+                                    "detail": block.image.detail,
+                                },
+                            },
+                        ],
+                    }
+                )
+            prefix = ""
+        elif block.kind == "model_output":
+            message = {"role": "assistant", "content": block.text}
+            if block.reasoning:
+                message["reasoning_content"] = block.reasoning
+            messages.append(message)
+        elif block.kind == "execution_feedback":
+            messages.append({"role": "user", "content": block.text})
+    return tuple(messages)
+
+
+# Per-API declarations
 _STREAMING_CHAT = RealtimeCapabilities(
     protocol_family="openai_chat",
-    persistent_session=False,
-    terminal_output_usage=True,
+    roles=("instruction", "input", "model"),
+    feedback_placements=("separate_message",),
+    server_context="none",
 )
 
 
 @dataclass(frozen=True)
-class WirePolicy:
-    """Everything that differs between the HTTP APIs served by LiteLLMDriver."""
+class ChatProtocol:
+    """How one API's requests are built and its responses parsed."""
 
-    capabilities: RealtimeCapabilities
-    gateway: str
     # LiteLLM provider prefix for model_name; None means model_name is already provider/model.
     sdk_provider: str | None
-    default_key_env: str | None
-    default_base_url: str | None = None
-    base_url_env: str | None = None
     # "httpx": LiteLLM's own handler; "openai": an AsyncOpenAI client; None: SDK default.
     client: str | None = "httpx"
     # None follows ModelConfig.chat_stream / chat_include_usage.
     stream: bool | None = True
     include_usage: bool | None = True
-    # "model_prefix": Anthropic/Gemini models behind OpenRouter; "always": every request.
-    cache_breakpoint: str | None = None
-    strip_image_detail: bool = False
-    pin_openrouter_route: bool = False
-    # Each request sends the decision cap, else the declared native limit, else omits the
-    # parameter (provider default). APIs that require the parameter reject an undeclared limit.
-    output_limit_param: str = "max_tokens"
-    output_limit_required: bool = False
-    anthropic_thinking: bool = False
+    # "reasoning_effort": top-level parameter; "openrouter": extra_body.reasoning when a route is
+    # pinned, else top-level; "anthropic_thinking": Messages API thinking and output_config.
+    reasoning_param: str = "reasoning_effort"
     usage: str = "raw"  # "raw" | "kimi" | "anthropic"
-    preserve_reasoning_history: bool = False
+    # Keep streamed tool-call deltas as visible text (complete responses always keep them).
     surface_tool_calls: bool = False
-    assistant_turn_ref: bool = False
-    context_status: bool = False
+
+
+@dataclass(frozen=True, kw_only=True)
+class ChatDeployment(Deployment):
+    """Where one API's requests go: gateway, address, key and route."""
+
+    gateway: str
+    default_base_url: str | None = None
+    base_url_env: str | None = None
+    # OpenRouter session id, provider pin, attribution headers and response route checks.
+    pin_route: bool = False
     require_api_key: bool = True
 
 
-POLICIES = {
-    "openrouter": WirePolicy(
-        capabilities=_STREAMING_CHAT,
-        gateway="openrouter",
-        sdk_provider="openrouter",
-        default_key_env="OPENROUTER_API_KEY",
-        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
-        base_url_env="OPENROUTER_BASE_URL",
-        cache_breakpoint="model_prefix",
-        pin_openrouter_route=True,
-    ),
-    "moonshot": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="moonshot_chat",
-        ),
-        gateway="kimi_compatible",
-        sdk_provider="moonshot",
-        default_key_env="MOONSHOT_API_KEY",
-        default_base_url=DEFAULT_MOONSHOT_BASE_URL,
-        base_url_env="MOONSHOT_BASE_URL",
-        client="openai",
-        strip_image_detail=True,
-        output_limit_param="max_completion_tokens",
-        usage="kimi",
-        preserve_reasoning_history=True,
-    ),
-    "anthropic_messages": WirePolicy(
-        capabilities=replace(_STREAMING_CHAT, protocol_family="anthropic_messages"),
-        gateway="anthropic",
-        sdk_provider="anthropic",
-        default_key_env="ANTHROPIC_API_KEY",
-        default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
-        include_usage=False,
-        cache_breakpoint="always",
-        output_limit_required=True,
-        anthropic_thinking=True,
-        usage="anthropic",
-    ),
-    "chat_completions": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="compatible_chat",
-            terminal_output_usage=False,
-        ),
-        gateway="openai_compatible",
-        sdk_provider="openai",
-        default_key_env="OPENAI_API_KEY",
-        client="openai",
-        stream=None,
-        include_usage=None,
-        strip_image_detail=True,
-        # Self-hosted reasoning models (e.g. Kimi K3, GLM-5.3) expect prior reasoning_content
-        # back in history; vLLM and SGLang render it through the model's chat template.
-        preserve_reasoning_history=True,
-        surface_tool_calls=True,
-        context_status=True,
-        require_api_key=False,
-    ),
-    "litellm": WirePolicy(
-        capabilities=replace(
-            _STREAMING_CHAT,
-            protocol_family="compatible_chat",
-            terminal_output_usage=False,
-        ),
-        gateway="litellm",
-        sdk_provider=None,
-        default_key_env=None,
-        client=None,
-        stream=False,
-        preserve_reasoning_history=True,
-        surface_tool_calls=True,
-        assistant_turn_ref=True,
-        require_api_key=False,
-    ),
-}
+@dataclass(frozen=True)
+class ChatCompat(Compat):
+    """Named restrictions and special requirements of one API."""
+
+    # Cache through the newest message on every request. Elsewhere a model whose provider caches
+    # only at explicit breakpoints (Anthropic's, Gemini's behind OpenRouter) sets the
+    # cache_breakpoint provider option its API declares; OpenAI caches implicitly.
+    cache_breakpoint: bool = False
+    strip_image_detail: bool = False
+    # Each request sends the decision cap, else the declared native limit, else omits the
+    # parameter (provider default); an API that requires it (output_limit_required) refuses an
+    # undeclared limit. The name is the request field on the wire, which the run configuration
+    # records.
+    output_limit_param: str = "max_tokens"
 
 
 class _AuditedSDKStream:
@@ -441,286 +468,110 @@ class _AuditedSDKStream:
         await self.stream.close()
 
 
-# Driver
-class LiteLLMDriver:
-    """Stateless HTTP driver: canonical history is rendered into every request.
+class RequestEvidence:
+    """One request's evidence, from its send to the end of its events: its wire record, and the
+    usage and route the provider itself reported.
 
-    Consequently there is no provider-side conversation to repair after a wall-clock early return.
-    The API key (ModelConfig.adapter_type) selects the wire policy.
+    The pinned LiteLLM rebuilds usage, and answers some refused requests with a reply of its own
+    (complete), so the driver reports usage and route only as this object saw them in the
+    provider's reply: a stream's raw chunks, observed before LiteLLM parses them, or a complete
+    reply's body, from LiteLLM's logger callback, which must back the output count of its
+    normalized usage. The wire record is the HttpCapture of the client that sent the request; the
+    generic API, which has no client to hook, is recorded from the logger callback instead
+    (LoggerCapture).
     """
 
-    def __init__(self, config):
-        if config.adapter_type not in POLICIES:
-            raise ValueError(f"LiteLLMDriver has no wire policy for {config.adapter_type!r}")
-        self.config = config
-        self.policy = policy = POLICIES[config.adapter_type]
-        self.capabilities = policy.capabilities
-        self.gateway = policy.gateway
-        self.preserve_reasoning_history = policy.preserve_reasoning_history
-        if policy.output_limit_required and config.native_output_limit is None:
-            raise ValueError(
-                f"The {config.adapter_type} API requires {policy.output_limit_param}; declare "
-                "endpoint.native_output_limit in the model YAML"
-            )
-        if not policy.context_status:
-            # The runtime records physical context checks only for drivers that perform them.
-            self.request_context_status = None
-        if policy.gateway == "openai_compatible":
-            if (
-                config.context_window_tokens is not None
-                and config.context_reserve_tokens >= config.context_window_tokens
-            ):
-                raise ValueError("Context capacity must exceed generation reserve")
-            self.base_url = validate_endpoint(config.api_base_url)
+    def __init__(self, driver: LiteLLMDriver, kwargs: dict):
+        self.driver = driver
+        self.kwargs = kwargs
+        self.route = driver._backend_route()
+        if driver.protocol.client is None:
+            self.capture, self.logger = None, LoggerCapture(driver)
         else:
-            self.base_url = (
-                config.api_base_url
-                or (os.environ.get(policy.base_url_env) if policy.base_url_env else None)
-                or policy.default_base_url
-            )
-        self._sdk = self._load_sdk()
-        self.api_key = self._resolve_key()
-        self._http = None
-        self._responses: dict[int, object] = {}
-        self._lock = threading.Lock()
-        self._session_id = "rtb-" + uuid.uuid4().hex
+            # Kept as the request goes: an abort can replace the client, and its capture, before
+            # the request or its events end.
+            self.capture, self.logger = driver._http_capture, None
+        self.interrupted = False
+        # A stream: LiteLLM's response, and what its raw chunks reported.
+        self.response = None
+        self.raw_usage = None
+        self.usage_revision = 0
+        self.taken_revision = 0
+        self.raw_route = None
+        self.anthropic_start = None
+        self.anthropic_delta = None
+        self.anthropic_message = None
+        self.stop_reason = None
+        # A complete reply: its message, the provider's body and the usage that body backs.
+        self.reply = None
+        self.raw_reply = {}
+        self.reply_usage = None
 
-    @staticmethod
-    def _load_sdk():
-        # Import lazily; constructing a native realtime driver does not load LiteLLM.
-        import litellm as litellm
-
-        if version("litellm") != LITELLM_VERSION:
-            raise RuntimeError(
-                f"Use litellm=={LITELLM_VERSION}; raw usage auditing is version-validated"
-            )
-        return litellm
-
-    def _resolve_key(self) -> str | None:
-        variable = self.config.api_key_env or self.policy.default_key_env
-        key = self.config.api_key or (os.environ.get(variable) if variable else None)
-        if key:
-            return key
-        if self.policy.require_api_key:
-            raise RuntimeError(f"The {self.config.adapter_type} API needs {variable}")
-        if self.config.api_key_env and self.policy.gateway == "litellm":
-            raise ValueError(f"Credential variable {self.config.api_key_env!r} is empty or unset")
-        return "not-required" if self.policy.client == "openai" else None
-
-    # ---- lifecycle -------------------------------------------------------------------------
-
-    async def connect(self, request: ConnectRequest) -> None:
-        return None
-
-    async def send_observation(self, observation: ProviderObservation) -> dict:
-        # The complete canonical prompt is sent by start_generation; this hook intentionally has no
-        # transport side effect for stateless APIs.
-        return {"observation_id": observation.observation_id}
-
-    async def sync_history(self, request: HistorySyncRequest) -> HistorySyncResult:
-        return HistorySyncResult(
-            SyncDisposition.EXACT,
-            ProviderHistoryState.EXACT,
-            detail="stateless request history is canonical",
-            provider_metadata={"history_request_recomposed": True},
-        )
-
-    # ---- request shaping -------------------------------------------------------------------
-
-    def transport_output_token_cap(self, provider_cap: int | None) -> int | None:
-        """Return the completion limit each request sends; None omits it (provider default).
-
-        Omitting the limit is unsafe on some hosts: Kimi-compatible gateways have defaulted to 128
-        tokens (all spent on reasoning) or to the whole context window (rejected as overflow). A
-        declared native limit is therefore always sent explicitly.
-        """
-        if provider_cap is not None:
-            return int(provider_cap)
-        return self.config.native_output_limit
-
-    def _stream_enabled(self) -> bool:
-        stream = self.policy.stream
-        return self.config.chat_stream if stream is None else stream
-
-    def _request_kwargs(self, request: GenerationRequest) -> dict:
-        policy = self.policy
-        messages = copy.deepcopy(list(request.messages))
-        if policy.strip_image_detail:
-            _strip_image_detail(messages)
-        if policy.cache_breakpoint == "always" or (
-            policy.cache_breakpoint == "model_prefix"
-            and self.config.model_name.startswith(("anthropic/", "google/"))
-        ):
-            # Anthropic and Gemini use explicit breakpoints; OpenAI uses implicit caching.
-            _mark_cache_breakpoint(messages)
-        stream = self._stream_enabled()
-        kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
-        include_usage = policy.include_usage
-        if include_usage is None:
-            include_usage = self.config.chat_include_usage
-        if stream and include_usage:
-            kwargs["stream_options"] = {"include_usage": True}
-        # The recorded transport cap is the value sent; the request never substitutes another.
-        limit = request.transport_output_token_cap
-        if limit is not None:
-            kwargs[policy.output_limit_param] = int(limit)
-        effort = self.config.reasoning_effort
-        extra_body = {"session_id": self._session_id} if policy.pin_openrouter_route else {}
-        upstream = self.config.upstream_provider
-        if policy.pin_openrouter_route and upstream:
-            extra_body["provider"] = {
-                "order": [upstream],
-                "allow_fallbacks": False,
-                "require_parameters": True,
-            }
-        if policy.anthropic_thinking:
-            kwargs.update(anthropic_thinking(effort))
-        elif effort is not None:
-            if policy.pin_openrouter_route and upstream:
-                extra_body["reasoning"] = {"effort": effort, "exclude": False}
-            else:
-                kwargs["reasoning_effort"] = effort
-        if extra_body:
-            kwargs["extra_body"] = extra_body
-        if request.timeout_s is not None:
-            kwargs["timeout"] = request.timeout_s
-        return kwargs
-
-    def _client(self):
-        if self._http is not None or self.policy.client is None:
-            return self._http
-        if self.policy.client == "openai":
-            from openai import AsyncOpenAI as AsyncOpenAI
-
-            # The harness owns retries (entity.model.TRANSPORT_RETRY) so every attempt is recorded.
-            self._http = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url, max_retries=0)
-        else:
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as AsyncHTTPHandler
-
-            self._http = AsyncHTTPHandler()
-        return self._http
-
-    def _transport_kwargs(self) -> dict:
-        policy = self.policy
-        model = self.config.model_name
-        kwargs = {
-            "model": f"{policy.sdk_provider}/{model}" if policy.sdk_provider else model,
-            # The harness owns retries; never silently retry or fall back to another backend.
-            "num_retries": 0,
-            "max_retries": 0,
-            "drop_params": False,
-            "caching": False,
-        }
-        if self.api_key is not None:
-            kwargs["api_key"] = self.api_key
-        if self.base_url:
-            kwargs["api_base"] = str(self.base_url)
-        client = self._client()
-        if client is not None:
-            kwargs["client"] = client
-        if policy.pin_openrouter_route:
-            kwargs["extra_headers"] = {
-                "X-OpenRouter-Metadata": "enabled",
-                "HTTP-Referer": os.environ.get(
-                    "OPENROUTER_REFERER", "https://github.com/RealtimeAgents/Realtime-Bench"
-                ),
-                "X-Title": os.environ.get("OPENROUTER_TITLE", "Realtime-Bench"),
-            }
-        return kwargs
-
-    def _backend_route(self) -> dict:
-        route = {
-            "gateway": self.gateway,
-            "base_url": self.base_url,
-            "transport": "litellm",
-            "transport_version": LITELLM_VERSION,
-            "requested_model": self.config.model_name,
-        }
-        if self.policy.pin_openrouter_route or self.gateway == "kimi_compatible":
-            pinned = self.policy.pin_openrouter_route
-            route.update(
-                configured_upstream_provider=self.config.upstream_provider,
-                allow_fallbacks=False if pinned else None,
-                require_parameters=True if pinned else None,
-                response_metadata=None,
-            )
-        if self.policy.usage == "anthropic":
-            route.update(response_model=None, response_id=None)
-        return route
-
-    # ---- generation ------------------------------------------------------------------------
-
-    async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
-        if not self._stream_enabled():
-            return await self._start_complete_response(request)
-        await asyncio.to_thread(pace_request)
-        kwargs = self._request_kwargs(request)
-        kwargs.update(self._transport_kwargs())
-        response = await self._sdk.acompletion(**kwargs)
-        audit = {
-            "usage": None,
-            "usage_revision": 0,
-            "route": None,
-            "anthropic_start": None,
-            "anthropic_delta": None,
-            "stop_reason": None,
-            "message": None,
-        }
+    async def stream(self) -> None:
+        """Send the request for a stream whose raw chunks are observed before LiteLLM parses
+        them. A hooked client records with the request the past reasonings it carries back
+        (capture.py replayed_reasoning)."""
+        with replayed_reasoning(self.kwargs["messages"]):
+            response = await self.driver._sdk.acompletion(**self.kwargs)
         try:
             # Fail closed if LiteLLM no longer exposes the provider payload before parsing it.
             raw_stream = response.completion_stream
             parse = getattr(raw_stream, "chunk_parser", None)
             if callable(parse):
 
-                def parse_with_audit(chunk):
-                    self._observe_raw(audit, chunk)
+                def parse_observed(chunk):
+                    self._observe(chunk)
                     return parse(chunk)
 
-                raw_stream.chunk_parser = parse_with_audit
+                raw_stream.chunk_parser = parse_observed
             else:
                 from openai import AsyncStream as AsyncStream
 
                 if not isinstance(raw_stream, AsyncStream):
                     raise RuntimeError("LiteLLM stream has no auditable provider SSE parser")
-                response.completion_stream = _AuditedSDKStream(
-                    raw_stream, lambda chunk: self._observe_raw(audit, chunk)
-                )
+                response.completion_stream = _AuditedSDKStream(raw_stream, self._observe)
         except BaseException:
             await response.aclose()
             raise
-        with self._lock:
-            self._responses[id(response)] = response
-        return GenerationHandle(
-            request.generation_id,
-            opaque=response,
-            metadata={
-                "response": response,
-                "raw_audit": audit,
-                "backend_route": self._backend_route(),
-            },
-        )
+        with self.driver._lock:
+            self.driver._responses[id(response)] = response
+        self.response = response
 
-    def _observe_raw(self, audit: dict, chunk: dict) -> None:
-        if self.policy.usage == "anthropic":
+    def _observe(self, chunk: dict) -> None:
+        if self.driver.protocol.usage == "anthropic":
             kind = chunk.get("type")
             if kind == "message_start":
                 message = chunk.get("message") or {}
-                audit["anthropic_start"] = copy.deepcopy(message.get("usage"))
-                audit["message"] = {"model": message.get("model"), "id": message.get("id")}
+                self.anthropic_start = copy.deepcopy(message.get("usage"))
+                self.anthropic_message = {"model": message.get("model"), "id": message.get("id")}
             elif kind == "message_delta":
-                audit["anthropic_delta"] = copy.deepcopy(chunk.get("usage"))
-                audit["stop_reason"] = (chunk.get("delta") or {}).get("stop_reason")
+                self.anthropic_delta = copy.deepcopy(chunk.get("usage"))
+                self.stop_reason = (chunk.get("delta") or {}).get("stop_reason")
             return
         raw_usage = chunk.get("usage")
         if raw_usage is None:
             choices = chunk.get("choices") or []
             raw_usage = choices[0].get("usage") if choices else None
         if isinstance(raw_usage, dict):
-            audit["usage"] = copy.deepcopy(raw_usage)
-            audit["usage_revision"] += 1
+            self.raw_usage = copy.deepcopy(raw_usage)
+            self.usage_revision += 1
         route = chunk.get("openrouter_metadata")
         if route is not None:
-            audit["route"] = copy.deepcopy(route)
+            self.raw_route = copy.deepcopy(route)
+
+    def check_route(self) -> None:
+        """Keep the route OpenRouter reported for a pinned request, and refuse a provider other
+        than the pinned one."""
+        if not self.driver.deployment.pin_route:
+            return
+        route = self._route_metadata(self.raw_route)
+        if route is None:
+            return
+        self.route["response_metadata"] = route
+        selected = route.get("selected_provider")
+        expected = self.driver.config.upstream_provider
+        if selected is not None and expected is not None and self._provider_slug(selected) != expected:
+            raise RuntimeError(f"OpenRouter selected {selected!r}; expected pinned {expected!r}")
 
     @staticmethod
     def _provider_slug(value: str) -> str:
@@ -744,199 +595,82 @@ class LiteLLMDriver:
             "selected_endpoint_count": len(selected),
         }
 
-    def _check_route(self, generation, audit) -> None:
-        route = self._route_metadata(audit["route"])
-        if route is None:
-            return
-        generation.metadata["backend_route"]["response_metadata"] = route
-        selected = route.get("selected_provider")
-        expected = self.config.upstream_provider
-        if selected is not None and expected is not None and self._provider_slug(selected) != expected:
-            raise RuntimeError(f"OpenRouter selected {selected!r}; expected pinned {expected!r}")
+    def revised_usage(self) -> dict | None:
+        """The stream's usage as its raw chunks last reported it, normalized, when one revised it
+        since the last call; never LiteLLM's reconstructed or estimated usage. An Anthropic
+        stream has none here (terminal_usage)."""
+        if self.usage_revision == self.taken_revision:
+            return None
+        self.taken_revision = self.usage_revision
+        return self.driver._normalize_usage(self.raw_usage)
 
-    async def events(self, generation: GenerationHandle):
-        if generation.metadata.get("complete_response"):
-            async for event in self._complete_response_events(generation):
-                yield event
-            return
-        sequence = 0
-        response = generation.metadata["response"]
-        audit = generation.metadata["raw_audit"]
-        anthropic = self.policy.usage == "anthropic"
-        emitted_usage_revision = 0
-        calls: dict = {}
-        try:
-            events = response.__aiter__()
-            # The runtime can interrupt while consuming a yielded delta. Check before
-            # requesting another SDK event: interrupt() has already closed its socket.
-            while not generation.metadata.get("interrupted", False):
-                try:
-                    event = await anext(events)
-                except StopAsyncIteration:
-                    break
-                raw_type = type(event).__name__
-                if self.policy.pin_openrouter_route:
-                    self._check_route(generation, audit)
-                # Never expose LiteLLM's reconstructed/estimated usage as provider usage.
-                if not anthropic and audit["usage_revision"] != emitted_usage_revision:
-                    emitted_usage_revision = audit["usage_revision"]
-                    sequence += 1
-                    yield UsageSnapshot(
-                        generation.generation_id,
-                        sequence,
-                        raw_type,
-                        self._normalize_usage(audit["usage"]),
-                    )
-                    if generation.metadata.get("interrupted", False):
-                        break
-                choices = getattr(event, "choices", None) or []
-                if not choices:
-                    continue
-                delta = choices[0].delta
-                if self.policy.surface_tool_calls:
-                    for call in getattr(delta, "tool_calls", None) or []:
-                        saved = calls.setdefault(call.index, {"name": "", "arguments": ""})
-                        function = getattr(call, "function", None)
-                        if function:
-                            saved["name"] += function.name or ""
-                            saved["arguments"] += function.arguments or ""
-                reasoning = self._delta_reasoning(delta)
-                if reasoning:
-                    sequence += 1
-                    yield TextDelta(
-                        generation.generation_id, sequence, raw_type, reasoning, "reasoning"
-                    )
-                    if generation.metadata.get("interrupted", False):
-                        break
-                text = getattr(delta, "content", None) or ""
-                if text:
-                    sequence += 1
-                    yield TextDelta(generation.generation_id, sequence, raw_type, text, "visible")
-            interrupted = bool(generation.metadata.get("interrupted", False))
-            if (
-                not anthropic
-                and not interrupted
-                and audit["usage_revision"] != emitted_usage_revision
-            ):
-                sequence += 1
-                yield UsageSnapshot(
-                    generation.generation_id,
-                    sequence,
-                    "usage",
-                    self._normalize_usage(audit["usage"]),
-                )
-            if calls and not interrupted:
-                # No tools were supplied: preserve unexpected tool output for protocol validation.
-                sequence += 1
-                yield TextDelta(
-                    generation.generation_id,
-                    sequence,
-                    "tool_calls",
-                    "\n" + json.dumps({"tool_calls": [{"function": v} for v in calls.values()]}),
-                    "visible",
-                )
-            metadata = {"backend_route": generation.metadata.get("backend_route")}
-            if anthropic:
-                route = generation.metadata["backend_route"]
-                route["response_model"] = (audit["message"] or {}).get("model")
-                route["response_id"] = (audit["message"] or {}).get("id")
-                metadata = {"stop_reason": audit["stop_reason"], "backend_route": dict(route)}
-                if audit["anthropic_delta"] is not None:
-                    # Only the terminal message_delta carries authoritative output usage. An
-                    # interrupted stream has no complete count and reports none.
-                    sequence += 1
-                    yield UsageSnapshot(
-                        generation.generation_id,
-                        sequence,
-                        "message_delta",
-                        anthropic_usage(
-                            audit["anthropic_start"],
-                            audit["anthropic_delta"],
-                            stop_reason=audit["stop_reason"],
-                        ),
-                    )
-            sequence += 1
-            yield GenerationBoundary(
-                generation.generation_id,
-                sequence,
-                "chat.completion.done",
-                "interrupted" if interrupted else "turn_complete",
-                ProviderHistoryState.EXACT,
-                metadata,
-            )
-        finally:
-            try:
-                await asyncio.wait_for(response.aclose(), timeout=1.0)
-            finally:
-                with self._lock:
-                    self._responses.pop(id(response), None)
-
-    @staticmethod
-    def _delta_reasoning(delta) -> str:
-        reasoning = next(
-            (
-                value
-                for name in ("reasoning", "reasoning_content")
-                if isinstance((value := getattr(delta, name, None)), str) and value
-            ),
-            "",
+    def terminal_usage(self) -> dict | None:
+        """An Anthropic stream's usage. Only the terminal message_delta carries authoritative
+        output usage; an interrupted stream has no complete count and reports none."""
+        if self.anthropic_delta is None:
+            return None
+        return anthropic_usage(
+            self.anthropic_start, self.anthropic_delta, stop_reason=self.stop_reason
         )
-        if reasoning:
-            return reasoning
-        values = []
-        for detail in getattr(delta, "reasoning_details", None) or []:
-            detail = object_dict(detail) or {}
-            value = detail.get("text") or detail.get("summary")
-            if value:
-                values.append(value)
-        return "".join(values)
 
-    def _normalize_usage(self, usage: dict) -> dict:
-        if self.policy.usage == "kimi":
-            return kimi_usage(usage, str(self.base_url))
-        return usage
+    def boundary_metadata(self) -> dict:
+        if self.driver.protocol.usage != "anthropic":
+            return {"backend_route": self.route}
+        message = self.anthropic_message or {}
+        self.route.update(response_model=message.get("model"), response_id=message.get("id"))
+        return {"stop_reason": self.stop_reason, "backend_route": dict(self.route)}
 
-    # ---- complete responses ----------------------------------------------------------------
+    async def interrupt(self) -> None:
+        self.interrupted = True
+        if self.response is not None:
+            await self.response.aclose()
+            with self.driver._lock:
+                self.driver._responses.pop(id(self.response), None)
 
-    async def _start_complete_response(self, request: GenerationRequest) -> GenerationHandle:
-        if self.policy.gateway == "litellm" and request.clock_mode != "wall":
-            raise ValueError("Direct LiteLLM models require wall-clock evaluation in default mode")
-        await asyncio.to_thread(pace_request)
-        raw = {}
+    async def finish(self) -> None:
+        """Close the stream, and record the responses still open on its client's capture."""
+        try:
+            await self.driver.clock.wait_for(self.response.aclose(), 1.0)
+        finally:
+            with self.driver._lock:
+                self.driver._responses.pop(id(self.response), None)
+            self.capture.record_open()
 
-        def observe(details):
-            if details.get("log_event_type") != "post_api_call":
-                return
-            value = details.get("original_response")
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except (ValueError, TypeError):
-                    return
-            if isinstance(value, dict) and ("usage" in value or "usageMetadata" in value):
-                # Do not retain callback credentials, request headers, or prompt logging fields.
-                raw.update(copy.deepcopy(value))
-
-        kwargs = self._request_kwargs(request)
-        kwargs.update(self._transport_kwargs())
-        kwargs["logger_fn"] = observe
-        response = await self._sdk.acompletion(**kwargs)
+    async def complete(self) -> None:
+        """Send the request for a complete reply, keeping its message and the usage the
+        provider's body backs."""
+        kwargs = self.kwargs
+        kwargs["logger_fn"] = self._logged
+        with response_statuses() as statuses, replayed_reasoning(kwargs["messages"]):
+            response = await self.driver._sdk.acompletion(**kwargs)
         if not response.choices:
             raise RuntimeError("LiteLLM returned no response choices")
-        message = response.choices[0].message.model_dump(exclude_none=True)
-        metadata = {
-            "complete_response": True,
-            "usage": self._reported_usage(raw, response),
-            "message": message,
-            "backend_route": self._backend_route(),
-        }
-        if self.policy.assistant_turn_ref:
-            metadata["completed_turn_refs"] = {"assistant_message": message}
-        return GenerationHandle(request.generation_id, opaque=response, metadata=metadata)
+        self.reply = response.choices[0].message.model_dump(exclude_none=True)
+        # LiteLLM answers a 400 saying the output limit was reached with an empty completion of
+        # its own, whose prompt count it estimated (llms/openai/common_utils.py
+        # build_output_token_limit_response): a reply the provider refused reported no usage. Only
+        # a hooked client sees the status; the generic API takes the estimate.
+        refused = any(status >= 400 for status in statuses)
+        self.reply_usage = None if refused else self._reported_usage(response)
 
-    @staticmethod
-    def _reported_usage(raw, response):
+    def _logged(self, details: dict) -> None:
+        if self.logger is not None:
+            self.logger(details)
+        if details.get("log_event_type") != "post_api_call":
+            return
+        value = details.get("original_response")
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (ValueError, TypeError):
+                return
+        if isinstance(value, dict) and ("usage" in value or "usageMetadata" in value):
+            # Do not retain callback credentials, request headers, or prompt logging fields.
+            self.raw_reply.update(copy.deepcopy(value))
+
+    def _reported_usage(self, response):
         """Accept normalized counters only when backed by a raw provider output count."""
+        raw = self.raw_reply
         raw_usage = raw.get("usage") or raw.get("usageMetadata") or {}
         output = next(
             (
@@ -959,9 +693,320 @@ class LiteLLMDriver:
             usage["cost"] = raw_usage["cost"]
         return usage
 
-    async def _complete_response_events(self, generation):
+
+# Driver
+class LiteLLMDriver(StatelessEncoder):
+    """Stateless HTTP driver: canonical history is rendered into every request.
+
+    Consequently there is no provider-side conversation to repair after a wall-clock early return.
+    Each registered API (ModelConfig.adapter_type) is a subclass declaring its capabilities,
+    protocol, deployment and compat flags.
+    """
+
+    capabilities: RealtimeCapabilities
+    protocol: ChatProtocol
+    deployment: ChatDeployment
+    compat: ChatCompat
+    model_defaults: ClassVar[dict[str, dict]] = {}
+
+    def __init__(self, config, *, clock=None):
+        self.config = config
+        self.clock = clock or SystemClock()
+        deployment = self.deployment
+        if deployment.gateway == "openai_compatible":
+            self.base_url = validate_endpoint(config.api_base_url)
+        else:
+            self.base_url = (
+                config.api_base_url
+                or (os.environ.get(deployment.base_url_env) if deployment.base_url_env else None)
+                or deployment.default_base_url
+            )
+        self._sdk = self._load_sdk()
+        self.api_key = self._resolve_key()
+        self._http = None
+        # Streams still open, which close() ends; each RequestEvidence adds and removes its own.
+        self._responses: dict[int, object] = {}
+        self._lock = threading.Lock()
+        self._session_id = "rtb-" + uuid.uuid4().hex
+
+    @staticmethod
+    def _load_sdk():
+        # Import lazily; constructing a native realtime driver does not load LiteLLM.
+        litellm = import_litellm()
+        if version("litellm") != LITELLM_VERSION:
+            raise RuntimeError(
+                f"Use litellm=={LITELLM_VERSION}; raw usage auditing is version-validated"
+            )
+        return litellm
+
+    def _resolve_key(self) -> str | None:
+        variable = self.config.api_key_env or self.deployment.key_env
+        key = self.config.api_key or (os.environ.get(variable) if variable else None)
+        if key:
+            return key
+        if self.deployment.require_api_key:
+            raise RuntimeError(f"The {self.config.adapter_type} API needs {variable}")
+        if self.config.api_key_env and self.deployment.gateway == "litellm":
+            raise ValueError(f"Credential variable {self.config.api_key_env!r} is empty or unset")
+        return "not-required" if self.protocol.client == "openai" else None
+
+    def bind_trace(self, trace) -> None:
+        self._trace = trace
+
+    # ---- request shaping -------------------------------------------------------------------
+
+    def transport_output_token_cap(self, provider_cap: int | None) -> int | None:
+        """Return the completion limit each request sends; None omits it (provider default).
+
+        Omitting the limit is unsafe on some hosts: Kimi-compatible gateways have defaulted to 128
+        tokens (all spent on reasoning) or to the whole context window (rejected as overflow). A
+        declared native limit is therefore always sent explicitly.
+        """
+        if provider_cap is not None:
+            return int(provider_cap)
+        return self.config.native_output_limit
+
+    def _stream_enabled(self) -> bool:
+        stream = self.protocol.stream
+        return self.config.chat_stream if stream is None else stream
+
+    def _request_kwargs(self, request: GenerationRequest) -> dict:
+        protocol, compat = self.protocol, self.compat
+        # A fresh list per call: the steps below edit it in place.
+        messages = list(chat_messages(request.canonical))
+        if compat.strip_image_detail:
+            _strip_image_detail(messages)
+        if compat.cache_breakpoint or self.config.provider_options.get("cache_breakpoint"):
+            _mark_cache_breakpoint(messages)
+        stream = self._stream_enabled()
+        kwargs = {"model": self.config.model_name, "messages": messages, "stream": stream}
+        include_usage = protocol.include_usage
+        if include_usage is None:
+            include_usage = self.config.chat_include_usage
+        if stream and include_usage:
+            kwargs["stream_options"] = {"include_usage": True}
+        # The recorded transport cap is the value sent; the request never substitutes another.
+        limit = request.transport_output_token_cap
+        if limit is not None:
+            kwargs[compat.output_limit_param] = int(limit)
+        effort = self.config.reasoning_effort
+        pin_route = self.deployment.pin_route
+        extra_body = {"session_id": self._session_id} if pin_route else {}
+        upstream = self.config.upstream_provider
+        if pin_route and upstream:
+            extra_body["provider"] = {
+                "order": [upstream],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            }
+        if protocol.reasoning_param == "anthropic_thinking":
+            kwargs.update(anthropic_thinking(effort))
+        elif effort not in (None, "fixed"):  # `fixed`: the model's reasoning is not configurable
+            if protocol.reasoning_param == "openrouter" and upstream:
+                extra_body["reasoning"] = {"effort": effort, "exclude": False}
+            else:
+                kwargs["reasoning_effort"] = effort
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return kwargs
+
+    def _client(self):
+        if self._http is not None or self.protocol.client is None:
+            return self._http
+        if self.protocol.client == "openai":
+            from openai import AsyncOpenAI as AsyncOpenAI
+            from openai import DefaultAsyncHttpxClient as DefaultAsyncHttpxClient
+
+            # The harness owns retries (entity.model.TRANSPORT_RETRY) so every attempt is recorded.
+            # DefaultAsyncHttpxClient keeps the SDK's own client defaults and adds the hooks.
+            self._http_capture = HttpCapture(self, "litellm.openai_sdk", "generation")
+            self._http = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                max_retries=0,
+                http_client=DefaultAsyncHttpxClient(event_hooks=self._http_capture.hooks),
+            )
+        else:
+            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler as AsyncHTTPHandler
+
+            # LiteLLM passes the hooks on to the client of its connection-error resend.
+            self._http_capture = HttpCapture(self, "litellm.httpx", "generation")
+            self._http = AsyncHTTPHandler(event_hooks=self._http_capture.hooks)
+        return self._http
+
+    def _transport_kwargs(self) -> dict:
+        sdk_provider = self.protocol.sdk_provider
+        model = self.config.model_name
+        kwargs = {
+            "model": f"{sdk_provider}/{model}" if sdk_provider else model,
+            # The harness owns retries; never silently retry or fall back to another backend.
+            "num_retries": 0,
+            "max_retries": 0,
+            "drop_params": False,
+            "caching": False,
+        }
+        if self.api_key is not None:
+            kwargs["api_key"] = self.api_key
+        if self.base_url:
+            kwargs["api_base"] = str(self.base_url)
+        client = self._client()
+        if client is not None:
+            kwargs["client"] = client
+        if self.deployment.pin_route:
+            kwargs["extra_headers"] = {
+                "X-OpenRouter-Metadata": "enabled",
+                "HTTP-Referer": os.environ.get(
+                    "OPENROUTER_REFERER", "https://github.com/RealtimeAgents/Realtime-Bench"
+                ),
+                "X-Title": os.environ.get("OPENROUTER_TITLE", "Realtime-Bench"),
+            }
+        return kwargs
+
+    def _backend_route(self) -> dict:
+        gateway = self.deployment.gateway
+        route = {
+            "gateway": gateway,
+            "base_url": self.base_url,
+            "transport": "litellm",
+            "transport_version": LITELLM_VERSION,
+            "requested_model": self.config.model_name,
+        }
+        if self.deployment.pin_route or gateway == "kimi_compatible":
+            pinned = self.deployment.pin_route
+            route.update(
+                configured_upstream_provider=self.config.upstream_provider,
+                allow_fallbacks=False if pinned else None,
+                require_parameters=True if pinned else None,
+                response_metadata=None,
+            )
+        if self.protocol.usage == "anthropic":
+            route.update(response_model=None, response_id=None)
+        return route
+
+    # ---- generation ------------------------------------------------------------------------
+
+    async def start_generation(self, request: GenerationRequest) -> GenerationHandle:
+        await asyncio.to_thread(pace_request, self)
+        kwargs = self._request_kwargs(request)
+        kwargs.update(self._transport_kwargs())
+        evidence = RequestEvidence(self, kwargs)
+        if self._stream_enabled():
+            await evidence.stream()
+        else:
+            await evidence.complete()
+        return GenerationHandle(request.generation_id, opaque=evidence)
+
+    async def events(self, generation: GenerationHandle):
+        evidence = generation.opaque
+        if evidence.response is None:
+            async for event in self._complete_response_events(generation):
+                yield event
+            return
         sequence = 0
-        if generation.metadata.get("interrupted"):
+        calls: dict = {}
+        try:
+            events = evidence.response.__aiter__()
+            # The runtime can interrupt while consuming a yielded delta. Check before
+            # requesting another SDK event: interrupt() has already closed its socket.
+            while not evidence.interrupted:
+                try:
+                    event = await anext(events)
+                except StopAsyncIteration:
+                    break
+                raw_type = type(event).__name__
+                evidence.check_route()
+                usage = evidence.revised_usage()
+                if usage is not None:
+                    sequence += 1
+                    yield UsageSnapshot(generation.generation_id, sequence, raw_type, usage)
+                    if evidence.interrupted:
+                        break
+                choices = getattr(event, "choices", None) or []
+                if not choices:
+                    continue
+                delta = choices[0].delta
+                if self.protocol.surface_tool_calls:
+                    for call in getattr(delta, "tool_calls", None) or []:
+                        saved = calls.setdefault(call.index, {"name": "", "arguments": ""})
+                        function = getattr(call, "function", None)
+                        if function:
+                            saved["name"] += function.name or ""
+                            saved["arguments"] += function.arguments or ""
+                reasoning = self._delta_reasoning(delta)
+                if reasoning:
+                    sequence += 1
+                    yield TextDelta(
+                        generation.generation_id, sequence, raw_type, reasoning, "reasoning"
+                    )
+                    if evidence.interrupted:
+                        break
+                text = getattr(delta, "content", None) or ""
+                if text:
+                    sequence += 1
+                    yield TextDelta(generation.generation_id, sequence, raw_type, text, "visible")
+            interrupted = evidence.interrupted
+            usage = None if interrupted else evidence.revised_usage()
+            if usage is not None:
+                sequence += 1
+                yield UsageSnapshot(generation.generation_id, sequence, "usage", usage)
+            if calls and not interrupted:
+                # No tools were supplied: preserve unexpected tool output for protocol validation.
+                sequence += 1
+                yield TextDelta(
+                    generation.generation_id,
+                    sequence,
+                    "tool_calls",
+                    "\n" + json.dumps({"tool_calls": [{"function": v} for v in calls.values()]}),
+                    "visible",
+                )
+            metadata = evidence.boundary_metadata()
+            usage = evidence.terminal_usage()
+            if usage is not None:
+                sequence += 1
+                yield UsageSnapshot(generation.generation_id, sequence, "message_delta", usage)
+            sequence += 1
+            yield GenerationBoundary(
+                generation.generation_id,
+                sequence,
+                "chat.completion.done",
+                "interrupted" if interrupted else "turn_complete",
+                ProviderHistoryState.EXACT,
+                metadata,
+            )
+        finally:
+            await evidence.finish()
+
+    @staticmethod
+    def _delta_reasoning(delta) -> str:
+        reasoning = next(
+            (
+                value
+                for name in ("reasoning", "reasoning_content")
+                if isinstance((value := getattr(delta, name, None)), str) and value
+            ),
+            "",
+        )
+        if reasoning:
+            return reasoning
+        values = []
+        for detail in getattr(delta, "reasoning_details", None) or []:
+            detail = object_dict(detail) or {}
+            value = detail.get("text") or detail.get("summary")
+            if value:
+                values.append(value)
+        return "".join(values)
+
+    def _normalize_usage(self, usage: dict) -> dict:
+        if self.protocol.usage == "kimi":
+            return kimi_usage(usage)
+        return usage
+
+    # ---- complete responses ----------------------------------------------------------------
+
+    async def _complete_response_events(self, generation):
+        evidence = generation.opaque
+        sequence = 0
+        if evidence.interrupted:
             yield GenerationBoundary(
                 generation.generation_id,
                 1,
@@ -970,13 +1015,13 @@ class LiteLLMDriver:
                 ProviderHistoryState.EXACT,
             )
             return
-        usage = generation.metadata["usage"]
+        usage = evidence.reply_usage
         if usage is not None:
             sequence += 1
             yield UsageSnapshot(
                 generation.generation_id, sequence, "litellm.completion", usage
             )
-        message = generation.metadata["message"]
+        message = evidence.reply
         content = message.get("content") or ""
         if isinstance(content, list):
             content = "\n".join(
@@ -1002,19 +1047,13 @@ class LiteLLMDriver:
             "litellm.completion",
             "turn_complete",
             ProviderHistoryState.EXACT,
-            {"backend_route": generation.metadata["backend_route"]},
+            evidence.boundary_metadata(),
         )
 
     # ---- interruption and cleanup ----------------------------------------------------------
 
-    async def interrupt(self, generation: GenerationHandle) -> InterruptResult:
-        generation.metadata["interrupted"] = True
-        response = generation.metadata.get("response")
-        if response is not None:
-            await response.aclose()
-            with self._lock:
-                self._responses.pop(id(response), None)
-        return InterruptResult(ProviderHistoryState.EXACT)
+    async def interrupt(self, generation: GenerationHandle) -> None:
+        await generation.opaque.interrupt()
 
     async def close(self) -> None:
         with self._lock:
@@ -1034,12 +1073,14 @@ class LiteLLMDriver:
 
         if getattr(GLOBAL_LOGGING_WORKER, "_bound_loop", None) is asyncio.get_running_loop():
             try:
-                await asyncio.wait_for(GLOBAL_LOGGING_WORKER.stop(), timeout=1.0)
+                await self.clock.wait_for(GLOBAL_LOGGING_WORKER.stop(), 1.0)
             except Exception:  # noqa: BLE001, S110 - logging cleanup must not mask shutdown
                 pass
 
-    # Provider error types that are transient regardless of the HTTP status they arrive with. A
-    # streamed request can fail after the 200 response header with an SSE ``error`` event.
+    # Provider error types read from the error's text when no exception in the chain has an HTTP
+    # status. LiteLLM gives one to every error it maps, a stream's SSE error event included, but
+    # not to a complete response whose 200 body is an error object without a numeric code, as a
+    # gateway forwards an upstream error.
     _TRANSIENT_ERROR_TYPES = ("overloaded_error", "api_error", "timeout_error")
 
     def classify_transport_error(self, exc: BaseException) -> TransportFailure:
@@ -1050,8 +1091,7 @@ class LiteLLMDriver:
         for current in exception_chain(exc):
             status = getattr(current, "status_code", None)
             if isinstance(status, int) and status >= 400:
-                headers = getattr(getattr(current, "response", None), "headers", None)
-                return classify_http_failure(status, str(current), retry_after_seconds(headers))
+                return classify_http_failure(status, str(current), _retry_after(exc))
         for current in exception_chain(exc):
             if isinstance(current, litellm.RateLimitError):
                 return classify_http_failure(429, str(current))
@@ -1066,21 +1106,132 @@ class LiteLLMDriver:
             return TransportFailure(TRANSIENT)
         return TransportFailure(FATAL)
 
-    # ---- physical context (OpenAI-compatible deployments) --------------------------------
 
+def _retry_after(exc: BaseException) -> float | None:
+    """The first Retry-After along the exception chain. The exception LiteLLM raises keeps none
+    on its response; the HTTP client's error it wraps, further down the chain, does."""
+    for current in exception_chain(exc):
+        headers = getattr(getattr(current, "response", None), "headers", None)
+        retry_after = retry_after_seconds(headers)
+        if retry_after is not None:
+            return retry_after
+    return None
+
+
+# Registered chat APIs
+class OpenRouterDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        # The encoder sends past reasoning as plain reasoning_content. OpenRouter's reasoning
+        # guide takes it as `reasoning`, for models that return raw reasoning strings; signed,
+        # encrypted or summarized reasoning (its Anthropic, OpenAI and Gemini formats) goes back
+        # as reasoning_details, which the driver does not keep.
+        reasoning_replay="unsupported",
+    )
+    protocol = ChatProtocol(sdk_provider="openrouter", reasoning_param="openrouter")
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="openrouter",
+        key_env="OPENROUTER_API_KEY",
+        gateway="openrouter",
+        default_base_url=DEFAULT_OPENROUTER_BASE_URL,
+        base_url_env="OPENROUTER_BASE_URL",
+        pin_route=True,
+        requires_upstream_provider=True,
+    )
+    compat = ChatCompat(provider_options={"cache_breakpoint": (False, (False, True))})
+
+
+class MoonshotDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="moonshot_chat",
+        # Kimi's thinking-model guide: for K3, passing reasoning_content back "is required in
+        # multi-turn conversations and tool-call loops". That is K3's requirement, not the API's:
+        # K3's YAML sets reasoning_replay, which sends it (configs/models/kimi-k3.yaml).
+        # LiteLLM's Moonshot config sends the encoder's reasoning_content unchanged.
+        reasoning_replay="optional",
+    )
+    protocol = ChatProtocol(sdk_provider="moonshot", client="openai", usage="kimi")
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="moonshot",
+        key_env="MOONSHOT_API_KEY",
+        vendor="moonshot",
+        gateway="kimi_compatible",
+        default_base_url=DEFAULT_MOONSHOT_BASE_URL,
+        base_url_env="MOONSHOT_BASE_URL",
+    )
+    compat = ChatCompat(strip_image_detail=True)
+
+
+class AnthropicMessagesDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="anthropic_messages",
+        # LiteLLM's Anthropic converter drops reasoning_content. Anthropic takes past thinking
+        # only as signed thinking blocks passed back unmodified; the driver keeps their summary.
+        reasoning_replay="unsupported",
+    )
+    protocol = ChatProtocol(
+        sdk_provider="anthropic",
+        include_usage=False,
+        reasoning_param="anthropic_thinking",
+        usage="anthropic",
+    )
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="anthropic",
+        key_env="ANTHROPIC_API_KEY",
+        vendor="anthropic",
+        gateway="anthropic",
+        default_base_url=DEFAULT_ANTHROPIC_BASE_URL,
+    )
+    compat = ChatCompat(
+        cache_breakpoint=True,
+        output_limit_required=True,
+        reasoning_efforts=ANTHROPIC_REASONING_EFFORTS,
+    )
+
+
+class ChatCompletionsDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="compatible_chat",
+        finite_frame_budget=False,
+        wall_clock_only=True,
+        # OpenAI's chat format has no field for past reasoning, but LiteLLM passes the encoder's
+        # reasoning_content through unchanged, and vLLM and SGLang hand it to the model's chat
+        # template. A model that needs it back sets reasoning_replay in its YAML's context (K3).
+        reasoning_replay="optional",
+    )
+    protocol = ChatProtocol(
+        sdk_provider="openai",
+        client="openai",
+        stream=None,
+        include_usage=None,
+        surface_tool_calls=True,
+    )
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="compatible",
+        key_env="OPENAI_API_KEY",
+        gateway="openai_compatible",
+        require_api_key=False,
+    )
+    compat = ChatCompat(strip_image_detail=True)
+
+    # The only LiteLLM API whose window an endpoint declares (BENCHMARK_CONTEXT_*).
     async def request_context_status(self, request):
         """Count the actual pending request, including the newest image and action ledger."""
         limit = self.config.context_window_tokens
         if limit is None:
             return {"pressure": False, "counter": "unconfigured"}
-        validate_context_reserve(self.config)
         messages = self._request_kwargs(request)["messages"]
         if self.config.context_counter == "vllm":
-            import httpx as httpx
-
             endpoint = self.base_url.removesuffix("/v1") + "/tokenize"
             response = await asyncio.to_thread(
-                httpx.post,
+                traced_post(self, "vllm.tokenize", "context_count"),
                 endpoint,
                 json={
                     "model": self.config.model_name,
@@ -1088,7 +1239,7 @@ class LiteLLMDriver:
                     "add_generation_prompt": True,
                 },
                 headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=request.timeout_s or 30,
+                timeout=30,
             )
             response.raise_for_status()
             result = response.json()
@@ -1105,3 +1256,33 @@ class LiteLLMDriver:
             count = estimated_request_tokens(messages, self.config.context_image_tokens)
             source = "estimated_utf8_bytes_plus_image_allowance"
         return context_status(self.config, count, source)
+
+
+class DirectLiteLLMDriver(LiteLLMDriver):
+    capabilities = replace(
+        _STREAMING_CHAT,
+        protocol_family="compatible_chat",
+        finite_frame_budget=False,
+        wall_clock_only=True,
+        # The model id picks LiteLLM's provider, and with it what becomes of reasoning_content:
+        # sent unchanged to OpenAI-format APIs, an unsigned thought part for Gemini, dropped for
+        # Anthropic. It may go back to the providers compat names.
+        reasoning_replay="optional",
+    )
+    protocol = ChatProtocol(sdk_provider=None, client=None, stream=False, surface_tool_calls=True)
+    deployment = ChatDeployment(
+        family="vlm",
+        provider="litellm",
+        key_env=None,
+        litellm_provider="",
+        gateway="litellm",
+        require_api_key=False,
+    )
+    # The providers whose conversion (LiteLLM 1.106.1) keeps an assistant message's
+    # reasoning_content: llms/deepseek/chat/transformation.py (which fills a missing one with a
+    # space in thinking mode), llms/moonshot/chat/transformation.py, llms/together_ai/chat/
+    # transformation.py (which says Together consumes it) and llms/hosted_vllm/chat/
+    # transformation.py (which keeps a string one).
+    compat = ChatCompat(
+        reasoning_replay_providers=("deepseek", "moonshot", "together_ai", "hosted_vllm")
+    )

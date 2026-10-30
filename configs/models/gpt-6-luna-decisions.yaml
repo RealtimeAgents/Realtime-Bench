@@ -4,3 +4,5 @@ endpoint:
   api_key_env: OPENROUTER_API_KEY
   upstream_provider: openai
 reasoning_effort: fixed
+context:
+  observation: observation_json_screenshot

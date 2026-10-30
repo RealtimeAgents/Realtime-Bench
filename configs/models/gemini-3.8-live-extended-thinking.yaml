@@ -2,4 +2,16 @@ endpoint:
   api: gemini_live
   model: gemini-3.8-live-extended-thinking
   api_key_env: GEMINI_API_KEY
+  native_output_limit: 65536
 reasoning_effort: low
+reasoning_efforts: [low, medium, high]
+# Extended Thinking declares its functions asynchronous, has no function scheduling, and stays
+# active across intermediate turnComplete messages until the interaction is idle.
+provider_options:
+  tool_behavior: non_blocking
+  completion_signal: interaction_idle
+  input_transport: client_content
+  tool_response_scheduling: omit
+context:
+  # Past calls replayed as native tool calls can stall a rebuilt session's next interaction.
+  tool_call_history: tool_transcript

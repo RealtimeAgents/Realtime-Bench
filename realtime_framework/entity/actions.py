@@ -365,20 +365,10 @@ def normalize_action(action: Action) -> tuple[Action, dict]:
 
     geometry = FrameGeometry.from_dict(action.coordinate_transform)
     params = dict(source)
-    if space in {"model_image_px", "model_tool_px"}:
+    if space == "model_image_px":
         for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
             if _finite(params.get(x_key)) and _finite(params.get(y_key)):
                 params[x_key], params[y_key] = geometry.image_to_screen_point(
-                    params[x_key], params[y_key]
-                )
-    elif space in {"normalized_0_999", "normalized_0_1000"}:
-        maximum = 999.0 if space.endswith("999") else 1000.0
-        normalized_geometry = FrameGeometry(
-            (round(maximum), round(maximum)), geometry.screen_size, geometry.capture_bbox_screen
-        )
-        for x_key, y_key in (("x", "y"), ("x1", "y1"), ("x2", "y2")):
-            if _finite(params.get(x_key)) and _finite(params.get(y_key)):
-                params[x_key], params[y_key] = normalized_geometry.image_to_screen_point(
                     params[x_key], params[y_key]
                 )
     else:
@@ -395,58 +385,6 @@ def normalize_action(action: Action) -> tuple[Action, dict]:
 
 def _finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
-def _parse_pair(value: str) -> tuple[int, int]:
-    import argparse as argparse
-
-    parts = value.lower().replace("x", ",").split(",")
-    if len(parts) != 2:
-        raise argparse.ArgumentTypeError("expected WIDTHxHEIGHT")
-    return int(parts[0]), int(parts[1])
-
-
-def _parse_bbox(value: str) -> tuple[float, float, float, float]:
-    import argparse as argparse
-
-    parts = value.split(",")
-    if len(parts) != 4:
-        raise argparse.ArgumentTypeError("expected X1,Y1,X2,Y2")
-    return tuple(float(item) for item in parts)
-
-
-def main() -> None:
-    """Print deterministic landmark mappings for a GUI coordinate contract."""
-    import argparse as argparse
-
-    parser = argparse.ArgumentParser(description=main.__doc__)
-    parser.add_argument("--image-size", type=_parse_pair, required=True)
-    parser.add_argument("--screen-size", type=_parse_pair, default=DESKTOP_SIZE)
-    parser.add_argument("--capture-bbox-screen", type=_parse_bbox, default=None)
-    args = parser.parse_args()
-
-    geometry = FrameGeometry(args.image_size, args.screen_size, args.capture_bbox_screen)
-    width, height = geometry.image_size
-    landmarks = {
-        "top_left": (0, 0),
-        "center": (width / 2, height / 2),
-        "bottom_right": (width - 1, height - 1),
-    }
-    print(
-        json.dumps(
-            {
-                **geometry.to_dict(),
-                "landmarks": {
-                    name: {
-                        "image": list(point),
-                        "screen": list(geometry.image_to_screen_point(*point)),
-                    }
-                    for name, point in landmarks.items()
-                },
-            },
-            indent=2,
-        )
-    )
 
 
 # Grounding
@@ -660,6 +598,12 @@ GUI_FUNCTION_TARGET_DESCRIPTION = (
     "the region center. Never reuse an older screenshot's mark. Choose this reference OR its "
     "raw coordinate pair, never both; omit the unused fields."
 )
+# Streaming: the call's marks are those of the frame it names, however old.
+GUI_FUNCTION_FRAME_TARGET_DESCRIPTION = (
+    "Pn point mark or Rn@u,v region-local mark of the screenshot the frame argument names. For "
+    "scroll, Rn means the region center. Choose this reference OR its raw coordinate pair, never "
+    "both; omit the unused fields."
+)
 
 GUI_FUNCTION_MODIFIER_DESCRIPTION = (
     "Optional: one modifier or a '+'-joined combination of shift, ctrl, alt, and super "
@@ -670,6 +614,16 @@ GUI_FUNCTION_MODIFIER_DESCRIPTION = (
 GUI_FUNCTION_ACTION_DESCRIPTION = (
     "Submit this GUI action using current P/R marks when supplied, or screenshot coordinates "
     "when no suitable mark exists. It is queued for execution according to the active clock setting."
+)
+GUI_FUNCTION_FRAME_ACTION_DESCRIPTION = (
+    "Submit this GUI action using the P/R marks of the screenshot its frame argument names when "
+    "supplied, or that screenshot's coordinates when no suitable mark exists. It is queued for "
+    "execution according to the active clock setting."
+)
+
+GUI_FUNCTION_FRAME_DESCRIPTION = (
+    "Number in the FRAME label of the screenshot this action is based on. Its P/R marks and "
+    "coordinates are read from that screenshot."
 )
 
 
@@ -709,7 +663,11 @@ def _parameters(properties, required=(), choices=()):
     return schema
 
 
-def gui_function_declarations():
+def gui_function_declarations(*, clock_mode: str, frame_reference: bool = False):
+    """``frame_reference``: streaming, where every call also names the frame it is based on.
+    The descriptions describe only the run's clock, ``clock_mode``; the schemas are the same on
+    either."""
+    token_clock = clock_mode == "token"
     coordinate = {
         "type": "number",
         "description": (
@@ -722,13 +680,22 @@ def gui_function_declarations():
     pointer_duration = {
         **duration,
         "description": (
-            "Optional executor-side pointer interpolation duration in seconds; not a key hold. "
-            "GUI execution latency is excluded from simulated time."
+            "Optional executor-side pointer interpolation duration in seconds; not a key hold."
+            + (" GUI execution latency is excluded from simulated time." if token_clock else "")
         ),
     }
+    world_time = (
+        "Under the token clock this is simulated world time."
+        if token_clock
+        else "This is physical elapsed time."
+    )
     target = {
         "type": "string",
-        "description": GUI_FUNCTION_TARGET_DESCRIPTION,
+        "description": (
+            GUI_FUNCTION_FRAME_TARGET_DESCRIPTION
+            if frame_reference
+            else GUI_FUNCTION_TARGET_DESCRIPTION
+        ),
         "pattern": r"^(P[1-9][0-9]*|R[1-9][0-9]*(@(1000|[0-9]{1,3}),(1000|[0-9]{1,3}))?)$",
     }
     pointer = {"target": target, "x": coordinate, "y": coordinate}
@@ -776,7 +743,7 @@ def gui_function_declarations():
                     **duration,
                     "description": (
                         "Optional hold duration in seconds, defaults to 1. Holds the entire chord; later "
-                        "actions do not cancel it. Under the token clock this is simulated world time."
+                        "actions do not cancel it. " + world_time
                     ),
                 },
             },
@@ -814,7 +781,7 @@ def gui_function_declarations():
                     **duration,
                     "description": (
                         "Optional wait duration in seconds. Omit to wait for the next observation. "
-                        "Under the token clock this is simulated world time."
+                        + world_time
                     ),
                 }
             },
@@ -822,6 +789,12 @@ def gui_function_declarations():
             (),
         ),
     }
+    if frame_reference:
+        frame = {"type": "integer", "minimum": 1, "description": GUI_FUNCTION_FRAME_DESCRIPTION}
+        specs = {
+            name: ({**props, "frame": frame}, (*required, "frame"), choices)
+            for name, (props, required, choices) in specs.items()
+        }
     action_notes = {
         "click": "Omit all target/x/y fields only to click at the current cursor.",
         "right_click": "Right-click; omit all target/x/y fields only for the current cursor.",
@@ -835,20 +808,28 @@ def gui_function_declarations():
         "scroll": "dx and dy are required and must not both be zero. Omit the point for the current cursor.",
         "drag": "Requires end OR x2/y2. Start may be omitted for the current cursor. Choose one form per endpoint.",
     }
+    submit = (
+        GUI_FUNCTION_FRAME_ACTION_DESCRIPTION if frame_reference else GUI_FUNCTION_ACTION_DESCRIPTION
+    )
     return [
         {
             "name": name,
-            "description": " ".join(
-                filter(None, (GUI_FUNCTION_ACTION_DESCRIPTION, action_notes.get(name)))
-            ),
+            "description": " ".join(filter(None, (submit, action_notes.get(name)))),
             "parameters_json_schema": _parameters(props, required, choices),
         }
         for name, (props, required, choices) in specs.items()
     ]
 
 
-def canonical_function_action(name: str, arguments: dict) -> dict:
-    declarations = {item["name"]: item for item in gui_function_declarations()}
+def canonical_function_action(
+    name: str, arguments: dict, *, frame_reference: bool = False
+) -> dict:
+    """The call as a JSON action object; a streaming call's frame stays in it for grounding."""
+    # Only the schemas are read, which are the same on either clock.
+    declarations = {
+        item["name"]: item
+        for item in gui_function_declarations(clock_mode="wall", frame_reference=frame_reference)
+    }
     if name not in declarations or not isinstance(arguments, dict):
         raise ValueError("unknown GUI function or invalid arguments")
     schema = declarations[name]["parameters_json_schema"]
@@ -856,12 +837,9 @@ def canonical_function_action(name: str, arguments: dict) -> dict:
         raise ValueError("unexpected GUI function arguments")
     if set(schema["required"]) - set(arguments):
         raise ValueError("missing GUI function arguments")
-    action = Action(ActionType(name), dict(arguments))
+    parameters = {key: value for key, value in arguments.items() if key != "frame"}
+    action = Action(ActionType(name), parameters)
     valid, reason = validate_action_intent(action)
     if not valid:
         raise ValueError(reason)
     return {"action": name, **arguments}
-
-
-if __name__ == "__main__":
-    main()

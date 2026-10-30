@@ -298,6 +298,34 @@ def _badge_position(
     return best[1]
 
 
+def _badge_font(image_size: tuple[int, int]):
+    return ImageFont.load_default(size=max(14, min(24, round(min(image_size) / 27))))
+
+
+def _badge_size(draw, text: str, font) -> tuple[int, int]:
+    text_box = draw.textbbox((0, 0), text, font=font, stroke_width=1)
+    return text_box[2] - text_box[0] + 8, text_box[3] - text_box[1] + 6
+
+
+def _draw_badge(draw, box, text: str, font, color: tuple[int, int, int, int]) -> None:
+    draw.rounded_rectangle(box, radius=3, fill=color, outline=(255, 255, 255, 245), width=1)
+    draw.text(
+        (box[0] + 4, box[1] + 3),
+        text,
+        font=font,
+        fill=(255, 255, 255, 255),
+        stroke_width=1,
+        stroke_fill=(0, 0, 0, 230),
+    )
+
+
+def _frame_number_badge(draw, frame: int, font) -> tuple[tuple[int, int, int, int], str]:
+    """The box and text of the badge render_frame_number draws."""
+    label = f"FRAME {frame}"
+    width, height = _badge_size(draw, label, font)
+    return (2, 2, 2 + width, 2 + height), label
+
+
 def _render_marks(
     image_bytes: bytes,
     marks: dict[str, dict],
@@ -305,15 +333,18 @@ def _render_marks(
     *,
     action_width: int,
     action_height: int,
+    frame_number: int | None = None,
 ) -> tuple[bytes, str]:
     with Image.open(io.BytesIO(image_bytes)) as source:
         image = source.convert("RGBA")
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    font_size = max(14, min(24, round(min(image.size) / 27)))
-    font = ImageFont.load_default(size=font_size)
+    font = _badge_font(image.size)
     sx, sy = image.width / action_width, image.height / action_height
     occupied: list[tuple[int, int, int, int]] = []
+    if frame_number is not None:
+        # The frame number goes over the marks once they are drawn; their badges keep clear of it.
+        occupied.append(_frame_number_badge(draw, frame_number, font)[0])
 
     def badge(
         mark: str,
@@ -321,10 +352,7 @@ def _render_marks(
         color: tuple[int, int, int, int],
         keep_clear: tuple[int, int, int, int] | None = None,
     ):
-        text_box = draw.textbbox((0, 0), mark, font=font, stroke_width=1)
-        width = text_box[2] - text_box[0] + 8
-        height = text_box[3] - text_box[1] + 6
-        box = _badge_position(anchor, (width, height), image.size, occupied)
+        box = _badge_position(anchor, _badge_size(draw, mark, font), image.size, occupied)
         occupied.append(box)
         centre = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2)
         start = anchor
@@ -339,15 +367,7 @@ def _render_marks(
             )
             start = min(corners, key=lambda c: (c[0] - centre[0]) ** 2 + (c[1] - centre[1]) ** 2)
         draw.line((start[0], start[1], centre[0], centre[1]), fill=color, width=2)
-        draw.rounded_rectangle(box, radius=3, fill=color, outline=(255, 255, 255, 245), width=1)
-        draw.text(
-            (box[0] + 4, box[1] + 3),
-            mark,
-            font=font,
-            fill=(255, 255, 255, 255),
-            stroke_width=1,
-            stroke_fill=(0, 0, 0, 230),
-        )
+        _draw_badge(draw, box, mark, font, color)
 
     for mark, entry in marks.items():
         if entry["kind"] == "point":
@@ -407,6 +427,21 @@ def _render_marks(
     return output.getvalue(), "png"
 
 
+def render_frame_number(image_bytes: bytes, frame: int) -> bytes:
+    """Draw a ``FRAME n`` badge in the screenshot's top-left corner, over any marks; PNG."""
+    with Image.open(io.BytesIO(image_bytes)) as source:
+        image = source.convert("RGBA")
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    font = _badge_font(image.size)
+    box, label = _frame_number_badge(draw, frame, font)
+    _draw_badge(draw, box, label, font, (20, 20, 20, 235))
+    rendered = Image.alpha_composite(image, overlay).convert("RGB")
+    output = io.BytesIO()
+    rendered.save(output, format="PNG", optimize=True)
+    return output.getvalue()
+
+
 def build_hybrid_som(
     result: dict,
     image_bytes: bytes | None,
@@ -414,8 +449,11 @@ def build_hybrid_som(
     action_width: int,
     action_height: int,
     text_observation: bool = False,
+    frame_number: int | None = None,
 ) -> dict:
-    """Build the model-facing legend, mark map, and optional marked screenshot."""
+    """Build the model-facing legend, mark map, and optional marked screenshot. ``frame_number``
+    is the number render_frame_number draws on the marked screenshot after, under streaming,
+    where the legend's marks hold for the actions that name that frame."""
     marks, item_lines = _mark_map(result, text_observation=text_observation)
     obs = result.get("observation") or {}
     binding = result.get("binding") or {}
@@ -423,10 +461,11 @@ def build_hybrid_som(
         f"HYBRID_SOM v1 observation={obs.get('observation_id', '')} "
         f"space={action_width}x{action_height} stable={str(bool(binding.get('stable'))).lower()}"
     )
-    instructions = [
-        header,
-        "REF current-only: Pn=point; Rn@u,v=region-local 0..1000; raw coordinates allowed.",
-    ]
+    # The legend stays in the context once its frame is older, so it states only what its marks
+    # are; which screenshot's marks an action uses is the system prompt's (prompts.py). A
+    # streaming action names its frame, whose marks hold for it however old the frame is.
+    scope = "" if frame_number is None else " for actions naming this frame"
+    instructions = [header, f"REF{scope}: Pn=point; Rn@u,v=region-local 0..1000."]
     text = "\n".join(instructions + item_lines)
     unavailable = _active_items(result)[1]
     marked_bytes, mime = (None, None)
@@ -437,6 +476,7 @@ def build_hybrid_som(
             unavailable,
             action_width=action_width,
             action_height=action_height,
+            frame_number=frame_number,
         )
     mark_payload = json.dumps(marks, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return {
@@ -563,27 +603,26 @@ def resolve_action_references(
 # Protocol
 """Provider-neutral injection of observation-bound, non-mutating interactables."""
 
-OBSERVATION_INTERACTABLES_HEADER = (
-    "\n\nCURRENT-SCREEN GROUNDING (read-only; no inspection round):\n"
+# Opens every frame's interactables, the SoM legend or the choice models' observation JSON: a
+# frame keeps it once newer frames follow, so it names the frame's own screen.
+FRAME_INTERACTABLES_HEADER = (
+    "\n\nGROUNDING FOR THIS SCREEN (read-only; no inspection round):\n"
 )
 
 
 def without_observation_interactables(prompt: str) -> str:
     """Remove the appended SoM legend while keeping the frame prompt and execution feedback."""
-    return prompt.partition(OBSERVATION_INTERACTABLES_HEADER)[0]
+    return prompt.partition(FRAME_INTERACTABLES_HEADER)[0]
 
 
-def observation_prompt_with_interactables(base_prompt: str, text: str) -> str:
-    """Attach environment-provided controls to a visual observation.
+def observation_prompt_with_interactables(base_prompt: str, text: str, header: str) -> str:
+    """Attach environment-provided controls to a visual observation, after ``header``.
 
     This is observation data, not a model-invoked tool turn: the harness calls the read-only
     runtime for each frame and asks the model for its GUI action once.
     """
-    return (
-        base_prompt
-        + OBSERVATION_INTERACTABLES_HEADER
-        + (text or "No browser interactables were available for this screenshot.")
-        + "\nUse only these marks; otherwise use raw coordinates."
+    return base_prompt + header + (
+        text or "No browser interactables were available for this screenshot."
     )
 
 
@@ -601,10 +640,10 @@ def valid_inspection_proof(proof: dict | None, observation_id: str | None) -> bo
 """Project observation-bound interactables and persist an independent audit trace."""
 
 import threading as threading
-import time as time
 import uuid as uuid
 from pathlib import Path as Path
 
+from realtime_framework.clock import SystemClock
 from realtime_framework.sandbox.observation.interactables import project_result
 from realtime_framework.sandbox.observation.interactables import result_digest
 
@@ -620,10 +659,13 @@ class ToolRuntime:
         adapter: str | None = None,
         model: str | None = None,
         text_observation: bool = False,
+        clock=None,
     ):
         self.task_id = task_id
         self.adapter = adapter
         self.model = model
+        # The operational clock, which times each inspection for the audit trace.
+        self.clock = clock or SystemClock()
         # Text-observation models (no screenshot input) get control appearance and field state.
         self.text_observation = text_observation
         self._lock = threading.Lock()
@@ -669,27 +711,27 @@ class ToolRuntime:
         model_height: int = 1080,
         model_image_bytes: bytes | None = None,
         model_image_mime_subtype: str | None = None,
-        raw_model_call: str = "",
-        inspection_latency_s: float = 0.0,
-        protocol_error: str | None = None,
+        frame_number: int | None = None,
     ) -> dict:
-        """Return the cached result attached to ``observation`` and a runner-verifiable proof."""
-        started = time.time()
+        """Return the cached result attached to ``observation`` and a runner-verifiable proof.
+        ``frame_number``: the number drawn on the marked screenshot under streaming. The
+        inspection asks no model, so its record names no model call and no model latency."""
+        started = self.clock.time()
         metadata = getattr(observation, "metadata", {}) or {}
         expected = metadata.get("observation_id")
         canonical = metadata.get("interactables")
         sequence, call_id = self._next_call_id()
-        error = protocol_error
+        error = None
         if not expected:
-            error = error or "observation_missing_identity"
+            error = "observation_missing_identity"
         elif requested_observation_id != expected:
-            error = error or "observation_id_mismatch"
+            error = "observation_id_mismatch"
         elif not isinstance(canonical, dict):
-            error = error or "observation_missing_interactables"
+            error = "observation_missing_interactables"
         elif canonical.get("scene", {}).get("status") != "ok":
-            error = error or "interactables_scene_unavailable"
+            error = "interactables_scene_unavailable"
         elif not canonical.get("binding", {}).get("stable"):
-            error = error or "interactables_binding_unstable"
+            error = "interactables_binding_unstable"
 
         delivered = None
         text = ""
@@ -708,9 +750,10 @@ class ToolRuntime:
                 action_width=model_width,
                 action_height=model_height,
                 text_observation=self.text_observation,
+                frame_number=frame_number,
             )
             text = som["text"]
-        elapsed = time.time() - started
+        elapsed = self.clock.time() - started
         proof = {
             "valid": error is None,
             "call_id": call_id,
@@ -724,7 +767,7 @@ class ToolRuntime:
             "representation": som.get("representation") if som else None,
             "marked_image_sha256": som.get("marked_image_sha256") if som else None,
             "mark_map_sha256": som.get("mark_map_sha256") if som else None,
-            "inspection_round_latency_s": round(float(inspection_latency_s or 0.0), 6),
+            "inspection_round_latency_s": 0.0,
             "tool_execution_latency_s": round(elapsed, 6),
         }
         event = {
@@ -739,10 +782,10 @@ class ToolRuntime:
             "arguments": {"observation_id": requested_observation_id},
             "observation_id": expected,
             "screenshot_sha256": metadata.get("screenshot_sha256"),
-            "raw_model_call": (raw_model_call or "")[:4000],
+            "raw_model_call": "",
             "protocol_error": error,
             "latency": {
-                "inspection_round_model_s": round(float(inspection_latency_s or 0.0), 6),
+                "inspection_round_model_s": 0.0,
                 "tool_execution_s": round(elapsed, 6),
             },
             "canonical_result_sha256": result_digest(canonical)
@@ -778,14 +821,6 @@ class ToolRuntime:
             "image_mime_subtype": som.get("image_mime_subtype") if som else None,
         }
 
-    def resolve_action(self, action, execution: dict | None):
-        """Compile current-observation mark references into the canonical coordinate action."""
-        marks = execution.get("marks") if isinstance(execution, dict) else {}
-        resolved, trace = resolve_action_references(action, marks or {})
-        if isinstance(execution, dict):
-            execution["reference_resolution"] = trace
-        return resolved
-
     def finish(
         self,
         execution: dict,
@@ -794,7 +829,10 @@ class ToolRuntime:
         raw_action_output: str = "",
         outcome: str = "completed",
     ) -> None:
-        """Finish and persist one observation injection after its action round."""
+        """Finish and persist one observation injection after its action round, with the
+        reference resolution its caller kept on ``execution``: the last a turn-based decision's
+        output made, or, for a streaming frame, the resolution of each action of the replies
+        started on it (harnesses/streaming/agent.py)."""
         call_id = (execution.get("proof") or {}).get("call_id")
         if not call_id:
             return

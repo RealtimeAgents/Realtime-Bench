@@ -3,7 +3,6 @@
 from realtime_framework.entity.actions import FrameGeometry
 
 GAME_CANDIDATE_POLICY = "screenshot_game_keys_composed_pairs_grid_pointer_v1"
-POINTER_COMPOSITION_POLICY = "normalized_coordinate_hundreds_then_units_v1"
 
 
 def add_game_candidates(candidates, marks, delivered, geometry):
@@ -70,14 +69,3 @@ def _pointer_candidates(add, name, label, **target):
             "choose both coordinates before executing one action",
             {"action": "compose_pointer", "operation": operation, **target},
             kind="game_pointer", operation=operation, **target)
-
-
-def coordinate_choices(base=None):
-    """Cover every integer 0..1000 without a coarse grid or a >255-option question."""
-    if base is None:
-        return {str(value): {
-            "description": f"Coordinate {'1000' if value == 1000 else f'{value}..{value + 99}'}",
-            "value": value,
-        } for value in range(0, 1001, 100)}
-    return {str(value): {"description": f"Coordinate {value}", "value": value}
-            for value in range(base, min(base + 100, 1001))}

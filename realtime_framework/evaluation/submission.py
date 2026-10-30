@@ -17,13 +17,17 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from realtime_framework.entity.context_policy import resolve_context
 from realtime_framework.evaluation.harbor import aggregate
 from realtime_tasks.registry import UNRELEASED
 
 DEFAULT_URL = "https://realtimeagents.org/api/submissions"
 RUNS = 3
 # The leaderboard setting; any other value is a different benchmark condition.
-REQUIRED = {"suite_id": "public", "clock": "wall", "fps": 1, "duration_minutes": 5.0, "seed": 42}
+REQUIRED = {
+    "suite_id": "public", "clock": "wall", "fps": 1, "model_input_fps": 1,
+    "interaction_mode": "turn_based", "duration_minutes": 5.0, "seed": 42,
+}
 # Fields every run of one submission must share.
 SAME = (
     "suite_version", "suite_hash", "harness_version", "harness_hash", "model", "model_revision",
@@ -36,6 +40,37 @@ class SubmissionError(RuntimeError):
     pass
 
 
+def check_registered_driver(job: Path, report: dict) -> None:
+    """Only drivers registered under a name in the repository produce official results.
+
+    A model YAML that names an external driver (``endpoint.api: package.module:Class``) marks
+    each run with the driver's code identity; the driver class has no say in it.
+    """
+    driver = report.get("external_driver")
+    if driver is not None:
+        raise SubmissionError(
+            f"{job}: {driver['module']}:{driver['class']} is an external driver, so its results "
+            "are not official; drivers are registered by contributing them to the repository"
+        )
+
+
+def check_standard_context(job: Path, report: dict) -> None:
+    """Only runs on the standard context settings are leaderboard results. Their values, which
+    Harbor's resolve recorded, are judged again against this release's defaults file: each
+    standard, or an approved deviation of the model (entity/context_policy.py resolve_context).
+    A job recorded before runs recorded them ran under its release's."""
+    context = report.get("resolved_context")
+    if context is None:
+        return
+    settings = resolve_context(context["api"], context["model"], run=context["values"])
+    off = [item for item in settings.deviations if item.category == "nonstandard"]
+    if off:
+        raise SubmissionError(
+            f"{job}: the runs are off the standard context settings: "
+            + "; ".join(f"{item.key} is {item.value!r}, standard {item.standard!r}" for item in off)
+        )
+
+
 def check_runs(jobs: list[Path]) -> list[dict]:
     """Return one report per job, or explain why the jobs are not a leaderboard submission."""
     if len(jobs) != RUNS or len({job.resolve() for job in jobs}) != RUNS:
@@ -46,6 +81,8 @@ def check_runs(jobs: list[Path]) -> list[dict]:
             report = aggregate(job)
         except (OSError, ValueError, KeyError) as exc:
             raise SubmissionError(f"{job}: {exc}") from exc
+        check_registered_driver(job, report)
+        check_standard_context(job, report)
         if not report["complete"]:
             raise SubmissionError(f"{job}: {report['scored']}/{report['expected']} tasks have a trial")
         for field, value in REQUIRED.items():
@@ -165,8 +202,13 @@ def main(jobs: list[Path], *, url: str | None = None, token: str | None = None,
     key = hashlib.sha256("\n".join(str(job.resolve()) for job in jobs).encode()).hexdigest()[:16]
     archive = folder / f"{key}.tar.gz"
     manifest_path = archive.with_suffix(".json")
-    if archive.exists() and manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text())
+    cached = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
+    # Only the archive of the results just checked resumes: jobs replaced at these paths repack.
+    runs = json.loads(json.dumps(
+        [{"job": job.name, "report": report} for job, report in zip(jobs, reports)]
+    ))
+    if archive.exists() and cached is not None and cached["runs"] == runs:
+        manifest = cached
     else:
         print("Packing results...")
         manifest = build_archive(jobs, reports, archive)

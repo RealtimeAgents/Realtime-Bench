@@ -8,6 +8,8 @@ import json as json
 from pathlib import Path as Path
 import time as time
 
+from realtime_framework.evaluation._trial import LAUNCH_FILE
+from realtime_framework.evaluation.config import configuration_sha256
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
 
 
@@ -69,9 +71,14 @@ def resolve_run_identity(
     protocol=None,
     harness_hash=None,
     fps=None,
+    model_input_fps=None,
+    interaction_mode=None,
     runtime_config_hash=None,
 ) -> dict:
-    """Return the canonical fields that distinguish one executable run from another."""
+    """Return the canonical fields that distinguish one executable run from another.
+
+    ``fps`` is the environment's frame rate and ``model_input_fps`` the model's;
+    ``interaction_mode`` is turn_based or streaming."""
     harness_hash = harness_hash or harness_fingerprint()
     identity = {
         **resolve_suite_metadata(task_id=task_id, ctask=ctask),
@@ -83,6 +90,8 @@ def resolve_run_identity(
         "harness_version": harness_version(harness_hash),
         "harness_hash": harness_hash,
         "fps": fps,
+        "model_input_fps": model_input_fps,
+        "interaction_mode": interaction_mode,
         "seed": getattr(ctask, "seed", None),
         "runtime_config_hash": runtime_config_hash,
     }
@@ -94,6 +103,7 @@ def resolve_run_identity(
 def capture_generation_artifact(
     run_dir: Path,
     *,
+    clock: Clock,
     ctask=None,
     adapter=None,
     model=None,
@@ -103,17 +113,20 @@ def capture_generation_artifact(
     protocol=None,
     harness_hash=None,
     fps=None,
+    model_input_fps=None,
+    interaction_mode=None,
     runtime_config=None,
     runtime_config_hash=None,
     snapshot=None,
 ) -> dict:
     """Capture the model's output/state before verifier code runs.
 
-    `snapshot`, when given, is the evaluation snapshot ALREADY taken by the caller at the exact
-    inference boundary; it is written verbatim so the saved artifact and the run summary score the
+    `snapshot` is the evaluation snapshot ALREADY taken by the caller at the exact inference
+    boundary; it is written verbatim so the saved artifact and the run summary score the
     identical frozen state (re-sampling here would fold a second, later live read and let the two
-    disagree). Returns the manifest that is also atomically written to
-    generation_artifact/manifest.json.
+    disagree). Without one, the run froze nothing, and the artifact has no state. Returns the
+    manifest that is also atomically written to generation_artifact/manifest.json; its capture
+    time is read on ``clock``, the episode's operational clock.
     """
     artifact_dir = Path(run_dir) / "generation_artifact"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -128,21 +141,22 @@ def capture_generation_artifact(
         protocol=protocol,
         harness_hash=harness_hash,
         fps=fps,
+        model_input_fps=model_input_fps,
+        interaction_mode=interaction_mode,
         runtime_config_hash=runtime_config_hash,
     )
     manifest = {
         "artifact_version": 2,
-        "captured_unix_s": time.time(),
+        "captured_unix_s": clock.time(),
         **run_identity,
         "category": getattr(ctask, "category", None),
         "instance_id": getattr(ctask, "task_id", None),
         "runtime_config": runtime_config,
     }
 
-    if ctask is not None and hasattr(ctask, "evaluation_snapshot"):
-        snap = snapshot if snapshot is not None else ctask.evaluation_snapshot()
+    if snapshot is not None:
         state_file = artifact_dir / "task_state.json"
-        state_file.write_text(json.dumps(snap, indent=2, default=str))
+        state_file.write_text(json.dumps(snapshot, indent=2, default=str))
         manifest["payload"] = {
             "kind": "task_state",
             "state": state_file.name,
@@ -172,23 +186,6 @@ def save_evaluation(run_dir: Path, evaluation, *, error=None) -> Path:
 from decimal import Decimal as Decimal
 from decimal import InvalidOperation as InvalidOperation
 
-_MODALITY_COUNT = {
-    "text": "provider_text_input_tokens",
-    "image": "provider_image_input_tokens",
-    "video": "provider_video_input_tokens",
-    "audio": "provider_audio_input_tokens",
-}
-_CACHED_MODALITY_COUNT = {
-    "text": "provider_cached_text_input_tokens",
-    "image": "provider_cached_image_input_tokens",
-    "video": "provider_cached_video_input_tokens",
-    "audio": "provider_cached_audio_input_tokens",
-}
-_OUTPUT_MODALITY_COUNT = {
-    "text": "provider_text_output_tokens",
-    "audio": "provider_audio_output_tokens",
-}
-
 
 def _amount(value) -> Decimal | None:
     if isinstance(value, bool) or value is None:
@@ -204,12 +201,6 @@ def _json_amount(value: Decimal) -> float:
     return float(value.quantize(Decimal("0.000000001")))
 
 
-def _complete_count(summary: dict, name: str) -> int | None:
-    value = (summary.get("counts") or {}).get(name) or {}
-    total = value.get("total") if value.get("complete") else None
-    return total if isinstance(total, int) and not isinstance(total, bool) and total >= 0 else None
-
-
 def _result(
     summary: dict,
     *,
@@ -218,9 +209,6 @@ def _result(
     reason: str | None,
     total: Decimal | None = None,
     known: Decimal | None = None,
-    rate_card=None,
-    components=None,
-    assumptions=None,
 ) -> dict:
     reported = summary.get("provider_reported_cost") or {}
     return {
@@ -233,36 +221,32 @@ def _result(
         "known_cost_usd": _json_amount(known) if known is not None else None,
         "reason": reason,
         "provider_reported_cost": reported,
-        "rate_card": rate_card,
-        "components": components or [],
-        "assumptions": assumptions or [],
+        # No catalog model has a rate card: the cost is the provider's or unknown.
+        "rate_card": None,
+        "components": [],
+        "assumptions": [],
     }
 
 
-def _unavailable(summary: dict, reason: str, *, rate_card=None, status="unavailable") -> dict:
+def _unavailable(summary: dict, reason: str) -> dict:
     reported = summary.get("provider_reported_cost") or {}
     known = _amount(reported.get("known_total_usd"))
     return _result(
         summary,
         source="provider_reported_usage_cost" if known is not None else "unavailable",
-        status="partial" if known is not None else status,
+        status="partial" if known is not None else "unavailable",
         reason=reason,
         known=known,
-        rate_card=rate_card,
     )
 
 
-def summarize_cost(
-    token_accounting: dict | None, *, pricing: dict | None = None, provider: str | None = None
-) -> dict:
-    """Prefer a complete provider invoice amount, otherwise apply a versioned rate card.
-
-    A complete rate-card result requires complete provider totals and cache splits. Modality
-    details must reconcile unless the catalog explicitly declares a billing modality for the
-    unclassified positive remainder; missing data is never silently priced as text.
+def summarize_cost(token_accounting: dict | None, *, unaccounted: str | None = None) -> dict:
+    """The run's cost: the provider's reported total when it is complete, else unavailable, or
+    partial with the cost the provider did report.
+    ``unaccounted`` is why a run accounts no response though it made some.
     """
     if not isinstance(token_accounting, dict) or not token_accounting.get("responses"):
-        return _unavailable(token_accounting or {}, "no_inference_responses")
+        return _unavailable(token_accounting or {}, unaccounted or "no_inference_responses")
 
     reported = token_accounting.get("provider_reported_cost") or {}
     reported_total = _amount(reported.get("known_total_usd"))
@@ -275,260 +259,44 @@ def summarize_cost(
             total=reported_total,
             known=reported_total,
         )
+    reason = (
+        "provider_reported_cost_incomplete"
+        if reported_total is not None
+        else "no_provider_cost_or_rate_card"
+    )
+    return _unavailable(token_accounting, reason)
 
-    if provider == "local":
-        return _unavailable(
-            token_accounting,
-            "local_compute_cost_not_monetized",
-            rate_card=pricing,
-            status="unmonetized",
-        )
-    if not isinstance(pricing, dict):
-        reason = (
-            "provider_reported_cost_incomplete"
-            if reported.get("responses_with_cost")
-            else "no_provider_cost_or_rate_card"
-        )
-        return _unavailable(token_accounting, reason)
-    if pricing.get("currency") != "USD" or pricing.get("unit") != "per_million_tokens":
-        return _unavailable(token_accounting, "unsupported_rate_card", rate_card=pricing)
 
-    rates = pricing.get("rates") or {}
-    input_rates = rates.get("input") or {}
-    cached_rates = rates.get("cached_input") or {}
-    cache_write_rates = {
-        "5m": rates.get("cache_write_5m_input") or {},
-        "1h": rates.get("cache_write_1h_input") or {},
+def summarize_spend(
+    spent: dict | None, *, given_up: int = 0, unaccounted: str | None = None
+) -> dict:
+    """What a run's model calls spent, those given up on included (decision 37), from the token
+    totals of what every call spent (clock.py TokenAccounting, ``spent``): the provider-reported
+    cost as summarize_cost reads it, and the provider's token counts. ``given_up`` of the
+    responses are calls given up on whose usage came back late. A total is None unless every
+    response has it; the known total sums those that do, so a run whose last call the deadline
+    cut keeps the cost of the others, marked incomplete."""
+    cost = summarize_cost(spent, unaccounted=unaccounted)
+    counts = (spent or {}).get("counts") or {}
+    return {
+        "schema": "realtime_bench.spend_accounting.v1",
+        "currency": "USD",
+        "scope": "inference_responses_including_given_up",
+        "responses": (spent or {}).get("responses", 0),
+        "given_up_responses": given_up,
+        "status": cost["status"],
+        "complete": cost["complete"],
+        "reason": cost["reason"],
+        "total_usd": cost["total_usd"],
+        "known_usd": cost["known_cost_usd"],
+        "tokens": {
+            name: {
+                key: (counts.get(f"provider_{name}") or {}).get(key)
+                for key in ("total", "known_total", "complete")
+            }
+            for name in ("input_tokens", "output_tokens", "total_tokens")
+        },
     }
-    output_rates = rates.get("output") or {}
-    provider_input = _complete_count(token_accounting, "provider_input_tokens")
-    provider_output = _complete_count(token_accounting, "provider_billed_output_tokens")
-    provider_cached = _complete_count(token_accounting, "provider_cached_input_tokens")
-    if provider_input is None or provider_output is None or provider_cached is None:
-        return _unavailable(
-            token_accounting,
-            "incomplete_provider_token_totals",
-            rate_card=pricing,
-        )
-
-    input_counts = {}
-    for modality in input_rates:
-        count = _complete_count(token_accounting, _MODALITY_COUNT.get(modality, ""))
-        if count is None:
-            return _unavailable(
-                token_accounting,
-                f"missing_{modality}_input_tokens",
-                rate_card=pricing,
-            )
-        input_counts[modality] = count
-    classified_input = sum(input_counts.values())
-    if classified_input > provider_input:
-        return _unavailable(
-            token_accounting,
-            "input_modalities_exceed_provider_total",
-            rate_card=pricing,
-        )
-    unclassified_input = provider_input - classified_input
-    unclassified_modality = pricing.get("unclassified_input_modality")
-    if unclassified_input and unclassified_modality not in input_rates:
-        return _unavailable(
-            token_accounting,
-            "input_modalities_do_not_reconcile",
-            rate_card=pricing,
-        )
-
-    cached_counts = {modality: 0 for modality in input_counts}
-    if provider_cached:
-        for modality in input_counts:
-            if modality not in cached_rates:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_{modality}_cached_input_rate",
-                    rate_card=pricing,
-                )
-            count = _complete_count(
-                token_accounting,
-                _CACHED_MODALITY_COUNT.get(modality, ""),
-            )
-            if count is None:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_cached_{modality}_input_tokens",
-                    rate_card=pricing,
-                )
-            cached_counts[modality] = count
-        if sum(cached_counts.values()) != provider_cached:
-            return _unavailable(
-                token_accounting,
-                "cached_modalities_do_not_reconcile",
-                rate_card=pricing,
-            )
-
-    cache_write_counts = {"5m": 0, "1h": 0}
-    provider_cache_write = _complete_count(
-        token_accounting,
-        "provider_cache_write_input_tokens",
-    )
-    has_cache_write_rates = any(cache_write_rates.values())
-    if has_cache_write_rates:
-        if provider_cache_write is None:
-            return _unavailable(
-                token_accounting,
-                "missing_cache_write_input_tokens",
-                rate_card=pricing,
-            )
-        for ttl in cache_write_counts:
-            count = _complete_count(
-                token_accounting,
-                f"provider_cache_write_{ttl}_input_tokens",
-            )
-            if count is None:
-                return _unavailable(
-                    token_accounting,
-                    f"missing_cache_write_{ttl}_input_tokens",
-                    rate_card=pricing,
-                )
-            cache_write_counts[ttl] = count
-        if sum(cache_write_counts.values()) != provider_cache_write:
-            return _unavailable(
-                token_accounting,
-                "cache_write_ttls_do_not_reconcile",
-                rate_card=pricing,
-            )
-    elif provider_cache_write:
-        return _unavailable(
-            token_accounting,
-            "missing_cache_write_input_rate",
-            rate_card=pricing,
-        )
-
-    cache_write_modality = pricing.get("cache_write_input_modality")
-    if provider_cache_write and cache_write_modality not in input_counts:
-        return _unavailable(
-            token_accounting,
-            "missing_cache_write_input_modality",
-            rate_card=pricing,
-        )
-    for ttl, count in cache_write_counts.items():
-        if count and cache_write_modality not in cache_write_rates[ttl]:
-            return _unavailable(
-                token_accounting,
-                f"missing_cache_write_{ttl}_input_rate",
-                rate_card=pricing,
-            )
-
-    components = []
-    total = Decimal(0)
-
-    def add_component(kind: str, modality: str, tokens: int, rate_value) -> bool:
-        nonlocal total
-        rate = _amount(rate_value)
-        if rate is None:
-            return False
-        cost = Decimal(tokens) * rate / Decimal(1_000_000)
-        total += cost
-        components.append(
-            {
-                "kind": kind,
-                "modality": modality,
-                "tokens": tokens,
-                "rate_per_million_tokens_usd": float(rate),
-                "cost_usd": _json_amount(cost),
-            }
-        )
-        return True
-
-    for modality, count in input_counts.items():
-        cached = cached_counts[modality]
-        cache_written = sum(cache_write_counts.values()) if modality == cache_write_modality else 0
-        if cached + cache_written > count:
-            return _unavailable(
-                token_accounting,
-                f"cached_or_cache_written_{modality}_exceeds_input",
-                rate_card=pricing,
-            )
-        if not add_component(
-            "input",
-            modality,
-            count - cached - cache_written,
-            input_rates[modality],
-        ):
-            return _unavailable(token_accounting, "invalid_input_rate", rate_card=pricing)
-        if cached and not add_component("cached_input", modality, cached, cached_rates[modality]):
-            return _unavailable(token_accounting, "invalid_cached_rate", rate_card=pricing)
-
-    for ttl, count in cache_write_counts.items():
-        if not count:
-            continue
-        if not add_component(
-            "cache_write_input",
-            cache_write_modality,
-            count,
-            cache_write_rates[ttl][cache_write_modality],
-        ):
-            return _unavailable(
-                token_accounting,
-                f"invalid_cache_write_{ttl}_rate",
-                rate_card=pricing,
-            )
-        components[-1]["cache_ttl"] = ttl
-
-    assumptions = []
-    if unclassified_input:
-        if not add_component(
-            "input",
-            "unclassified",
-            unclassified_input,
-            input_rates[unclassified_modality],
-        ):
-            return _unavailable(token_accounting, "invalid_input_rate", rate_card=pricing)
-        components[-1]["rate_basis_modality"] = unclassified_modality
-        assumptions.append(
-            {
-                "type": "unclassified_input_priced_as",
-                "modality": unclassified_modality,
-                "tokens": unclassified_input,
-            }
-        )
-
-    output_counts = {}
-    for modality in output_rates:
-        count = _complete_count(
-            token_accounting,
-            _OUTPUT_MODALITY_COUNT.get(modality, ""),
-        )
-        if count is None:
-            return _unavailable(
-                token_accounting,
-                f"missing_{modality}_output_tokens",
-                rate_card=pricing,
-            )
-        output_counts[modality] = count
-    if sum(output_counts.values()) != provider_output:
-        return _unavailable(
-            token_accounting,
-            "output_modalities_do_not_reconcile",
-            rate_card=pricing,
-        )
-    for modality, count in output_counts.items():
-        if not add_component("output", modality, count, output_rates[modality]):
-            return _unavailable(token_accounting, "invalid_output_rate", rate_card=pricing)
-
-    return _result(
-        token_accounting,
-        source=(
-            "catalog_rate_card_with_declared_fallback"
-            if unclassified_input
-            else "catalog_rate_card"
-        ),
-        status="complete",
-        reason=None,
-        total=total,
-        known=total,
-        rate_card=pricing,
-        components=components,
-        assumptions=assumptions,
-    )
 
 
 # Run metrics
@@ -536,6 +304,10 @@ def summarize_cost(
 
 from collections import Counter as Counter
 import math as math
+import re as re
+
+from realtime_framework.evaluation.run_records import attempt_rows
+from realtime_framework.evaluation.run_records import lifecycle_records
 
 
 RUN_METRICS_SCHEMA = "realtime_bench.run_metrics.v1"
@@ -563,6 +335,25 @@ def _percentile(values: list[float], quantile: float):
 
 def _rounded(value):
     return None if value is None else round(float(value), 9)
+
+
+def success_metrics(solved, termination: dict | None, horizon_s) -> dict:
+    """A run's task-success rate and normalized time to success, from its score and the end of
+    its episode, as summarize_run_metrics counts them and a re-evaluation recounts them
+    (reevaluate_main). A run summary written before the termination record has no end."""
+    horizon = _number(horizon_s)
+    # A solved run always has a termination record: only a finalized loop is scored.
+    normalized_time_to_success = (
+        termination["end_s"] / horizon
+        if solved is True and termination is not None and horizon not in {None, 0}
+        else None
+    )
+    return {
+        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
+        # observation 1/0. Suite/category success rates are aggregated across these values.
+        "task_success_rate": float(solved) if isinstance(solved, bool) else None,
+        "normalized_time_to_success": _rounded(normalized_time_to_success),
+    }
 
 
 def _distribution(
@@ -597,21 +388,6 @@ def _distribution(
     return result
 
 
-def _load_lifecycle(path: Path) -> list[dict]:
-    if not path.is_file():
-        return []
-    records = []
-    with path.open(encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if not isinstance(record, dict):
-                raise ValueError(f"{path}:{line_number}: lifecycle record is not an object")
-            records.append(record)
-    return records
-
-
 def summarize_run_metrics(
     lifecycle_path,
     *,
@@ -620,16 +396,17 @@ def summarize_run_metrics(
     clock_mode: str,
     tokens_per_frame: int | None,
     fps: float,
-    world_time_s,
+    termination: dict | None,
     horizon_s: float,
     validate_decision_count: bool = True,
 ) -> dict:
     """Return run-level metrics derived from the authoritative decision lifecycle.
 
     Missing provider measurements remain missing. Rates use only decisions for which the relevant
-    predicate is known and expose their denominator explicitly.
+    predicate is known and expose their denominator explicitly. ``fps`` is the model-input frame
+    rate, whose frames ``tokens_per_frame`` is charged per.
     """
-    records = _load_lifecycle(Path(lifecycle_path))
+    records = lifecycle_records(lifecycle_path)
     if validate_decision_count and len(records) != total_decisions:
         raise ValueError(
             f"lifecycle decision count {len(records)} != timeline count {total_decisions}"
@@ -703,20 +480,11 @@ def summarize_run_metrics(
                 parse_errors += 1
                 parse_error_reasons[str(protocol.get("protocol_failure") or "unspecified")] += 1
 
-    task_success_rate = float(solved) if isinstance(solved, bool) else None
-    success_time = _number(world_time_s)
-    horizon = _number(horizon_s)
-    normalized_time_to_success = (
-        success_time / horizon
-        if solved is True and success_time is not None and horizon not in {None, 0}
-        else None
-    )
+    success = success_metrics(solved, termination, horizon_s)
 
     return {
         "run_metrics_schema": RUN_METRICS_SCHEMA,
-        # A run_summary describes one task instance, so its task-success rate is the Bernoulli
-        # observation 1/0. Suite/category success rates are aggregated across these values.
-        "task_success_rate": task_success_rate,
+        "task_success_rate": success["task_success_rate"],
         "decision_simulated_latency_s": _distribution(
             simulated_latencies,
             total_decisions=total_decisions,
@@ -750,9 +518,9 @@ def summarize_run_metrics(
         "action_parse_eligible_decisions": parse_eligible,
         "action_parse_error_reasons": dict(sorted(parse_error_reasons.items())),
         "action_parse_error_definition": "action_protocol.valid_action == false",
-        "normalized_time_to_success": _rounded(normalized_time_to_success),
+        "normalized_time_to_success": success["normalized_time_to_success"],
         "normalized_time_to_success_definition": (
-            "world_time_s/(max_minutes*60), defined only when solved == true"
+            "termination.end_s/(max_minutes*60), defined only when solved == true"
         ),
         "provider_ttft_s": _distribution(
             ttfts,
@@ -762,6 +530,161 @@ def summarize_run_metrics(
             source_counts=ttft_sources,
             missing_reason_counts=ttft_missing_reasons,
         ),
+    }
+
+
+# What the run summary's reasoning_replay counts (summarize_reasoning_replay).
+REASONING_REPLAY_DEFINITION = (
+    "requests: the generation requests this attempt recorded as sent, each attempt and resend "
+    "its own, one that failed to connect among them, as a hooked client records a request before "
+    "it sends it; requests_with_reasoning: those that carried at least one past reasoning back; "
+    "replayed_reasoning: the past reasonings over all of them. exact_wire is false where a count "
+    "is of LiteLLM's final request dict, not the bytes sent (the generic litellm API), which "
+    "also misses a resend LiteLLM's HTTP handler makes after a connection error"
+)
+
+
+def summarize_reasoning_replay(trace_path, *, attempt_id: str) -> dict | None:
+    """The reasoning_replay section of a run's summary: how many generation requests of its own
+    attempt (EpisodeTrace.attempt_id) carried past reasoning back, and how many past reasonings,
+    from the count each recorded as sent (providers/capture.py replayed_reasoning, LoggerCapture).
+    None where no request recorded one: only LiteLLM's APIs send past reasoning."""
+    sent = [
+        row["payload"]
+        for row in attempt_rows(trace_path, {TraceEvent.MODEL_REQUEST_SENT.value}, attempt_id)
+        if row["payload"].get("purpose") == "generation"
+        and "replayed_reasoning" in row["payload"]
+    ]
+    if not sent:
+        return None
+    return {
+        "requests": len(sent),
+        "requests_with_reasoning": sum(payload["replayed_reasoning"] > 0 for payload in sent),
+        "replayed_reasoning": sum(payload["replayed_reasoning"] for payload in sent),
+        "exact_wire": all(payload["exact_wire"] for payload in sent),
+        "definition": REASONING_REPLAY_DEFINITION,
+    }
+
+
+STREAMING_SUMMARY_SCHEMA = "realtime_bench.streaming_summary.v1"
+_FRAME_BLOCK = re.compile(r"f\d+\.frame")  # harnesses/streaming/history.py frame_block
+
+
+def summarize_streaming(trace_path, settings: dict | None, *, attempt_id: str) -> dict:
+    """The streaming section of a native-streaming run's summary, from the records of its own
+    attempt (EpisodeTrace.attempt_id) in its episode trace, which a run directory used again holds
+    another attempt's records before.
+
+    Frames: those captured and pushed into the session, from the kernel's FrameCaptured and
+    FramePushed, and those dropped by reason (FrameDropped), push_failed among them: a frame
+    whose push failed once the episode ended, as the end's abort fails one, is dropped as ended
+    (kernel/streaming.py). For each frame pushed the agent's FrameSent gives its frame-table
+    row: when it was captured, written on the wire and confirmed by the provider, on the wall
+    clock (decision N43), which give the seconds from capture to push and from push to
+    confirmation. Gemini Live confirms no frame; OpenAI Realtime's push returns once the frame
+    is confirmed, which does not count in its push. A frame whose push the provider refused,
+    from the session's delivery records, is one that never went in: FrameSent names each frame
+    that did by the number its block goes under, and the session refusing such a frame's
+    placeholder as it folds it refuses no frame. Actions: those that arrived, the age of the
+    frame each found names when it arrived, and each one's outcome (ActionResolved), with the
+    seconds an applied action waited from its arrival and ran.
+    Replies: those started and those given up, by reason. Each distribution's total_decisions
+    counts the frames or actions it is taken over. ``settings`` is the run configuration's
+    streaming settings: the newest frames OpenAI Realtime keeps, which the harness deletes past,
+    make the context control exact; Gemini Live's compression thresholds, past which the server
+    compresses the session unseen, approximate (phase2.md, 上下文怎么管)."""
+    kernel = {
+        kind: []
+        for kind in (
+            "FrameCaptured",
+            "FramePushed",
+            "FrameDropped",
+            "ActionArrived",
+            "ActionResolved",
+            TraceEvent.INFERENCE_STARTED.value,
+            "GenerationAbandoned",
+        )
+    }
+    went_in = {}  # observation id -> its FrameSent
+    refused = set()  # frame blocks the provider refused
+    events = {"KernelRecord", TraceEvent.SESSION_DELIVERY.value, TraceEvent.FRAME_SENT.value}
+    for row in attempt_rows(trace_path, events, attempt_id):
+        payload = row["payload"]
+        if row["event"] == "KernelRecord":
+            if payload["kind"] in kernel:
+                kernel[payload["kind"]].append(payload["data"])
+        elif row["event"] == TraceEvent.FRAME_SENT.value:
+            went_in.setdefault(payload["observation_id"], payload)
+        elif payload["state"] == "refused":
+            refused.update(
+                content["block"]
+                for content in payload["contents"]
+                if content["block"] is not None and _FRAME_BLOCK.fullmatch(content["block"])
+            )
+    blocks = {f"f{sent['frame']}.frame" for sent in went_in.values()}
+    captured = [d for d in kernel["FrameCaptured"] if d["error"] is None]
+    pushed = [d for d in kernel["FramePushed"] if d["error"] is None]
+    sent = [went_in[d["observation_id"]] for d in pushed if d["observation_id"] in went_in]
+    acked = [s for s in sent if s["acked_unix_s"] is not None]
+    dropped = Counter(d["reason"] for d in kernel["FrameDropped"])
+    arrived = kernel["ActionArrived"]
+    located = [d for d in arrived if d["rejection"] is None]
+    applied = [d for d in kernel["ActionResolved"] if d["status"] == "applied"]
+
+    def seconds(values, total):
+        return _distribution(
+            values, total_decisions=total, unit="seconds", source="episode_trace.jsonl"
+        )
+
+    return {
+        "schema": STREAMING_SUMMARY_SCHEMA,
+        "context_control": (
+            None
+            if settings is None
+            else "exact"
+            if "retained_frames" in settings
+            else "approximate"
+        ),
+        "frames": {
+            "captured": len(captured),
+            "pushed": len(pushed),
+            "push_failed": dropped["push_failed"],
+            "dropped": sum(dropped.values()),
+            "dropped_by_reason": dict(sorted(dropped.items())),
+            "confirmed": len(acked),
+            "refused": len(refused - blocks),
+            "capture_to_push_s": seconds(
+                [s["sent_unix_s"] - s["captured_unix_s"] for s in sent], len(pushed)
+            ),
+            "send_to_confirm_s": seconds(
+                [s["acked_unix_s"] - s["sent_unix_s"] for s in acked], len(sent)
+            ),
+        },
+        "actions": {
+            "arrived": len(arrived),
+            "outcomes": dict(
+                sorted(Counter(d["status"] for d in kernel["ActionResolved"]).items())
+            ),
+            "frame_age_s": seconds([d["frame_age_s"] for d in located], len(located)),
+            "frame_age_frames": _distribution(
+                [d["frame_age_frames"] for d in located],
+                total_decisions=len(located),
+                unit="frames",
+                source="episode_trace.jsonl",
+            ),
+            "arrival_to_start_s": seconds(
+                [d["started_at"] - d["arrived_at"] for d in applied], len(applied)
+            ),
+            "execution_s": seconds(
+                [d["finished_at"] - d["started_at"] for d in applied], len(applied)
+            ),
+        },
+        "replies": {
+            "started": len(kernel[TraceEvent.INFERENCE_STARTED.value]),
+            "abandoned": dict(
+                sorted(Counter(d["reason"] for d in kernel["GenerationAbandoned"]).items())
+            ),
+        },
     }
 
 
@@ -777,24 +700,35 @@ Exit 0 means complete/matched; exit 1 means missing, partial, unscored, or misma
 import argparse as argparse
 import sys as sys
 
-from realtime_framework.entity.records import EPISODE_TRACE_SCHEMA
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.entity.records import validate_episode_trace
+from realtime_framework.evaluation.run_records import model_input_fps
+from realtime_framework.evaluation.run_records import trace_matches_summary
 
 # Every episode has exactly one outcome; only pass scores 1. An unsolved episode that reached the
-# scored horizon (max_minutes, 5 by default) is a timeout; any earlier, task-specific end is a fail.
-# The scorer input is frozen at the horizon, so a solved episode always passes.
+# scored horizon (max_minutes, 5 by default) is a timeout, whatever the task reported at its end;
+# any earlier, task-specific end is a fail. The end time is the termination record's, latched
+# before teardown, so teardown never turns a fail into a timeout. The scorer input is frozen at
+# the horizon, so a solved episode always passes.
 OUTCOMES = ("pass", "fail", "timeout", "error")
 HORIZON_STOP_REASONS = frozenset({"time_limit", "tick_limit"})
 
 
 def _reached_horizon(summary: dict) -> bool:
-    """Whether the episode ran the whole scored horizon, whatever the task reported at its end."""
-    if summary.get("stop_reason") in HORIZON_STOP_REASONS:
-        return True
-    world, minutes = summary.get("world_time_s"), summary.get("max_minutes")
-    numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (world, minutes))
-    return numbers and world >= 60 * minutes
+    """Whether the episode ran the whole scored horizon: the horizon stopped it, or it ended at
+    or after the horizon whatever the task reported. Summaries written before the termination
+    record are judged by their stop reason and world_time_s, as they were when written."""
+    termination = summary.get("termination")
+    if termination is None:
+        if summary.get("stop_reason") in HORIZON_STOP_REASONS:
+            return True
+        world, minutes = summary.get("world_time_s"), summary.get("max_minutes")
+        numbers = all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in (world, minutes)
+        )
+        return numbers and world >= 60 * minutes
+    # The termination record keeps nine decimals.
+    horizon_s = round(60 * summary["max_minutes"], 9)
+    return termination["stop_reason"] in HORIZON_STOP_REASONS or termination["end_s"] >= horizon_s
 
 
 def episode_outcome(summary: dict) -> dict:
@@ -818,27 +752,151 @@ def episode_outcome(summary: dict) -> dict:
     return {"outcome": outcome, "error_category": None, "error_reason": None}
 
 
-def _episode_trace_ok(summary_path, summary) -> bool:
-    declared = summary.get("episode_trace")
-    if not isinstance(declared, dict) or declared.get("schema") != EPISODE_TRACE_SCHEMA:
-        return False
-    artifact = declared.get("artifact")
-    if not isinstance(artifact, str) or not artifact or Path(artifact).name != artifact:
-        return False
-    try:
-        verified = validate_episode_trace(Path(summary_path).parent / artifact)
-    except Exception:
-        return False
-    required = {
-        TraceEvent.SNAPSHOT_FROZEN.value,
-        TraceEvent.SCORE_PRODUCED.value,
-        TraceEvent.EPISODE_FINISHED.value,
+def invalid_evaluation(result):
+    """Why an evaluator's result is not safe to score, or None when it is: the first evaluation
+    (runner.py main), a re-evaluation (reevaluate_main) and the check of a scored summary
+    (summary_ok) judge it alike."""
+    if not isinstance(result, dict):
+        return "evaluation_not_an_object"
+    if result.get("error"):
+        return "evaluation_error"
+    if result.get("evaluation_valid") is False:
+        return "evaluation_declared_invalid"
+    if result.get("ok") is False:
+        return "evaluation_backend_unhealthy"
+    if result.get("invalid_reasons"):
+        return "evaluation_invalid_reasons"
+    if result.get("baseline_suspect") is True:
+        return "evaluation_baseline_suspect"
+    if type(result.get("resolved")) is not bool:
+        return "evaluation_missing_boolean_resolved"
+    if type(result.get("evaluation_version")) is not int:
+        return "evaluation_missing_version"
+    return None
+
+
+from dataclasses import dataclass as dataclass
+
+
+@dataclass(frozen=True)
+class Conclusion:
+    """How a finished run concludes: whether it counts and, when not, the failure it is invalid
+    for (conclude). main() (runner.py), its emergency summary and a re-evaluation
+    (reevaluate_main) each write it into their own summary's layout, from the same values."""
+
+    invalid_run: dict | None  # the failure the run is invalid for; None when it counts
+    failures: tuple[dict, ...]  # each different failure the run found, in the order found
+    run_status: str  # invalid; scored, or experimental for a model outside maintained results
+    solved: bool | None  # the evaluation's resolved when the run counts, None otherwise
+    stop_reason: str | None  # invalid_run, or how the episode stopped when the run counts
+    evaluation: object = None  # the evaluator's result of the frozen snapshot, if there is one
+
+    @property
+    def failure_attribution(self) -> str | None:
+        return (self.invalid_run or {}).get("category") if self.invalid_run else None
+
+    @property
+    def progress(self):
+        """Partial-credit progress, the evaluation's whether the run counts or not (None for
+        games without partial credit)."""
+        return (self.evaluation or {}).get("progress")
+
+    def listed(self) -> dict:
+        """The summary's invalid_runs: each failure after the run's too, which a re-evaluation
+        keeps (reevaluate_main), only when there was more than one."""
+        return {"invalid_runs": list(self.failures)} if len(self.failures) > 1 else {}
+
+    def environment_valid(self, environment_invalid: bool) -> bool | None:
+        """False when the run is invalid for its environment, or a check found the environment
+        invalid as the run set up (``environment_invalid``); None otherwise, as nothing checks
+        an environment valid."""
+        return (
+            False
+            if (self.invalid_run or {}).get("category") == "environment" or environment_invalid
+            else None
+        )
+
+
+def _distinct(failures: list[dict]) -> list[dict]:
+    """The failures a run found, each once: a failed snapshot read is found by the kernel and
+    again by main(), with the same category and reason."""
+    found, distinct = set(), []
+    for failure in failures:
+        if (failure["category"], failure["reason"]) not in found:
+            found.add((failure["category"], failure["reason"]))
+            distinct.append(failure)
+    return distinct
+
+
+def evaluator_failure(evaluation) -> dict | None:
+    """The evaluator's failure, when its result is not safe to score (invalid_evaluation), with
+    the result as its detail; None when it is safe."""
+    reason = invalid_evaluation(evaluation)
+    if reason is None:
+        return None
+    return {
+        "category": "evaluator",
+        "reason": reason,
+        "detail": json.dumps(evaluation, default=str)[:2000],
     }
-    return (
-        verified["event_count"] == declared.get("event_count")
-        and verified["head_event_sha256"] == declared.get("head_event_sha256")
-        and verified["last_event"] == TraceEvent.EPISODE_FINISHED.value
-        and required.issubset(verified["events"])
+
+
+def conclude(failures, evaluation=None, *, benchmark_eligible=None, stop_reason=None):
+    """How a run concludes from what it found: ``failures`` in the order found, a failure the
+    environment latched while the episode ran before those main() found after it (runner.py
+    main), an evaluation not safe to score among them as the evaluator's (evaluator_failure).
+    The run is invalid for the first. Without a failure it counts: scored, or experimental for a
+    model outside maintained results (``benchmark_eligible``), solved as ``evaluation`` resolved
+    and stopped as its episode stopped (``stop_reason``); those three are read only then, so a
+    run known to be invalid is concluded from its failures alone."""
+    failures = _distinct(failures)
+    return _concluded(
+        failures[0] if failures else None,
+        tuple(failures),
+        evaluation,
+        benchmark_eligible,
+        stop_reason,
+    )
+
+
+def conclude_reevaluation(summary: dict, evaluation) -> Conclusion:
+    """How a finished run concludes once its saved state is evaluated again (reevaluate_main),
+    from its run summary as written, by this runner or an earlier one. The new evaluation decides
+    the evaluator's failures alone: the run stays invalid for the first failure that was not the
+    evaluator's, from the failures the summary lists or its invalid run when it found only one,
+    whatever the new evaluation says, and is otherwise invalid for the evaluator when the new
+    evaluation is not safe to score. A record there that names no failure, such as an empty one,
+    leaves the run counting and stands as its invalid run. The summary says whether the run may
+    count, read only when it does, and how its loop stopped."""
+    persistent = next(
+        (
+            prior
+            for prior in summary.get("invalid_runs") or [summary.get("invalid_run")]
+            if isinstance(prior, dict) and prior.get("category") != "evaluator"
+        ),
+        None,
+    )
+    invalid_run = persistent if persistent else evaluator_failure(evaluation) or persistent
+    return _concluded(
+        invalid_run,
+        (invalid_run,) if invalid_run else (),
+        evaluation,
+        None if invalid_run else summary["benchmark_eligible"],
+        summary.get("loop_stop_reason") or summary.get("stop_reason"),
+    )
+
+
+def _concluded(invalid_run, failures, evaluation, benchmark_eligible, stop_reason) -> Conclusion:
+    """The run is invalid when its invalid run names a failure, and counts otherwise."""
+    if invalid_run:
+        return Conclusion(invalid_run, failures, "invalid", None, "invalid_run", evaluation)
+    return Conclusion(
+        invalid_run,
+        failures,
+        "scored" if benchmark_eligible else "experimental",
+        evaluation["resolved"],
+        stop_reason,
+        evaluation,
     )
 
 
@@ -857,6 +915,8 @@ def summary_ok(
     expected_protocol=None,
     expected_harness_hash=None,
     expected_fps=None,
+    expected_model_input_fps=None,
+    expected_interaction_mode=None,
     expected_seed=None,
     expected_runtime_config_hash=None,
     expected_interactables_protocol=None,
@@ -889,17 +949,11 @@ def summary_ok(
             return False
         verification = summary.get("verification")
         if (
-            not isinstance(verification, dict)
-            or verification.get("resolved") is not summary.get("solved")
-            or type(verification.get("evaluation_version")) is not int
-            or verification.get("error")
-            or verification.get("evaluation_valid") is False
-            or verification.get("ok") is False
-            or verification.get("invalid_reasons")
-            or verification.get("baseline_suspect") is True
+            invalid_evaluation(verification) is not None
+            or verification["resolved"] is not summary["solved"]
         ):
             return False
-        if not _episode_trace_ok(path, summary):
+        if not trace_matches_summary(Path(path).parent, summary.get("episode_trace")):
             return False
     expected = {
         "suite_id": expected_suite_id,
@@ -914,10 +968,13 @@ def summary_ok(
         "protocol": expected_protocol,
         "harness_hash": expected_harness_hash,
         "fps": expected_fps,
+        "model_input_fps": expected_model_input_fps,
+        "interaction_mode": expected_interaction_mode,
         "seed": expected_seed,
         "runtime_config_hash": expected_runtime_config_hash,
         "interactables_protocol": expected_interactables_protocol,
     }
+    summary["model_input_fps"] = model_input_fps(summary)
     return all(value is None or summary.get(field) == value for field, value in expected.items())
 
 
@@ -936,6 +993,8 @@ def summary_main(argv=None) -> int:
     parser.add_argument("--expected-protocol")
     parser.add_argument("--expected-harness-hash")
     parser.add_argument("--expected-fps", type=float)
+    parser.add_argument("--expected-model-input-fps", type=float)
+    parser.add_argument("--expected-interaction-mode")
     parser.add_argument("--expected-seed", type=int)
     parser.add_argument("--expected-runtime-config-hash")
     parser.add_argument("--expected-interactables-protocol")
@@ -962,6 +1021,8 @@ def summary_main(argv=None) -> int:
             expected_protocol=args.expected_protocol,
             expected_harness_hash=args.expected_harness_hash,
             expected_fps=args.expected_fps,
+            expected_model_input_fps=args.expected_model_input_fps,
+            expected_interaction_mode=args.expected_interaction_mode,
             expected_seed=args.expected_seed,
             expected_runtime_config_hash=args.expected_runtime_config_hash,
             expected_interactables_protocol=args.expected_interactables_protocol,
@@ -986,28 +1047,19 @@ from datetime import datetime as datetime
 from datetime import timezone as timezone
 from statistics import median as median
 
+from realtime_framework.evaluation.run_records import ACTIVE_LOOP
+from realtime_framework.evaluation.run_records import INSPECTIONS
+from realtime_framework.evaluation.run_records import LIFECYCLE
+from realtime_framework.evaluation.run_records import RECORDING_TIMING
+from realtime_framework.evaluation.run_records import SUMMARY
+from realtime_framework.evaluation.run_records import TRACE
+from realtime_framework.evaluation.run_records import TRAJECTORY
+from realtime_framework.evaluation.run_records import decision_of
+from realtime_framework.evaluation.run_records import read_json
+from realtime_framework.evaluation.run_records import read_rows
+from realtime_framework.evaluation.run_records import sole_attempt_rows
+
 VERSION = "active-overlay-v3"
-
-
-def read_json(path):
-    return json.loads(Path(path).read_text()) if Path(path).is_file() else {}
-
-
-def rows(path, events=None):
-    if not Path(path).is_file():
-        return []
-    result = []
-    with Path(path).open() as handle:
-        for line in handle:
-            try:
-                value = json.loads(line)
-            except json.JSONDecodeError:
-                if handle.read().strip():
-                    raise
-                break  # An interrupted writer may leave an incomplete final line.
-            if events is None or value.get("event") in events:
-                result.append(value)
-    return result
 
 
 def atomic_json(path, value):
@@ -1024,85 +1076,42 @@ def atomic_json(path, value):
         pending.unlink(missing_ok=True)
 
 
-def digest(path):
-    h = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def recording_origin(run_dir, trace):
-    metadata = read_json(run_dir / "recording-timing.json")
-    if finite(metadata.get("first_frame_unix_s")):
-        return {
-            "recording_start_unix_s": metadata["first_frame_unix_s"],
-            "basis": "x11_first_input_pts",
-            "precision": "ffmpeg input timestamp",
-        }
-    log = (
-        (run_dir / "runner.out").read_text(errors="replace")
-        if (run_dir / "runner.out").exists()
-        else ""
-    )
-    pattern = r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d+) .*Screen recording "
-    starts = re.findall(pattern + "started", log, re.M)
-    ends = re.findall(pattern + "saved", log, re.M)
-    if len(starts) != 1 or len(ends) != 1 or "falling back to frame-composited" in log:
+def recording_origin(run_dir):
+    metadata = read_json(run_dir / RECORDING_TIMING)
+    if not finite(metadata.get("first_frame_unix_s")):
         raise ValueError(
             "Missing/ambiguous screen-recorder timestamps or frame-composited recording"
         )
-    parse = lambda value: (
-        datetime.strptime(value, "%Y-%m-%d %H:%M:%S,%f").replace(tzinfo=timezone.utc).timestamp()
-    )
-    # Recording is saved immediately before score/final trace events. Infer the log
-    # timezone in 15-minute increments, then require a close independent match.
-    anchors = [
-        e["wall_time_ns"] / 1e9 for e in trace if e["event"] in {"ScoreProduced", "EpisodeFinished"}
-    ]
-    matches = []
-    for anchor in anchors:
-        shift = round((anchor - parse(ends[0])) / 900) * 900
-        residual = anchor - parse(ends[0]) - shift
-        if abs(shift) <= 14 * 3600 and -1 <= residual <= 5:
-            matches.append((abs(residual), shift, residual))
-    if not matches:
-        raise ValueError("Recorder log timezone cannot be verified against final trace events")
-    _, shift, residual = min(matches)
     return {
-        "recording_start_unix_s": parse(starts[0]) + shift,
-        "basis": "legacy_recorder_launch_log",
-        "log_to_utc_s": shift,
-        "end_check_residual_s": residual,
-        "precision": "Approximate: legacy recorder launch log, first-frame PTS unavailable",
+        "recording_start_unix_s": metadata["first_frame_unix_s"],
+        "basis": "x11_first_input_pts",
+        "precision": "ffmpeg input timestamp",
     }
 
 
-def _active_trace(run_dir):
-    trace = rows(
-        run_dir / "episode_trace.jsonl",
-        {
-            "EpisodeStarted",
-            "EpisodeFinished",
-            "ScoreProduced",
-            "ObservationCaptured",
-            "InferenceStarted",
-            "InferenceCompleted",
-            "ActionProposed",
-            "ActionResolved",
-            "SnapshotFrozen",
-            "ActiveLoopStarted",
-            "ActiveLoopEnded",
-        },
-    )
-    attempts = {e.get("attempt_id") for e in trace if e["event"] == "EpisodeStarted"}
-    if len(attempts) > 1:
-        raise ValueError("Multiple trace attempts require explicit recording-to-attempt selection")
-    return trace
+# The trace records the active interval and the timeline are drawn from.
+_TIMELINE_EVENTS = frozenset(
+    {
+        "EpisodeStarted",
+        "EpisodeFinished",
+        "ScoreProduced",
+        "ObservationCaptured",
+        "InferenceStarted",
+        "InferenceCompleted",
+        "ActionProposed",
+        "ActionResolved",
+        "SnapshotFrozen",
+        "ActiveLoopStarted",
+        "ActiveLoopEnded",
+    }
+)
+# The records each is derived from, which a cache of either keys on (harbor_viewer.py).
+ACTIVE_INTERVAL_SOURCES = (ACTIVE_LOOP, SUMMARY, TRACE, LIFECYCLE)
+TIMELINE_SOURCES = (*ACTIVE_INTERVAL_SOURCES, TRAJECTORY, INSPECTIONS, RECORDING_TIMING)
 
 
 def active_interval(run_dir, trace=None):
@@ -1111,14 +1120,14 @@ def active_interval(run_dir, trace=None):
     Runs record it in ``active-loop.json``; runs without that file derive it from their traces.
     """
     run_dir = Path(run_dir)
-    explicit = read_json(run_dir / "active-loop.json")
+    explicit = read_json(run_dir / ACTIVE_LOOP)
     if finite(explicit.get("start_unix_s")) and finite(explicit.get("end_unix_s")):
         start, end = explicit["start_unix_s"], explicit["end_unix_s"]
         boundary = "explicit_scored_episode_boundaries"
     else:
-        summary = read_json(run_dir / "run_summary.json")
-        trace = _active_trace(run_dir) if trace is None else trace
-        life = rows(run_dir / "action_lifecycle.jsonl")
+        summary = read_json(run_dir / SUMMARY)
+        trace = sole_attempt_rows(run_dir / TRACE, _TIMELINE_EVENTS) if trace is None else trace
+        life = read_rows(run_dir / LIFECYCLE)
         snapshots = [e["wall_time_ns"] / 1e9 for e in trace if e["event"] == "SnapshotFrozen"]
         observations = [
             e["payload"].get("timestamp") for e in trace if e["event"] == "ObservationCaptured"
@@ -1157,11 +1166,11 @@ def active_interval(run_dir, trace=None):
 
 def active_timeline(run_dir):
     run_dir = Path(run_dir)
-    summary = read_json(run_dir / "run_summary.json")
-    trace = _active_trace(run_dir)
-    life = rows(run_dir / "action_lifecycle.jsonl")
+    summary = read_json(run_dir / SUMMARY)
+    trace = sole_attempt_rows(run_dir / TRACE, _TIMELINE_EVENTS)
+    life = read_rows(run_dir / LIFECYCLE)
     start, end, boundary = active_interval(run_dir, trace)
-    alignment = recording_origin(run_dir, trace)
+    alignment = recording_origin(run_dir)
     begin = start - alignment["recording_start_unix_s"]
     finish = end - alignment["recording_start_unix_s"]
     if begin < -0.5 or finish <= 0:
@@ -1172,11 +1181,11 @@ def active_timeline(run_dir):
             inference.append(
                 {"decision": e["payload"].get("decision"), "start": e["wall_time_ns"] / 1e9}
             )
-    decisions = {r.get("decision", r.get("tick")): r for r in rows(run_dir / "trajectory.jsonl")}
+    decisions = {decision_of(r): r for r in read_rows(run_dir / TRAJECTORY)}
     thinking = {
         key: r.get("thinking") for key, r in decisions.items() if isinstance(r.get("thinking"), str)
     }
-    inspections = rows(run_dir / "tool_calls.jsonl")
+    inspections = read_rows(run_dir / INSPECTIONS)
     inspections_by_call = {r.get("call_id"): r for r in inspections if r.get("call_id")}
     inspections_by_observation = {}
     for inspection in inspections:
@@ -1198,11 +1207,9 @@ def active_timeline(run_dir):
             continue
         action = r.get("action") or {}
         proof = decisions.get(r.get("decision"), {}).get("inspection") or {}
-        inspection = inspections_by_call.get(proof.get("call_id"))
-        if inspection is None and not proof.get("call_id"):
-            candidates = inspections_by_observation.get(r.get("observation_id"), [])
-            if len(candidates) == 1:
-                inspection = candidates[0]
+        inspection, proof = _action_inspection(
+            r, proof, inspections_by_call, inspections_by_observation
+        )
         events.append(
             {
                 "decision": r.get("decision"),
@@ -1267,11 +1274,35 @@ def active_timeline(run_dir):
     }
 
 
+def _grounded_observation(event):
+    """The observation whose marks resolved the action: the frame a streaming action names,
+    which its grounding records, or else the action's own."""
+    grounding = (event.get("action_protocol") or {}).get("grounding") or {}
+    return grounding.get("observation_id") or event.get("observation_id")
+
+
+def _action_inspection(event, proof, inspections_by_call, inspections_by_observation):
+    """The inspection row an action's targets are drawn from, and the proof that checks it: the
+    decision's own row, or for a streaming action on an older frame that frame's row, which the
+    decision's proof does not describe."""
+    grounded = _grounded_observation(event)
+    if grounded != event.get("observation_id"):
+        candidates = inspections_by_observation.get(grounded, [])
+        return (candidates[0] if len(candidates) == 1 else None), {}
+    inspection = inspections_by_call.get(proof.get("call_id"))
+    if inspection is None and not proof.get("call_id"):
+        candidates = inspections_by_observation.get(event.get("observation_id"), [])
+        if len(candidates) == 1:
+            inspection = candidates[0]
+    return inspection, proof
+
+
 def action_targets(event, inspection, proof):
-    """Recover only explicitly resolved marks from the action's own observation."""
-    if not inspection or not event.get("observation_id"):
+    """Recover only explicitly resolved marks from the observation whose marks resolved them."""
+    observation_id = _grounded_observation(event)
+    if not inspection or not observation_id:
         return []
-    if inspection.get("observation_id") != event["observation_id"]:
+    if inspection.get("observation_id") != observation_id:
         return []
     if proof.get("mark_map_sha256") and proof["mark_map_sha256"] != inspection.get(
         "mark_map_sha256"
@@ -1318,7 +1349,7 @@ def action_targets(event, inspection, proof):
                 "mark": mark,
                 "bbox": normalized,
                 "label": entry.get("label") or "",
-                "observation_id": event["observation_id"],
+                "observation_id": observation_id,
             }
         )
         seen.add(mark)
@@ -1481,9 +1512,8 @@ def trajectory_usage(entry):
         "provider_protocol_family": final("provider_protocol_family"),
         "provider_upstream": final("provider_upstream"),
         "provider_usage": raw,
-        "provider_usage_missing_reason": (
-            final("provider_usage_missing_reason") if raw is None else None
-        ),
+        # Also beside a partial usage (evaluation/clock.py token_record).
+        "provider_usage_missing_reason": final("provider_usage_missing_reason"),
     }
 
 
@@ -1499,33 +1529,55 @@ def distribution(values, unit, total):
     )
 
 
-def prepare_episode_report(args):
-    """Record expected identity before execution, independently of the resulting summary."""
-    from realtime_framework.evaluation.config import config_fingerprint, effective_run_config
-    from realtime_framework.providers import registry as catalog
+_FRAME_COUNTS = ("captured", "pushed", "push_failed", "dropped", "confirmed", "refused")
 
-    model_config = catalog.to_model_config(
-        args.model, fps=args.fps, reasoning_effort=args.reasoning_effort
-    )
-    runtime_hash = config_fingerprint(effective_run_config(
-        model_config=model_config, fps=args.fps, max_minutes=args.max_minutes,
-        mode=args.mode, clock_mode=args.clock, protocol=args.protocol, seed=args.seed,
-        tokens_per_frame=None if args.tokens_per_frame == "unlimited" else int(args.tokens_per_frame),
-        think_budget_s=args.think_budget_s, per_move_cap_s=args.per_move_cap_s,
-    ))
+
+def _streaming_totals(scored) -> dict:
+    """A streaming group's counts, summed over its scored tasks' streaming sections
+    (summarize_streaming), and its context control, which its runtime configuration fixes."""
+    sections = [row["streaming"] for row in scored]
+    frames, dropped, outcomes, abandoned = Counter(), Counter(), Counter(), Counter()
+    arrived = started = 0
+    for section in sections:
+        frames.update({name: section["frames"][name] for name in _FRAME_COUNTS})
+        dropped.update(section["frames"]["dropped_by_reason"])
+        arrived += section["actions"]["arrived"]
+        outcomes.update(section["actions"]["outcomes"])
+        started += section["replies"]["started"]
+        abandoned.update(section["replies"]["abandoned"])
+    return {
+        "context_control": sections[0]["context_control"] if sections else None,
+        "frames": {
+            **{name: frames[name] for name in _FRAME_COUNTS},
+            "dropped_by_reason": dict(sorted(dropped.items())),
+        },
+        "actions": {"arrived": arrived, "outcomes": dict(sorted(outcomes.items()))},
+        "replies": {"started": started, "abandoned": dict(sorted(abandoned.items()))},
+    }
+
+
+def prepare_episode_report(spec, model_config, *, model, task, reasoning_effort, results_dir):
+    """Record expected identity before execution, independently of the resulting summary, from
+    runner.main()'s run options ``spec`` (evaluation/run_spec.py), the model configuration
+    ``model_config`` it runs, its catalog ``model``, ``task`` and ``reasoning_effort`` as the run
+    names it (the catalog's label, which the configuration may hold as None)."""
+    from realtime_framework.evaluation.config import config_fingerprint, run_spec_config
+
+    runtime_hash = config_fingerprint(run_spec_config(spec, model_config))
     expected = {
         **resolve_run_identity(
-            task_id=args.task, model=args.model, adapter=model_config.adapter_type,
-            backend_model=model_config.model_name, mode=args.mode, cap=args.max_minutes,
-            protocol=args.protocol, fps=args.fps, runtime_config_hash=runtime_hash,
+            task_id=task, model=model, adapter=model_config.adapter_type,
+            backend_model=model_config.model_name, mode=spec.mode, cap=spec.duration_minutes,
+            protocol=spec.protocol, fps=spec.fps, model_input_fps=spec.model_input_fps,
+            interaction_mode=spec.interaction_mode, runtime_config_hash=runtime_hash,
         ),
-        "seed": args.seed,
-        "benchmark_cell": args.model,
-        "reasoning_effort": args.reasoning_effort,
-        "clock_mode": args.clock,
-        "tokens_per_frame": None if args.clock == "wall" or args.tokens_per_frame == "unlimited" else int(args.tokens_per_frame),
+        "seed": spec.seed,
+        "benchmark_cell": model,
+        "reasoning_effort": reasoning_effort,
+        "clock_mode": spec.clock_mode,
+        "tokens_per_frame": spec.tokens_per_frame,
     }
-    path = Path(args.results_dir) / "summary.json"
+    path = Path(results_dir) / "summary.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"runs": [expected]}, indent=2) + "\n")
 
@@ -1556,7 +1608,7 @@ def report(root):
             path = (
                 cell_path.parent
                 / expected["task_id"].split("__", 1)[-1].replace("/", "_")
-                / "run_summary.json"
+                / SUMMARY
             )
             identity = {
                 field: expected.get(field, cell.get(field))
@@ -1570,6 +1622,8 @@ def report(root):
                     "mode",
                     "protocol",
                     "fps",
+                    "model_input_fps",
+                    "interaction_mode",
                     "seed",
                     "cap",
                     "reasoning_effort",
@@ -1577,6 +1631,7 @@ def report(root):
                     "public_category",
                 )
             }
+            identity["model_input_fps"] = model_input_fps(identity)
             identity["clock_mode"] = expected.get("clock_mode", cell.get("clock_mode", "wall"))
             identity["tokens_per_frame"] = expected.get("tokens_per_frame", cell.get("tokens_per_frame"))
             row = {
@@ -1595,10 +1650,13 @@ def report(root):
                     cost = (summary.get("cost_accounting") or {})
                     row["known_cost_usd"] = _number(cost.get("known_cost_usd"))
                     row["cost_status"] = cost.get("status", "unknown")
+                    spend = summary.get("spend_accounting") or {}
+                    row["known_spend_usd"] = _number(spend.get("known_usd"))
+                    row["spend_complete"] = bool(spend.get("complete"))
                     matched = summary_ok(
                         path,
                         require_scored=True,
-                        allow_experimental=os.environ.get("ALLOW_EXPERIMENTAL_MODEL") == "1",
+                        allow_experimental=True,
                         **{
                             f"expected_{field}": identity[field]
                             for field in (
@@ -1610,6 +1668,8 @@ def report(root):
                                 "mode",
                                 "protocol",
                                 "fps",
+                                "model_input_fps",
+                                "interaction_mode",
                                 "seed",
                                 "cap",
                                 "runtime_config_hash",
@@ -1621,13 +1681,24 @@ def report(root):
                     if (not matched or summary.get("clock_mode") != identity["clock_mode"]
                             or summary.get("tokens_per_frame") != identity["tokens_per_frame"]):
                         raise ValueError("Unscored result or identity mismatch")
-                    records = [
-                        json.loads(line)
-                        for line in (path.parent / "action_lifecycle.jsonl")
-                        .read_text()
-                        .splitlines()
-                        if line
-                    ]
+                    streaming = identity["interaction_mode"] == "streaming"
+                    if streaming:
+                        # A streaming episode has no turns, so it writes no decision lifecycle
+                        # (runner.py run_stream): its run summary's streaming section stands in,
+                        # which must be the one its own trace, checked above, gives.
+                        section = summary["streaming"]
+                        trace = summary["episode_trace"]
+                        if section != summarize_streaming(
+                            path.parent / trace["artifact"],
+                            summary["runtime_config"]["streaming"],
+                            attempt_id=trace["attempt_id"],
+                        ):
+                            raise ValueError("Streaming section does not match the episode trace")
+                        records = []
+                    else:
+                        # A run that made no decision wrote no lifecycle; read it as the run's
+                        # own metrics did (summarize_run_metrics).
+                        records = lifecycle_records(path.parent / LIFECYCLE)
                     if len(records) != summary["decisions"] or len(
                         {r["decision"] for r in records}
                     ) != len(records):
@@ -1639,12 +1710,16 @@ def report(root):
                     ):
                         raise ValueError("Invalid charged-token value")
                     known = [value for value in tokens if value is not None]
-                    counts = ((summary.get("token_accounting") or {}).get("counts") or {}).get(
-                        "clock_output_tokens", {}
-                    )
+                    accounting = summary.get("token_accounting") or {}
+                    # A decision the kernel gave up on has no lifecycle record, and its response
+                    # no place in the reported decisions' subtotal (clock.py TokenAccounting),
+                    # whose responses are then the lifecycle's records.
+                    reported = accounting.get("reported_decisions", accounting)
+                    counts = (reported.get("counts") or {}).get("clock_output_tokens", {})
                     complete = bool(tokens and len(known) == len(tokens))
                     if (
-                        counts.get("responses_with_count", 0) != len(known)
+                        (reported is not accounting and reported["responses"] != len(records))
+                        or counts.get("responses_with_count", 0) != len(known)
                         or (known and sum(known) != counts.get("known_total", counts.get("total")))
                         or (not known and counts.get("known_total") not in (None, 0))
                         or (counts.get("complete", False) != complete)
@@ -1661,11 +1736,13 @@ def report(root):
                         cost_usd=_number(cost.get("total_usd")) if cost.get("complete") else None,
                         cost_source=cost.get("source"),
                         cost_status=cost.get("status", "unknown"),
+                        spend_usd=_number(spend.get("total_usd")),
                         world_time_s=summary.get("world_time_s"),
                         wall_latency_s=[value for value in latency if value is not None],
                         # Exclude partially recorded tasks from pooled token distributions.
                         charged_tokens=known if len(known) == len(tokens) else [],
                         charged_tokens_complete=complete,
+                        **({"streaming": section} if streaming else {}),
                     )
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     row["error"] = str(exc)
@@ -1677,11 +1754,15 @@ def report(root):
                             error_reason="result_validation_failed",
                         )
             groups[json.dumps(identity, sort_keys=True)].append(row)
-    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}
+    # Outside any episode: over finished runs, after runner main() has returned.
+    output = {"snapshot_utc": datetime.now(timezone.utc).isoformat(), "groups": []}  # noqa: TID251
     for identity_json, rows in groups.items():
         scored = [row for row in rows if row["status"] == "scored"]
         passed = sum(row["solved"] for row in scored)
         costs = [row["cost_usd"] for row in scored if row["cost_usd"] is not None]
+        # A run's known spend, also when it is incomplete: a mean over complete ones only would
+        # leave out the runs whose last call the deadline cut.
+        spent = [row for row in scored if row["known_spend_usd"] is not None]
         tokens = [value for row in scored for value in row["charged_tokens"]]
         total_decisions = sum(row["decisions"] for row in scored)
         token_distribution = distribution(tokens, "tokens", total_decisions)
@@ -1719,12 +1800,12 @@ def report(root):
                 ),
                 "invalid": sum(row["status"] == "invalid" for row in rows),
                 "invalid_known_spend_usd": sum(
-                    row["known_cost_usd"]
+                    row["known_spend_usd"]
                     for row in rows
-                    if row["status"] == "invalid" and row.get("known_cost_usd") is not None
+                    if row["status"] == "invalid" and row.get("known_spend_usd") is not None
                 )
                 if any(
-                    row["status"] == "invalid" and row.get("known_cost_usd") is not None
+                    row["status"] == "invalid" and row.get("known_spend_usd") is not None
                     for row in rows
                 )
                 else None,
@@ -1733,34 +1814,39 @@ def report(root):
                 "mean_cost_usd": sum(costs) / len(costs) if costs else None,
                 "cost_tasks": len(costs),
                 "cost_unknown_or_partial_tasks": len(scored) - len(costs),
+                "mean_spend_usd": (
+                    sum(row["known_spend_usd"] for row in spent) / len(spent) if spent else None
+                ),
+                "spend_tasks": len(spent),
+                "spend_incomplete_tasks": sum(not row["spend_complete"] for row in spent),
                 "wall_latency_s": distribution(
                     [v for row in scored for v in row["wall_latency_s"]], "seconds", total_decisions
                 ),
                 "charged_tokens": token_distribution,
+                **(
+                    {"streaming": _streaming_totals(scored)}
+                    if json.loads(identity_json)["interaction_mode"] == "streaming"
+                    else {}
+                ),
                 "tasks": rows,
             }
         )
-    launch_path = root / "wall_clock_launch.json"
+    launch_path = root / LAUNCH_FILE
     if launch_path.is_file():
         launch = json.loads(launch_path.read_text())
-        configuration = {
-            "model_config": launch["model_config"],
-            "model_revision": launch.get("model_revision"),
-        }
         output["integration"] = {
             "model": launch["model_config"]["model_name"],
             "model_revision": launch.get("model_revision"),
             "mode": launch["plan"]["runtime"]["mode"],
-            "configuration_sha256": hashlib.sha256(
-                json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            "configuration_sha256": configuration_sha256(launch),
         }
     # Archived attempts are spend, never additional scored tasks.
     output["retry_attempts"] = []
-    for path in sorted(root.glob("*/*.stale.*/run_summary.json")):
+    for path in sorted(root.glob(f"*/*.stale.*/{SUMMARY}")):
         try:
             summary = json.loads(path.read_text())
             cost = (summary.get("cost_accounting") or {})
+            spend = summary.get("spend_accounting") or {}
             output["retry_attempts"].append(
                 {
                     "summary": str(path),
@@ -1768,6 +1854,8 @@ def report(root):
                     "cost_status": cost.get("status", "unknown"),
                     "known_cost_usd": cost.get("known_cost_usd"),
                     "total_cost_usd": cost.get("total_usd"),
+                    "known_spend_usd": spend.get("known_usd"),
+                    "total_spend_usd": spend.get("total_usd"),
                 }
             )
         except (OSError, ValueError):
@@ -1797,6 +1885,8 @@ Usage:
 
 import shutil as shutil
 
+from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
@@ -1805,24 +1895,6 @@ def sha(path):
     h = hashlib.sha256()
     h.update(path.read_bytes())
     return h.hexdigest()
-
-
-def _invalid_evaluation(result):
-    if not isinstance(result, dict):
-        return "evaluation_not_an_object"
-    if result.get("error"):
-        return "evaluation_error"
-    if result.get("evaluation_valid") is False or result.get("ok") is False:
-        return "evaluation_declared_invalid"
-    if result.get("invalid_reasons"):
-        return "evaluation_invalid_reasons"
-    if result.get("baseline_suspect") is True:
-        return "evaluation_baseline_suspect"
-    if type(result.get("resolved")) is not bool:
-        return "evaluation_missing_boolean_resolved"
-    if type(result.get("evaluation_version")) is not int:
-        return "evaluation_missing_version"
-    return None
 
 
 def _registry_for_manifest(manifest, *, allow_suite_hash_mismatch=False):
@@ -1858,16 +1930,21 @@ def reeval(run_dir: Path, *, allow_suite_hash_mismatch=False):
     registry = _registry_for_manifest(manifest, allow_suite_hash_mismatch=allow_suite_hash_mismatch)
     payload = manifest["payload"]
     if payload["kind"] == "task_state":
-        task = registry.get(manifest["task_id"])
+        lifecycle = TaskLifecycle(registry.get(manifest["task_id"]))
         state_path = artifact_dir / payload["state"]
         if sha(state_path) != payload["state_sha256"]:
             raise RuntimeError("state checksum mismatch")
         state = json.loads(state_path.read_text())
-        if not hasattr(task, "evaluate_snapshot"):
-            raise RuntimeError(f"task {manifest['task_id']} cannot evaluate saved state")
-        return task.evaluate_snapshot(state), manifest
+        return lifecycle.evaluate(state), manifest
 
     raise RuntimeError(f"artifact kind {payload['kind']!r} is not re-evaluable")
+
+
+def _horizon_s(summary: dict):
+    """The scored horizon of the run a summary describes; None when it does not say (episode
+    outcomes read max_minutes the same way, _reached_horizon)."""
+    minutes = _number(summary.get("max_minutes"))
+    return None if minutes is None else minutes * 60
 
 
 def reevaluate_main():
@@ -1889,10 +1966,16 @@ def reevaluate_main():
     result, manifest = reeval(a.run_dir, allow_suite_hash_mismatch=a.allow_suite_hash_mismatch)
     import realtime_tasks.registry as registry
 
-    invalid_reason = _invalid_evaluation(result)
-    reported_invalid_reason = invalid_reason
+    invalid_reason = invalid_evaluation(result)
+    # Without --replace-summary, whether the new evaluation alone scores, as a diagnostic.
+    reported = {
+        "run_status": "invalid" if invalid_reason else "scored",
+        "solved": None if invalid_reason else result.get("resolved"),
+        "invalid_reason": invalid_reason,
+    }
     record = {
-        "reevaluated_unix_s": time.time(),
+        # Outside any episode: a finished run, re-evaluated from its saved state.
+        "reevaluated_unix_s": time.time(),  # noqa: TID251
         "source_manifest": "generation_artifact/manifest.json",
         "suite_id": manifest.get("suite_id"),
         "suite_version": manifest.get("suite_version"),
@@ -1925,6 +2008,8 @@ def reevaluate_main():
                 "protocol",
                 "harness_hash",
                 "fps",
+                "model_input_fps",
+                "interaction_mode",
                 "seed",
                 "runtime_config_hash",
             ):
@@ -1935,35 +2020,29 @@ def reevaluate_main():
                     )
         if sp.exists() and not backup.exists():
             shutil.copy2(sp, backup)
-        prior_invalid = summary.get("invalid_run")
-        persistent_invalid = (
-            prior_invalid
-            if isinstance(prior_invalid, dict) and prior_invalid.get("category") != "evaluator"
-            else None
-        )
-        replacement_invalid = (
-            {
-                "category": "evaluator",
-                "reason": invalid_reason,
-                "detail": json.dumps(result, default=str)[:2000],
-            }
-            if invalid_reason
-            else persistent_invalid
-        )
-        if replacement_invalid:
-            reported_invalid_reason = replacement_invalid.get("reason")
+        conclusion = conclude_reevaluation(summary, result)
+        # The run summary's conclusion, which it says in the line printed too.
+        reported = {
+            "run_status": conclusion.run_status,
+            "solved": conclusion.solved,
+            "invalid_reason": (conclusion.invalid_run or {}).get("reason"),
+        }
         summary.update(
             {
-                "run_status": "invalid" if replacement_invalid else "scored",
-                "invalid_run": replacement_invalid,
-                "failure_attribution": (
-                    (replacement_invalid or {}).get("category") if replacement_invalid else None
+                "run_status": conclusion.run_status,
+                "invalid_run": conclusion.invalid_run,
+                "failure_attribution": conclusion.failure_attribution,
+                # Not valid once the run found it so, as it set up or now.
+                "environment_valid": conclusion.environment_valid(
+                    summary.get("environment_valid") is False
                 ),
-                "stop_reason": "invalid_run"
-                if replacement_invalid
-                else summary.get("loop_stop_reason") or summary.get("stop_reason"),
-                "solved": None if replacement_invalid else result.get("resolved"),
+                "stop_reason": conclusion.stop_reason,
+                "solved": conclusion.solved,
                 "verification": result,
+                "progress": conclusion.progress,
+                **success_metrics(
+                    conclusion.solved, summary.get("termination"), _horizon_s(summary)
+                ),
                 "evaluation_artifact": out.name,
                 "reevaluated_from_saved_artifact": True,
             }
@@ -1974,9 +2053,7 @@ def reevaluate_main():
         json.dumps(
             {
                 "run_dir": str(a.run_dir),
-                "run_status": "invalid" if reported_invalid_reason else "scored",
-                "solved": None if reported_invalid_reason else result.get("resolved"),
-                "invalid_reason": reported_invalid_reason,
+                **reported,
                 "output": str(out),
             }
         )
@@ -1984,11 +2061,14 @@ def reevaluate_main():
 
 
 import threading
+from realtime_framework.clock import Clock
 from realtime_framework.entity.records import (
+    EPISODE_TRACE_SCHEMA,
     GENESIS_HASH,
     _jsonable,
     canonical_json_bytes,
     canonical_sha256,
+    validate_episode_trace,
 )
 
 
@@ -1997,18 +2077,21 @@ class EpisodeTrace:
 
     Opening an existing file validates it and resumes at the next sequence number.  This preserves
     append-only behavior when a crashed run is retried in the same run directory; a new ``attempt_id``
-    distinguishes the retry without rewriting prior evidence.
+    distinguishes the retry without rewriting prior evidence. Each record's wall and monotonic
+    times are read on ``clock``, the episode's operational clock.
     """
 
     def __init__(
         self,
         path: str | Path,
         *,
+        clock: Clock,
         run_id: str | None = None,
         attempt_id: str | None = None,
         durable: bool = False,
     ):
         self.path = Path(path)
+        self.clock = clock
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.run_id = run_id
         self.attempt_id = attempt_id or uuid.uuid4().hex
@@ -2042,8 +2125,8 @@ class EpisodeTrace:
                 "event": event_name,
                 "run_id": self.run_id,
                 "attempt_id": self.attempt_id,
-                "wall_time_ns": time.time_ns(),
-                "monotonic_ns": time.monotonic_ns(),
+                "wall_time_ns": self.clock.time_ns(),
+                "monotonic_ns": self.clock.monotonic_ns(),
                 "previous_event_sha256": self._head_hash,
                 "payload": _jsonable(payload or {}),
                 **_jsonable(fields),

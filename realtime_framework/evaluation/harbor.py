@@ -8,8 +8,6 @@ import json as json
 import os as os
 import sys as sys
 
-from realtime_framework.entity.config import DEFAULT_TASK_SEED, task_seed
-
 
 SUITE_SCHEMA = "realtime-bench-suite-v1"
 
@@ -76,160 +74,82 @@ def runtime(root, python, suite):
 
 
 # Verifier
-"""Grade a harness-produced local report.
+"""Grading, which each trial runs as its verifier and the host runs again (aggregate)."""
 
-Only a verified, solved episode earns reward 1. Every other outcome, including any error, earns 0;
-the recorded outcome and error reason keep errors distinguishable from model failures.
-"""
-
-
-def verify(report, expected, request):
-    if request.get("task") != expected:
-        raise ValueError("Trial identity mismatch")
-    integration = report.get("integration", {})
-    if any(
-        integration.get(key) != request[key] for key in ("model", "model_revision", "mode")
-    ) or not integration.get("configuration_sha256"):
-        raise ValueError("Report integration identity mismatch")
-    if (request.get("catalog_model") or request.get("configuration_sha256")) and (
-        not request.get("configuration_sha256")
-        or integration["configuration_sha256"] != request["configuration_sha256"]
-    ):
-        raise ValueError("Model configuration changed after resolution")
-    groups = report.get("groups", [])
-    rows = [row for group in groups for row in group.get("tasks", [])]
-    if (
-        len(groups) != 1
-        or len(rows) != 1
-        or rows[0].get("status") != "scored"
-        or rows[0].get("task_id", "").split("__", 1)[-1] != expected["task_id"]
-        or type(rows[0].get("solved")) is not bool
-        or rows[0].get("outcome") not in ("pass", "fail", "timeout")
-        or (rows[0]["outcome"] == "pass") is not rows[0]["solved"]
-    ):
-        raise ValueError("Missing, duplicate, invalid or unscored task")
-    group = groups[0]
-    for field in ("suite_id", "suite_version", "suite_hash", "harness_hash", "fps", "seed"):
-        if group.get(field) != expected.get(field):
-            raise ValueError(f"Report {field} mismatch")
-    if (
-        group.get("public_category") != expected["category"]
-        or group.get("mode") != request["mode"]
-        or group.get("protocol")
-        != ("time-aware-token-v1" if request.get("clock", "wall") == "token"
-            else "wall-clock")
-        or group.get("clock_mode", "wall") != request.get("clock", "wall")
-        or group.get("tokens_per_frame") != (
-            request.get("tokens_per_frame")
-            if request.get("clock") == "token" and request.get("tokens_per_frame") != "unlimited"
-            else None
-        )
-        or group.get("cap") != (request.get("duration_minutes") or expected["duration_minutes"])
-        or group.get("expected") != 1
-        or group.get("scored") != 1
-        or group.get("invalid") != 0
-        or group.get("missing") != 0
-        or group.get("partial") is not False
-        or not group.get("runtime_config_hash")
-    ):
-        raise ValueError("Report runtime or completeness mismatch")
-    return {"reward": float(rows[0]["solved"])}
-
-
-def verifier_source():
-    import inspect
-
-    return (
-        "import json\nfrom pathlib import Path\n\n"
-        + inspect.getsource(verify)
-        + "\n"
-        + inspect.getsource(verifier_main)
-        + "\nif __name__ == '__main__':\n    verifier_main()\n"
-    )
-
-
-def verifier_main():
-    output = Path("/logs/verifier/reward.json")
-    details = output.with_name("evaluation.json")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.unlink(missing_ok=True)
-    details.unlink(missing_ok=True)
-    # Scoring details live with the verifier output; the reward alone stays authoritative.
-    # outcome is pass, fail, timeout or error; only a verified pass earns reward 1.
-    record = {
-        "reward": None,
-        "outcome": "error",
-        "error_category": "infrastructure",
-        "error_reason": "missing_report",
-        "error": None,
-        "evaluation": None,
-    }
-    try:
-        record["evaluation"] = json.loads(
-            Path("/logs/agent/benchmark/evaluation.json").read_text()
-        ).get("evaluation")
-    except (OSError, ValueError, AttributeError):
-        pass
-    try:
-        report = json.loads(Path("/workspace/report.json").read_text())
-        rows = [row for group in report.get("groups", []) for row in group.get("tasks", [])]
-        if len(rows) == 1:
-            for key in ("outcome", "error_category", "error_reason"):
-                record[key] = rows[0].get(key)
-        expected = json.loads(Path("/tests/task.json").read_text())
-        request = json.loads(Path("/workspace/request.json").read_text())
-        reward = verify(report, expected, request)
-    except Exception as exc:
-        # An error is scored as a failure.
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        if record["outcome"] != "error":
-            record.update(
-                outcome="error",
-                error_category="evaluator",
-                error_reason="report_verification_failed",
-            )
-        reward = {"reward": 0.0}
-    record["reward"] = reward["reward"]
-    details.write_text(json.dumps(record, indent=2) + "\n")
-    output.write_text(json.dumps(reward) + "\n")
-    reason = f" ({record['error_reason']})" if record["outcome"] == "error" else ""
-    print(f"{record['outcome']}{reason}: reward={reward['reward']} (details: evaluation.json)")
+from realtime_framework.evaluation import harbor_verifier as harbor_verifier
+from realtime_framework.evaluation.harbor_verifier import verify as verify
 
 # Agent
 """Harbor bridge to the local runner for registered model endpoints."""
 
+from typing import Any as Any
 from typing import Literal as Literal
 
 from harbor.agents.base import BaseAgent as BaseAgent
 from realtime_framework.evaluation.harbor_viewer import export_episode, populate_context
+from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS, run_spec
 from harbor.agents.options import AgentOptions as AgentOptions
 from pydantic import ConfigDict
 from pydantic import Field as Field
 from pydantic import model_validator as model_validator
 
+# The run options Harbor's entry takes when an agent's options leave them out.
+_DEFAULT = run_spec("harbor")
+
 
 class RealtimeBenchOptions(AgentOptions):
+    """The agent's options. The run options among them take Harbor's defaults and are checked as
+    every entry point's are (evaluation/run_spec.py); the request records them as given, the
+    model-input rate filled in."""
+
     model_config = ConfigDict(extra="forbid")
 
     suite: str = Field(
         default="public", pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]*(@[0-9]+\.[0-9]+)?$"
     )
-    fps: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    duration_minutes: float = Field(default=5.0, gt=0, allow_inf_nan=False)
-    seed: int = DEFAULT_TASK_SEED
+    fps: float = _DEFAULT.fps
+    model_input_fps: float | None = None
+    interaction_mode: str = _DEFAULT.interaction_mode
+    duration_minutes: float = _DEFAULT.duration_minutes
+    seed: int = _DEFAULT.seed
     model_revision: str | None = Field(default=None, min_length=1)
     catalog_model: str | None = Field(default=None, min_length=1)
     base_url: str | None = None
     api_base: str | None = None
     api_key_env: str | None = None
-    clock: Literal["wall", "token"] = "wall"
-    tokens_per_frame: int | Literal["unlimited"] = "unlimited"
+    clock: str = _DEFAULT.clock_mode
+    tokens_per_frame: int | Literal["unlimited"] = ENTRY_DEFAULTS["harbor"]["tokens_per_frame"]
     stream: bool = True
     reasoning_effort: str | None = None
+    # Context settings for every model of the trial, which the trial worker takes as
+    # --context-file and --context (entity/context_policy.py resolve_context): an experiment
+    # file, made absolute here, and settings of the run, kept as given and checked as the trial
+    # worker checks them, never converted (20.0 is no count, 1.0 no true).
+    context_file: str | None = None
+    context: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_integration(self):
-        self.seed = task_seed(self.seed)
+        from realtime_framework.entity.context_policy import settings_error
+        from realtime_framework.providers.preflight import check_frame_rates
+
+        spec = run_spec(
+            "harbor",
+            clock_mode=self.clock,
+            tokens_per_frame=self.tokens_per_frame,
+            fps=self.fps,
+            model_input_fps=self.model_input_fps,
+            interaction_mode=self.interaction_mode,
+            duration_minutes=self.duration_minutes,
+            seed=self.seed,
+        )
+        self.seed, self.model_input_fps = spec.seed, spec.model_input_fps
+        check_frame_rates(self.fps, self.model_input_fps)
+        error = settings_error(self.context)
+        if error:
+            raise ValueError(f"context {error}")
+        if self.context_file is not None:
+            self.context_file = str(Path(self.context_file).resolve())
         if self.api_base and self.base_url and self.api_base != self.base_url:
             raise ValueError("Supply only one of api_base or base_url")
         self.base_url = self.api_base or self.base_url
@@ -240,8 +160,6 @@ class RealtimeBenchOptions(AgentOptions):
                 "base_url, api_key_env, model_revision and stream apply to LiteLLM models; "
                 "set a preset's connection in configs/models/"
             )
-        if self.tokens_per_frame != "unlimited" and self.tokens_per_frame <= 0:
-            raise ValueError("tokens_per_frame must be positive or 'unlimited'")
         return self
 
 
@@ -279,6 +197,7 @@ class RealtimeBenchAgent(BaseAgent):
             "suite_version": request["task"]["suite_version"],
             "model_revision": request["model_revision"],
             "mode": request["mode"],
+            "interaction_mode": request["task"]["interaction_mode"],
         }
         try:
             await environment.run_benchmark(request, self.extra_env)
@@ -454,12 +373,16 @@ class ApptainerEnvironment(BaseEnvironment):
             str(self.lane),
             "--fps",
             str(self.task["fps"]),
+            "--model-input-fps",
+            str(self.task["model_input_fps"]),
+            "--interaction-mode",
+            self.task["interaction_mode"],
             "--duration-minutes",
             str(self.task["duration_minutes"]),
             "--seed",
             str(self.task["seed"]),
-            "--clock", request.get("clock", "wall"),
-            "--tokens-per-frame", str(request.get("tokens_per_frame", "unlimited")),
+            "--clock", request["clock"],
+            "--tokens-per-frame", str(request["tokens_per_frame"]),
         ]
         if request.get("catalog_model"):
             command += ["--catalog-model", request["catalog_model"]]
@@ -476,6 +399,10 @@ class ApptainerEnvironment(BaseEnvironment):
                 command.append("--no-stream")
         if request.get("reasoning_effort"):
             command += ["--reasoning-effort", request["reasoning_effort"]]
+        if request.get("context_file"):
+            command += ["--context-file", request["context_file"]]
+        for key, value in (request.get("context") or {}).items():
+            command += ["--context", f"{key}={json.dumps(value)}"]
         return command
 
     def _runner_environment(self, extra_env):
@@ -506,6 +433,8 @@ class ApptainerEnvironment(BaseEnvironment):
             "task_id": self.task_id,
             "category": suite_tasks[self.task_id],
             "fps": request["fps"],
+            "model_input_fps": request["model_input_fps"],
+            "interaction_mode": request["interaction_mode"],
             "duration_minutes": request["duration_minutes"],
             "seed": request["seed"],
         }
@@ -519,19 +448,28 @@ class ApptainerEnvironment(BaseEnvironment):
         if resolved.return_code:
             raise ValueError(f"Cannot resolve model configuration: {resolved.stderr.strip()}")
         launch = json.loads(resolved.stdout)
-        configuration = {
-            "model_config": launch["model_config"],
-            "model_revision": launch.get("model_revision"),
-        }
+        from realtime_framework.entity.context_policy import context_values
+        from realtime_framework.evaluation.config import configuration_sha256
+
+        context = launch["model_config"]["context"]
+
+        # Marks the results of an external driver as unofficial (evaluation/submission.py).
+        external = {"external_driver": launch["external_driver"]} if "external_driver" in launch else {}
         return {
             **request,
             "model": launch["model_config"]["model_name"],
             "model_revision": launch.get("model_revision"),
             # Compare with the actual report so edits between resolution and execution
             # cannot silently evaluate a different configuration.
-            "configuration_sha256": hashlib.sha256(
-                json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            "configuration_sha256": configuration_sha256(launch),
+            # The values of the context settings the trial runs with, which the upload holds
+            # against the standard ones (evaluation/submission.py check_standard_context).
+            "resolved_context": {
+                "api": context["api"],
+                "model": context["model"],
+                "values": context_values(context),
+            },
+            **external,
         }
 
     async def run_benchmark(self, request, extra_env=None):
@@ -539,7 +477,8 @@ class ApptainerEnvironment(BaseEnvironment):
             raise ValueError("Resolve the request in this environment before running it")
         # The verifier compares the report with the identity fixed by this environment.
         (self._path("/tests") / "task.json").write_text(json.dumps(self.task, indent=2) + "\n")
-        (self._path("/tests") / "verify.py").write_text(verifier_source())
+        # The whole module the host grades with, not a copy of its functions (harbor_verifier.py).
+        shutil.copyfile(harbor_verifier.__file__, self._path("/tests") / "verify.py")
         workspace = self._path("/workspace")
         if (workspace / "request.json").exists():
             raise ValueError("A Harbor trial may run exactly one episode")
@@ -665,7 +604,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def official_suite(identity, suite_tasks):
-    """Accept only a released private suite whose content and membership match this checkout."""
+    """Accept only a released private suite whose content and membership match this checkout,
+    run on a released harness."""
+    from realtime_framework.evaluation.config import HARNESS_UNRELEASED
     from realtime_tasks.registry import suite_path
 
     selector = f"{identity['suite_id']}@{identity.get('suite_version')}"
@@ -682,6 +623,13 @@ def official_suite(identity, suite_tasks):
     }
     if manifest.get("suite_hash") != identity["suite_hash"] or suite_tasks != released:
         raise ValueError(f"Official evaluation requires the entire released {selector} suite")
+    harness = identity["harness_version"]
+    if harness.endswith(HARNESS_UNRELEASED):
+        raise ValueError(
+            f"Official evaluation requires a released harness, not harness@{harness}, whose "
+            "framework sources or runtime dependencies differ from the release pyproject.toml "
+            "locks"
+        )
 
 
 def trial_error_reason(directory):
@@ -724,7 +672,7 @@ def aggregate(job, *, official=False):
         raise ValueError("The job has no recorded trials")
     shared_fields = (
         "suite_id", "suite_version", "suite_hash", "harness_version", "harness_hash", "fps",
-        "duration_minutes", "seed",
+        "model_input_fps", "interaction_mode", "duration_minutes", "seed",
     )
     identities = {
         json.dumps(
@@ -759,7 +707,9 @@ def aggregate(job, *, official=False):
     for directory, request in requests.items():
         task_id = request["task"]["task_id"]
         if task_id not in tasks or task_id in seen:
-            raise ValueError("Unexpected or repeated task; retries require a separate job")
+            raise ValueError(
+                "Unexpected or repeated task; a job takes one model and one trial per task"
+            )
         seen.add(task_id)
         system = {k: v for k, v in request.items() if k not in ("task", "suite_tasks")}
         systems.add(json.dumps(system, sort_keys=True))
@@ -818,6 +768,10 @@ def aggregate(job, *, official=False):
         "harness_version": identity.get("harness_version"),
         "harness_hash": identity["harness_hash"],
         "fps": identity["fps"],
+        # Jobs recorded before the frame rates were split fed the model at the environment rate.
+        "model_input_fps": identity.get("model_input_fps", identity["fps"]),
+        # Jobs recorded before the interaction mode was a run setting ran turn-based.
+        "interaction_mode": identity.get("interaction_mode", "turn_based"),
         "duration_minutes": identity["duration_minutes"],
         "clock": system.get("clock", "wall"),
         **(
@@ -829,6 +783,12 @@ def aggregate(job, *, official=False):
         "model": system.get("model"),
         "model_revision": system.get("model_revision"),
         "mode": system.get("mode"),
+        **({"external_driver": system["external_driver"]} if "external_driver" in system else {}),
+        **(
+            {"resolved_context": system["resolved_context"]}
+            if "resolved_context" in system
+            else {}
+        ),
         "integration_hash": hashlib.sha256(next(iter(systems)).encode()).hexdigest()
         if systems
         else None,

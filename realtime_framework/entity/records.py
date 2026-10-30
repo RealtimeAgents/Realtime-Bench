@@ -36,6 +36,19 @@ class TraceEvent(str, Enum):
     SCORE_PRODUCED = "ScoreProduced"
     RUN_INVALIDATED = "RunInvalidated"
     EPISODE_FINISHED = "EpisodeFinished"
+    # Written by the agent through its trace sink (evaluation/agent_trace.py).
+    MODEL_REQUEST_SENT = "ModelRequestSent"
+    MODEL_RESPONSE_RECEIVED = "ModelResponseReceived"
+    MODEL_ATTEMPT_FINISHED = "ModelAttemptFinished"
+    GENERATION_PREPARED = "GenerationPrepared"
+    HISTORY_CHANGED = "HistoryChanged"
+    SESSION_MESSAGE = "SessionMessage"
+    SESSION_STATE_CHANGED = "SessionStateChanged"
+    SESSION_WAIT = "SessionWait"
+    SESSION_DELIVERY = "SessionDelivery"
+    # Native streaming: the frame-table number a pushed frame went into the session under.
+    FRAME_SENT = "FrameSent"
+    AGENT_TRACE_CLOSED = "AgentTraceClosed"
 
 
 def _jsonable(value):
@@ -118,3 +131,62 @@ def validate_episode_trace(path: str | Path) -> dict:
         "last_event": last_event,
         "events": events,
     }
+
+
+# Agent records
+"""What the agent writes into the episode trace, and which decision each record belongs to.
+
+The runner owns the trace; the agent receives an ``AgentTrace`` that queues records for a writer
+thread. ``trace_scope`` attributes every capture to the phase that caused it. The scope is a
+ContextVar, so it follows the call onto the agent's execution thread (run_coroutine_threadsafe
+copies the caller's context into the task) and into ``asyncio.to_thread`` workers.
+"""
+
+import contextlib as contextlib
+import contextvars as contextvars
+from typing import Protocol as Protocol
+
+_TRACE_SCOPE: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "agent_trace_scope", default=None
+)
+
+
+@contextlib.contextmanager
+def trace_scope(**fields):
+    """Attribute captures in this context to ``fields``, nested inside any enclosing scope."""
+    token = _TRACE_SCOPE.set({**(_TRACE_SCOPE.get() or {}), **fields})
+    try:
+        yield
+    finally:
+        _TRACE_SCOPE.reset(token)
+
+
+def current_trace_scope() -> dict | None:
+    return _TRACE_SCOPE.get()
+
+
+def enter_trace_scope(scope: dict | None) -> None:
+    """Attribute captures in this context to ``scope`` from now on, in place of any: for a task
+    that outlives the call that started it, whose captures belong to what it works for now."""
+    _TRACE_SCOPE.set(scope)
+
+
+class AgentTrace(Protocol):
+    # The episode attempt the records go to (EpisodeTrace.attempt_id); retry jitter keys start
+    # with it (entity/model.py RequestRetry).
+    attempt_id: str
+
+    def capture(self, event: TraceEvent, payload: dict, *, body=None, classify=None) -> int | None:
+        """Queue one record without I/O; return its capture sequence, or None once sealed."""
+
+
+class _Untraced:
+    """The write entry of an agent built outside the runner, without an episode trace."""
+
+    attempt_id = "untraced"
+
+    def capture(self, event, payload, *, body=None, classify=None) -> None:
+        return None
+
+
+UNTRACED = _Untraced()
