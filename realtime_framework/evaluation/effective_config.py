@@ -7,7 +7,7 @@ Entry points (each with its own defaults):
 - ``trial``: ``python -m realtime_framework.evaluation._trial --catalog-model M --task T``, which
   loads ``.env`` and execs the runner (evaluation/_trial.py main).
 - ``harbor``: ``rtbench run -m M``; ``harbor:<file>`` adds ``-c <file>`` (a run plan or a Harbor
-  job file). Harbor resolves the trial (evaluation/harbor.py) and starts ``_trial``.
+  job file). Harbor resolves the trial (evaluation/harbor/integration.py) and starts ``_trial``.
 
 Each process an entry point starts is reproduced in a fresh interpreter with the environment it
 would receive, so values read at import are the values that process would use. The runner process
@@ -262,7 +262,7 @@ def _probe_runner(request: dict) -> dict:
     used = _import_values()
     import time
 
-    import realtime_framework.evaluation.reporting as reporting
+    import realtime_framework.evaluation.records.reporting as reporting
     import realtime_framework.sandbox.apptainer as apptainer
     import realtime_framework.sandbox.desktop as desktop
     import realtime_tasks.registry as tasks
@@ -501,10 +501,10 @@ def _probe_harbor(request: dict) -> dict:
     import dotenv
     import yaml
 
-    import realtime_framework.evaluation.harbor_cli as harbor_cli
-    from realtime_framework.evaluation.harbor import ApptainerEnvironment
-    from realtime_framework.evaluation.harbor import RealtimeBenchAgent
-    from realtime_framework.evaluation.harbor import runtime
+    import realtime_framework.evaluation.harbor.cli as harbor_cli
+    from realtime_framework.evaluation.harbor.integration import ApptainerEnvironment
+    from realtime_framework.evaluation.harbor.integration import RealtimeBenchAgent
+    from realtime_framework.evaluation.harbor.integration import runtime
 
     # One process serves every cell, as one rtbench process serves its job: the catalog is read
     # once.
@@ -528,7 +528,7 @@ def _probe_harbor(request: dict) -> dict:
             job = yaml.safe_load(Path(harbor_cli.run_arguments(arguments)[1]).read_text())
             if env_local is not None:
                 # Harbor's CLI loads it after rtbench rewrote the job (harbor/cli/jobs.py:1436-1437;
-                # evaluation/harbor_cli.py main).
+                # evaluation/harbor/cli.py main).
                 before = _snapshot()
                 if env_local.exists():
                     dotenv.load_dotenv(env_local, override=False)
@@ -536,12 +536,12 @@ def _probe_harbor(request: dict) -> dict:
                 env_local = None
             (agent,) = job["agents"]
             options = RealtimeBenchAgent.parse_options(dict(agent.get("kwargs") or {}), {})
-            # RealtimeBenchAgent.run (evaluation/harbor.py)
+            # RealtimeBenchAgent.run (evaluation/harbor/integration.py)
             name = agent["model_name"]
             harbor_request = {"model": name, "mode": "default", **options.model_dump()}
             if not (harbor_request["catalog_model"] or options.base_url or "/" in name):
                 harbor_request["catalog_model"] = name
-            # ApptainerEnvironment.__init__ and resolve (evaluation/harbor.py)
+            # ApptainerEnvironment.__init__ and resolve (evaluation/harbor/integration.py)
             environment = types.SimpleNamespace(
                 root=Path(os.environ.get("RTBENCH_ROOT", ".")).resolve(),
                 python=os.environ.get("RTBENCH_PYTHON") or sys.executable,
@@ -668,7 +668,7 @@ def _launched_entry(launch: dict, *, env_file, scratch) -> dict:
                     cell["error"] = record["error"]
                     continue
                 cell["runner_argv"] = record["runner_argv"]
-                # Harbor hashes the same dry-run output (evaluation/harbor.py resolve).
+                # Harbor hashes the same dry-run output (evaluation/harbor/integration.py resolve).
                 cell["configuration_sha256"] = configuration_sha256(record["settings"])
                 key = (
                     tuple(sorted(record["runner_environ"].items())),

@@ -4,9 +4,9 @@ Only a verified, solved episode earns reward 1. Every other outcome, including a
 the recorded outcome and error reason keep errors distinguishable from model failures.
 
 Harbor's environment copies this file whole into each trial as /tests/verify.py
-(evaluation/harbor.py run_benchmark), which the task's tests/test.sh runs with the sandbox image's
+(evaluation/harbor/integration.py run_benchmark), which the task's tests/test.sh runs with the sandbox image's
 python3 (Ubuntu 22.04.5: Python 3.10.12): it imports only the standard library and keeps to
-Python 3.10. The host grades a job's reports again with the same verify (evaluation/harbor.py
+Python 3.10. The host grades a job's reports again with the same verify (evaluation/harbor/integration.py
 aggregate).
 """
 

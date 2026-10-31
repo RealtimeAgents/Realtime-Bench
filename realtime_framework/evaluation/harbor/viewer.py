@@ -14,23 +14,23 @@ from harbor.models.trajectories.trajectory import Trajectory
 from harbor.models.trial.result import TimingInfo
 from harbor.viewer.scanner import JobScanner
 
-from realtime_framework.evaluation.harbor_results import job_label, job_results
-from realtime_framework.evaluation.reporting import ACTIVE_INTERVAL_SOURCES
-from realtime_framework.evaluation.reporting import TIMELINE_SOURCES
-from realtime_framework.evaluation.reporting import active_interval, browser_metadata
-from realtime_framework.evaluation.run_records import ACTIVE_LOOP
-from realtime_framework.evaluation.run_records import INSPECTIONS
-from realtime_framework.evaluation.run_records import LIFECYCLE
-from realtime_framework.evaluation.run_records import RECORDING_TIMING
-from realtime_framework.evaluation.run_records import SUMMARY
-from realtime_framework.evaluation.run_records import TRACE
-from realtime_framework.evaluation.run_records import TRAJECTORY
-from realtime_framework.evaluation.run_records import decision_of
-from realtime_framework.evaluation.run_records import read_json
-from realtime_framework.evaluation.run_records import read_rows
+from realtime_framework.evaluation.harbor.results import job_label, job_results
+from realtime_framework.evaluation.records.reporting import ACTIVE_INTERVAL_SOURCES
+from realtime_framework.evaluation.records.reporting import TIMELINE_SOURCES
+from realtime_framework.evaluation.records.reporting import active_interval, browser_metadata
+from realtime_framework.evaluation.records.run_records import ACTIVE_LOOP
+from realtime_framework.evaluation.records.run_records import INSPECTIONS
+from realtime_framework.evaluation.records.run_records import LIFECYCLE
+from realtime_framework.evaluation.records.run_records import RECORDING_TIMING
+from realtime_framework.evaluation.records.run_records import SUMMARY
+from realtime_framework.evaluation.records.run_records import TRACE
+from realtime_framework.evaluation.records.run_records import TRAJECTORY
+from realtime_framework.evaluation.records.run_records import decision_of
+from realtime_framework.evaluation.records.run_records import read_json
+from realtime_framework.evaluation.records.run_records import read_rows
 
 __version__ = "0.4.0"
-VIEWER_SCRIPT = Path(__file__).parent / "viewer/rtbench-viewer.js"
+VIEWER_SCRIPT = Path(__file__).parent / "viewer_assets/rtbench-viewer.js"
 TOKEN_FIELDS = (
     "provider_input_tokens",
     "provider_output_tokens",

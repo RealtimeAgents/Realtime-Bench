@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from realtime_framework.evaluation.reporting import active_interval
-from realtime_framework.evaluation.reporting import episode_outcome
+from realtime_framework.evaluation.records.reporting import active_interval
+from realtime_framework.evaluation.records.reporting import episode_outcome
 
 OUTCOME_STATUS = {"pass": "Pass", "fail": "Fail", "timeout": "Timeout", "error": "Error"}
 

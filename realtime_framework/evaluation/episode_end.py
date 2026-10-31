@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.clock import Settlement
+from realtime_framework.evaluation.token_accounting import Settlement
 from realtime_framework.evaluation.kernel.core import Kernel
 from realtime_framework.evaluation.kernel.events import Entry, Invalidated, Termination
 

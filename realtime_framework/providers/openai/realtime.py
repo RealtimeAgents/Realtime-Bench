@@ -60,10 +60,10 @@ from realtime_framework.entity.records import TraceEvent
 from realtime_framework.entity.records import current_trace_scope
 from realtime_framework.entity.records import trace_scope
 from realtime_framework.providers.capture import async_ws_connection
-from realtime_framework.providers.openai_realtime_session import Delete
-from realtime_framework.providers.openai_realtime_session import Operation
-from realtime_framework.providers.openai_realtime_session import RealtimeSessionCore
-from realtime_framework.providers.openai_realtime_session import history_frames
+from realtime_framework.providers.openai.realtime_session import Delete
+from realtime_framework.providers.openai.realtime_session import Operation
+from realtime_framework.providers.openai.realtime_session import RealtimeSessionCore
+from realtime_framework.providers.openai.realtime_session import history_frames
 from realtime_framework.providers.session_lifecycle import SessionLifecycle
 
 logger = logging.getLogger(__name__)

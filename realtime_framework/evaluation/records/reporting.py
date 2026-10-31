@@ -306,8 +306,8 @@ from collections import Counter as Counter
 import math as math
 import re as re
 
-from realtime_framework.evaluation.run_records import attempt_rows
-from realtime_framework.evaluation.run_records import lifecycle_records
+from realtime_framework.evaluation.records.run_records import attempt_rows
+from realtime_framework.evaluation.records.run_records import lifecycle_records
 
 
 RUN_METRICS_SCHEMA = "realtime_bench.run_metrics.v1"
@@ -701,8 +701,8 @@ import argparse as argparse
 import sys as sys
 
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation.run_records import model_input_fps
-from realtime_framework.evaluation.run_records import trace_matches_summary
+from realtime_framework.evaluation.records.run_records import model_input_fps
+from realtime_framework.evaluation.records.run_records import trace_matches_summary
 
 # Every episode has exactly one outcome; only pass scores 1. An unsolved episode that reached the
 # scored horizon (max_minutes, 5 by default) is a timeout, whatever the task reported at its end;
@@ -1047,17 +1047,17 @@ from datetime import datetime as datetime
 from datetime import timezone as timezone
 from statistics import median as median
 
-from realtime_framework.evaluation.run_records import ACTIVE_LOOP
-from realtime_framework.evaluation.run_records import INSPECTIONS
-from realtime_framework.evaluation.run_records import LIFECYCLE
-from realtime_framework.evaluation.run_records import RECORDING_TIMING
-from realtime_framework.evaluation.run_records import SUMMARY
-from realtime_framework.evaluation.run_records import TRACE
-from realtime_framework.evaluation.run_records import TRAJECTORY
-from realtime_framework.evaluation.run_records import decision_of
-from realtime_framework.evaluation.run_records import read_json
-from realtime_framework.evaluation.run_records import read_rows
-from realtime_framework.evaluation.run_records import sole_attempt_rows
+from realtime_framework.evaluation.records.run_records import ACTIVE_LOOP
+from realtime_framework.evaluation.records.run_records import INSPECTIONS
+from realtime_framework.evaluation.records.run_records import LIFECYCLE
+from realtime_framework.evaluation.records.run_records import RECORDING_TIMING
+from realtime_framework.evaluation.records.run_records import SUMMARY
+from realtime_framework.evaluation.records.run_records import TRACE
+from realtime_framework.evaluation.records.run_records import TRAJECTORY
+from realtime_framework.evaluation.records.run_records import decision_of
+from realtime_framework.evaluation.records.run_records import read_json
+from realtime_framework.evaluation.records.run_records import read_rows
+from realtime_framework.evaluation.records.run_records import sole_attempt_rows
 
 VERSION = "active-overlay-v3"
 
@@ -1109,7 +1109,7 @@ _TIMELINE_EVENTS = frozenset(
         "ActiveLoopEnded",
     }
 )
-# The records each is derived from, which a cache of either keys on (harbor_viewer.py).
+# The records each is derived from, which a cache of either keys on (harbor/viewer.py).
 ACTIVE_INTERVAL_SOURCES = (ACTIVE_LOOP, SUMMARY, TRACE, LIFECYCLE)
 TIMELINE_SOURCES = (*ACTIVE_INTERVAL_SOURCES, TRAJECTORY, INSPECTIONS, RECORDING_TIMING)
 
@@ -1512,7 +1512,7 @@ def trajectory_usage(entry):
         "provider_protocol_family": final("provider_protocol_family"),
         "provider_upstream": final("provider_upstream"),
         "provider_usage": raw,
-        # Also beside a partial usage (evaluation/clock.py token_record).
+        # Also beside a partial usage (evaluation/token_accounting.py token_record).
         "provider_usage_missing_reason": final("provider_usage_missing_reason"),
     }
 
@@ -1880,14 +1880,14 @@ def report_main(argv=None):
 """Re-evaluate a saved generation artifact without rerunning the model.
 
 Usage:
-  python -m realtime_framework.evaluation.reporting reevaluate RUN_DIR [--replace-summary]
+  python -m realtime_framework.evaluation.records.reporting reevaluate RUN_DIR [--replace-summary]
 """
 
 import shutil as shutil
 
 from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
 
@@ -1913,7 +1913,7 @@ def _registry_for_manifest(manifest, *, allow_suite_hash_mismatch=False):
     if suite_id and registry.suite_id() != suite_id:
         raise RuntimeError(
             f"artifact requires suite {suite_id!r}, but registry {registry.suite_id()!r} "
-            "was already loaded; re-run python -m realtime_framework.evaluation.reporting reevaluate in a fresh process"
+            "was already loaded; re-run python -m realtime_framework.evaluation.records.reporting reevaluate in a fresh process"
         )
     actual_hash = registry.suite_hash()
     if suite_id and suite_hash != actual_hash and not allow_suite_hash_mismatch:

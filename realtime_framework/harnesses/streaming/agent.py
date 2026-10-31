@@ -434,7 +434,7 @@ class NativeStreamingAgent(VisionAgentBase):
                 self._record_fold(folded)
         # The kernel's records name the frame by its observation id, the session's by its block:
         # this ties the two, with the row's capture, send and confirmation on one clock
-        # (evaluation/reporting.py summarize_streaming).
+        # (evaluation/records/reporting.py summarize_streaming).
         record = pushed.record
         self._trace.capture(
             TraceEvent.FRAME_SENT,

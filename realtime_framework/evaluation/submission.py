@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 from realtime_framework.entity.context_policy import resolve_context
-from realtime_framework.evaluation.harbor import aggregate
+from realtime_framework.evaluation.harbor.integration import aggregate
 from realtime_tasks.registry import UNRELEASED
 
 DEFAULT_URL = "https://realtimeagents.org/api/submissions"

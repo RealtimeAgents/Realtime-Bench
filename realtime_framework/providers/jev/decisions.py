@@ -5,7 +5,7 @@ from typing import ClassVar
 from realtime_framework.entity.model import RealtimeCapabilities
 from realtime_framework.providers.context import context_status, estimated_request_tokens
 from realtime_framework.providers.decisions.history import render_digest
-from realtime_framework.providers.openai_decisions import (
+from realtime_framework.providers.openai.decisions import (
     DEFAULT_DECISIONS_BASE_URL,
     DecisionsDeployment,
     OpenAIDecisionsClient,

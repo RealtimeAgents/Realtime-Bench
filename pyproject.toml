@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-rtbench = "realtime_framework.evaluation.harbor_cli:main"
+rtbench = "realtime_framework.evaluation.harbor.cli:main"
 
 [dependency-groups]
 dev = ["pytest", "pytest-asyncio", "ruff", "mypy"]
@@ -74,8 +74,8 @@ extend-select = ["TID251"]
 "realtime_framework/sandbox/apptainer.py" = ["TID251"]
 "realtime_framework/sandbox/guest_server/server.py" = ["TID251"]
 "realtime_framework/evaluation/_trial.py" = ["TID251"]
-"realtime_framework/evaluation/harbor.py" = ["TID251"]
-"realtime_framework/evaluation/harbor_results.py" = ["TID251"]
+"realtime_framework/evaluation/harbor/integration.py" = ["TID251"]
+"realtime_framework/evaluation/harbor/results.py" = ["TID251"]
 "realtime_framework/evaluation/submission.py" = ["TID251"]
 # The desktop: Chrome's start before the episode, and the screen recording, whose timing
 # (recording-timing.json) is written in real time during the episode to line up with ffmpeg's
@@ -90,7 +90,7 @@ extend-select = ["TID251"]
 "realtime_tasks" = ["**/*"]
 "realtime_framework" = ["context_defaults.yaml"]
 "realtime_framework.sandbox" = ["images/**/*", "guest_server/requirements.txt"]
-"realtime_framework.evaluation" = ["viewer/*.js"]
+"realtime_framework.evaluation.harbor" = ["viewer_assets/*.js"]
 
 [tool.setuptools.exclude-package-data]
 "*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]

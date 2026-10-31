@@ -178,7 +178,7 @@ def _required_cell_list(value, model_catalog: dict[str, dict], *, wall_clock=Fal
 
 
 def load_benchmark(path: str | Path = DEFAULT_CONFIG) -> dict:
-    """A run plan, as ``rtbench run -c`` hands it to Harbor (harbor_cli.py plan_job): a field the
+    """A run plan, as ``rtbench run -c`` hands it to Harbor (harbor/cli.py plan_job): a field the
     job does not carry is refused, not dropped."""
     path = Path(path).expanduser().resolve()
     raw = _required_mapping(load_yaml(path), str(path))

@@ -105,7 +105,7 @@ class VisionAgentBase(StreamingAgent):
         if not self._trajectory_file:
             return
         if entry.get("type") in {"decision", "decision_discarded"}:
-            from realtime_framework.evaluation.reporting import trajectory_usage
+            from realtime_framework.evaluation.records.reporting import trajectory_usage
 
             entry = {**entry, "usage": trajectory_usage(entry)}
             entry.pop("_token_accounting", None)
@@ -129,7 +129,7 @@ class VisionAgentBase(StreamingAgent):
                 "usage": result.get("usage"),
             }
             # The shell's record of a call given up on at the episode's end, which the token
-            # totals and the model timing leave out (evaluation/clock.py Settlement, N34).
+            # totals and the model timing leave out (evaluation/token_accounting.py Settlement, N34).
             if result.get("harness_abort_reason"):
                 entry["harness_abort_reason"] = result["harness_abort_reason"]
         finalized_fields = (
@@ -1249,9 +1249,9 @@ class DefaultHarness(VisionAgentBase):
                 "_trajectory_entry": log_entry,
             }
             if isinstance(final_error, RequestExceedsContext):
-                # Its token record (evaluation/clock.py token_record) says why it has no usage,
+                # Its token record (evaluation/token_accounting.py token_record) says why it has no usage,
                 # and its clock output count stays unknown, with no clock source, rather than the
-                # zero of the frame's usage delta (evaluation/episode_records.py
+                # zero of the frame's usage delta (evaluation/records/episode_records.py
                 # clock_output_tokens). It still counts as one inference response.
                 result["provider_usage_missing_reason"] = "request_not_sent"
             if partial_usage is not None:

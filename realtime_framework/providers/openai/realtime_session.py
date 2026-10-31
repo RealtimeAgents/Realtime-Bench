@@ -29,7 +29,7 @@ from realtime_framework.entity.request import CanonicalRequest, FrameImage, Requ
 # Neutral request roles as Realtime message roles.
 ROLES = {"instruction": "system", "input": "user", "model": "assistant"}
 # The server events that confirm a create, as the in-place edit has always waited for them. The
-# trace's classification (openai_realtime.py _ITEM_ACKS) links a create to its first answer,
+# trace's classification (openai/realtime.py _ITEM_ACKS) links a create to its first answer,
 # conversation.item.added, as well.
 _CREATE_ACKS = {"conversation.item.created", "conversation.item.done"}
 

@@ -50,7 +50,7 @@ from typing import Protocol
 from realtime_framework.clock import Clocks
 from realtime_framework.entity.actions import Observation
 from realtime_framework.entity.records import TraceEvent
-from realtime_framework.evaluation import episode_records
+from realtime_framework.evaluation.records import episode_records as episode_records
 from realtime_framework.evaluation.env_lanes import EnvLanes, Executed, Lane
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,

@@ -1,7 +1,7 @@
 """The options one episode runs with, each declared, defaulted and checked here alone.
 
 Every entry point builds a RunSpec from what it is given: the Harbor trial worker's command line
-(evaluation/_trial.py), Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions) and a
+(evaluation/_trial.py), Harbor's agent options (evaluation/harbor/integration.py RealtimeBenchOptions) and a
 run plan's runtime (evaluation/config.py load_benchmark). An option an entry point is not given
 takes that entry point's default (ENTRY_DEFAULTS), else the field's. The runner runs the one the
 trial worker writes into its launch file (evaluation/_trial.py read_launch). The rules that read

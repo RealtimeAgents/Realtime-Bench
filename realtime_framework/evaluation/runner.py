@@ -119,14 +119,14 @@ from realtime_framework.sandbox.actions import GuestEnvironment
 from realtime_framework.sandbox.task_lifecycle import EnvironmentInvalidError
 from realtime_framework.sandbox.task_lifecycle import TaskLifecycle
 from realtime_framework.evaluation._trial import read_launch
-from realtime_framework.evaluation.reporting import capture_generation_artifact
-from realtime_framework.evaluation.reporting import conclude
-from realtime_framework.evaluation.reporting import evaluator_failure
-from realtime_framework.evaluation.reporting import resolve_run_identity
-from realtime_framework.evaluation.reporting import save_evaluation
-from realtime_framework.evaluation.reporting import summarize_cost
-from realtime_framework.evaluation.reporting import summarize_spend
-from realtime_framework.evaluation.clock import TokenAccounting
+from realtime_framework.evaluation.records.reporting import capture_generation_artifact
+from realtime_framework.evaluation.records.reporting import conclude
+from realtime_framework.evaluation.records.reporting import evaluator_failure
+from realtime_framework.evaluation.records.reporting import resolve_run_identity
+from realtime_framework.evaluation.records.reporting import save_evaluation
+from realtime_framework.evaluation.records.reporting import summarize_cost
+from realtime_framework.evaluation.records.reporting import summarize_spend
+from realtime_framework.evaluation.token_accounting import TokenAccounting
 from realtime_framework.evaluation.config import OUTPUT_CLOCK_POLICY
 from realtime_framework.evaluation.config import INTERACTABLES_PROTOCOL
 from realtime_framework.evaluation.config import INTERACTABLES_REPRESENTATION
@@ -134,13 +134,13 @@ from realtime_framework.evaluation.config import INTERACTABLES_SCHEMA
 from realtime_framework.evaluation.config import config_fingerprint
 from realtime_framework.evaluation.config import run_spec_config
 from realtime_framework.evaluation.config import harness_fingerprint, harness_version
-from realtime_framework.evaluation.reporting import summarize_run_metrics
-from realtime_framework.evaluation.reporting import summarize_reasoning_replay
-from realtime_framework.evaluation.reporting import summarize_streaming
-from realtime_framework.evaluation.reporting import EpisodeTrace
-from realtime_framework.evaluation.reporting import episode_outcome
-from realtime_framework.evaluation.agent_trace import AgentTraceSink
-from realtime_framework.evaluation.agent_trace import close_agent_trace
+from realtime_framework.evaluation.records.reporting import summarize_run_metrics
+from realtime_framework.evaluation.records.reporting import summarize_reasoning_replay
+from realtime_framework.evaluation.records.reporting import summarize_streaming
+from realtime_framework.evaluation.records.reporting import EpisodeTrace
+from realtime_framework.evaluation.records.reporting import episode_outcome
+from realtime_framework.evaluation.records.agent_trace import AgentTraceSink
+from realtime_framework.evaluation.records.agent_trace import close_agent_trace
 from realtime_framework.entity.records import canonical_sha256
 import realtime_tasks.registry as custom_tasks
 from realtime_framework.sandbox.observation.som import ToolRuntime
@@ -286,7 +286,7 @@ def main():
     R.build_image_if_needed()
     if a.report_root:
         from realtime_framework.sandbox.apptainer import build_image
-        from realtime_framework.evaluation.reporting import prepare_episode_report
+        from realtime_framework.evaluation.records.reporting import prepare_episode_report
 
         build_image("realtime")
         prepare_episode_report(
@@ -501,7 +501,7 @@ def main():
         # INFERENCE/EVAL BOUNDARY: run_stream freezes live scorer input at the latched terminal tick,
         # before it releases held keys or mouse buttons. Consume that exact snapshot here, before
         # agent close or verifier work. The same value is stored in the artifact
-        # so python -m realtime_framework.evaluation.reporting reevaluate agrees with the summary.
+        # so python -m realtime_framework.evaluation.records.reporting reevaluate agrees with the summary.
         try:
             if result.snapshot_error:
                 raise RuntimeError(result.snapshot_error)
@@ -752,7 +752,7 @@ def main():
             given_up=spent.given_up,
             unaccounted=unaccounted,
         )
-        from realtime_framework.evaluation.clock import summarize_model_timing
+        from realtime_framework.evaluation.token_accounting import summarize_model_timing
 
         model_timing = summarize_model_timing(settlements, interaction_mode=spec.interaction_mode)
         cost_usd = cost_accounting.get("total_usd") if cost_accounting.get("complete") else None
@@ -987,7 +987,7 @@ def main():
             actions_executed=getattr(env, "actions", 0) if env is not None else 0,
         )
         raise SystemExit(1) from None
-    from realtime_framework.evaluation.reporting import finalize_video
+    from realtime_framework.evaluation.records.reporting import finalize_video
 
     finalize_video(run_dir)
     print(
@@ -1288,7 +1288,7 @@ if __name__ == "__main__":
                 print("DESKTOP CLEANUP ERROR\n" + traceback.format_exc(), flush=True)
                 _code = _code or 1
             try:
-                from realtime_framework.evaluation.reporting import finish_episode_report
+                from realtime_framework.evaluation.records.reporting import finish_episode_report
 
                 _report_code = finish_episode_report(
                     _report_args.report_root, _report_args.report_output

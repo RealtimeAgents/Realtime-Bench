@@ -34,7 +34,7 @@ from realtime_framework.entity.request import CanonicalRequest, FrameImage
 
 
 class Delivery(str, Enum):
-    """What is known about one write, as for OpenAI Realtime (openai_realtime_session.py)."""
+    """What is known about one write, as for OpenAI Realtime (openai/realtime_session.py)."""
 
     SENT = "sent"
     CONFIRMED = "confirmed"

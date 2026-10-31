@@ -209,7 +209,7 @@ def main(argv=None):
 
     # Past parsing, an error refuses the request the command line parsed into: the reason alone.
     # argparse's usage text fits only a malformed command line, and a Harbor trial reports this
-    # stderr (harbor.py resolve), where the usage would bury the reason. parser.error itself stays
+    # stderr (harbor/integration.py resolve), where the usage would bury the reason. parser.error itself stays
     # the way out, which the configuration export's trial probe intercepts (effective_config.py).
     parser.print_usage = lambda file=None: None
 

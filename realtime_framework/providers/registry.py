@@ -101,12 +101,12 @@ APIS = {
     "openrouter": _LITELLM + "OpenRouterDriver",
     "anthropic_messages": _LITELLM + "AnthropicMessagesDriver",
     "moonshot": _LITELLM + "MoonshotDriver",
-    "openai_realtime": "realtime_framework.providers.openai_realtime:OpenAIRealtimeDriver",
+    "openai_realtime": "realtime_framework.providers.openai.realtime:OpenAIRealtimeDriver",
     "gemini_live": "realtime_framework.providers.gemini.live:GeminiLiveDriver",
     # OpenRouter Decisions API (choice questions), wall clock only.
     "jev_decisions": "realtime_framework.providers.jev.decisions:JevDecisionsClient",
     # OpenAI Decisions models through OpenRouter's Decisions API, wall clock only.
-    "openai_decisions": "realtime_framework.providers.openai_decisions:OpenAIDecisionsClient",
+    "openai_decisions": "realtime_framework.providers.openai.decisions:OpenAIDecisionsClient",
 }
 DEFAULT_EFFORTS = ["provider_default", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
 # A model YAML may instead name a driver class kept outside the repository, as endpoint.api

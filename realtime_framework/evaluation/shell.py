@@ -22,7 +22,7 @@ since the kernel started; it must be passed, or the kernel would time its watchd
 
 Episode-trace names. The records the kernel writes under a TraceEvent name (InferenceStarted,
 ActionProposed, ClockAdvanced, ActionResolved, ActionApplied, RunInvalidated) keep it, with the
-payload the runner writes (evaluation/episode_records.py) instead of the kernel's data, which only
+payload the runner writes (evaluation/records/episode_records.py) instead of the kernel's data, which only
 ClockAdvanced keeps: a generation's number is in no record but the KernelRecords naming it. Of the
 echoes of the events it handled, FrameCaptured of a frame that was captured is written as
 ObservationCaptured (a failed capture writes none, nor does the frame that froze the stream when
@@ -59,8 +59,8 @@ from realtime_framework.entity.actions import Action, ActionType, Observation
 from realtime_framework.entity.config import DecisionBudget
 from realtime_framework.entity.model import PendingDecision
 from realtime_framework.entity.records import TraceEvent, _jsonable
-from realtime_framework.evaluation import episode_records
-from realtime_framework.evaluation.clock import Settlement, token_record
+from realtime_framework.evaluation.records import episode_records as episode_records
+from realtime_framework.evaluation.token_accounting import Settlement, token_record
 from realtime_framework.evaluation.episode_end import (
     EpisodeEnd,
     EpisodeResult,

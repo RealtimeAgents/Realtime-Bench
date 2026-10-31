@@ -9,7 +9,7 @@ applied before the checks were collected here:
   effective_run_config: check_streaming_options;
 - run plans, effective_run_config and the Harbor trial worker: validate_model_interaction
   (check_frame_rates, check_wall_clock, check_interaction_mode);
-- Harbor's agent options (evaluation/harbor.py RealtimeBenchOptions): check_frame_rates;
+- Harbor's agent options (evaluation/harbor/integration.py RealtimeBenchOptions): check_frame_rates;
 - the Harbor trial worker, before it writes the launch file the runner runs as written, and in
   the dry run Harbor's resolve makes (evaluation/_trial.py): check_token_budget and
   check_episode.

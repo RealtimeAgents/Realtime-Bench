@@ -57,7 +57,7 @@ def runtime(root, python, suite):
         [
             str(python),
             "-c",
-            "from realtime_framework.evaluation.harbor import describe_main; describe_main()",
+            "from realtime_framework.evaluation.harbor.integration import describe_main; describe_main()",
             "--suite",
             suite,
         ],
@@ -76,8 +76,8 @@ def runtime(root, python, suite):
 # Verifier
 """Grading, which each trial runs as its verifier and the host runs again (aggregate)."""
 
-from realtime_framework.evaluation import harbor_verifier as harbor_verifier
-from realtime_framework.evaluation.harbor_verifier import verify as verify
+from realtime_framework.evaluation.harbor import verifier as harbor_verifier
+from realtime_framework.evaluation.harbor.verifier import verify as verify
 
 # Agent
 """Harbor bridge to the local runner for registered model endpoints."""
@@ -86,7 +86,7 @@ from typing import Any as Any
 from typing import Literal as Literal
 
 from harbor.agents.base import BaseAgent as BaseAgent
-from realtime_framework.evaluation.harbor_viewer import export_episode, populate_context
+from realtime_framework.evaluation.harbor.viewer import export_episode, populate_context
 from realtime_framework.evaluation.run_spec import ENTRY_DEFAULTS, run_spec
 from harbor.agents.options import AgentOptions as AgentOptions
 from pydantic import ConfigDict
@@ -272,7 +272,7 @@ class ApptainerEnvironment(BaseEnvironment):
         self.task_id = metadata.get("task_id")
         if self.task_id != self.environment_dir.parent.name:
             raise ValueError(f"Not a Realtime-Bench task: {config} must declare its directory name")
-        if not (self.root / "realtime_framework/evaluation/harbor.py").is_file():
+        if not (self.root / "realtime_framework/evaluation/harbor/integration.py").is_file():
             raise ValueError("Run Harbor from the benchmark repository root, or set RTBENCH_ROOT")
 
     async def start(self, force_build=False):
@@ -477,7 +477,7 @@ class ApptainerEnvironment(BaseEnvironment):
             raise ValueError("Resolve the request in this environment before running it")
         # The verifier compares the report with the identity fixed by this environment.
         (self._path("/tests") / "task.json").write_text(json.dumps(self.task, indent=2) + "\n")
-        # The whole module the host grades with, not a copy of its functions (harbor_verifier.py).
+        # The whole module the host grades with, not a copy of its functions (harbor/verifier.py).
         shutil.copyfile(harbor_verifier.__file__, self._path("/tests") / "verify.py")
         workspace = self._path("/workspace")
         if (workspace / "request.json").exists():
@@ -600,7 +600,7 @@ class ApptainerEnvironment(BaseEnvironment):
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def official_suite(identity, suite_tasks):

@@ -36,7 +36,7 @@ class TraceEvent(str, Enum):
     SCORE_PRODUCED = "ScoreProduced"
     RUN_INVALIDATED = "RunInvalidated"
     EPISODE_FINISHED = "EpisodeFinished"
-    # Written by the agent through its trace sink (evaluation/agent_trace.py).
+    # Written by the agent through its trace sink (evaluation/records/agent_trace.py).
     MODEL_REQUEST_SENT = "ModelRequestSent"
     MODEL_RESPONSE_RECEIVED = "ModelResponseReceived"
     MODEL_ATTEMPT_FINISHED = "ModelAttemptFinished"

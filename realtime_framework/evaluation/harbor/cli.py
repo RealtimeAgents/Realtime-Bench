@@ -16,7 +16,7 @@ import tempfile
 
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 AGENT = "realtime_framework.evaluation.harbor:RealtimeBenchAgent"
 AGENT_NAME = "Realtime-Bench Agent"
 # Names recorded before the display name; still accepted in job files and with -a.
@@ -375,7 +375,7 @@ def _register_commands(app):
         output: Path = typer.Option(..., "--output", help="Destination JSON report."),
         official: bool = typer.Option(False, "--official", help="Maintainer-only private report."),
     ):
-        from realtime_framework.evaluation.harbor import harbor_report_main
+        from realtime_framework.evaluation.harbor.integration import harbor_report_main
 
         arguments = ["--job", str(job), "--output", str(output)]
         if official:
@@ -447,7 +447,7 @@ def main():
         # Initialize pricing before requests can import it in an async worker.
         import litellm  # noqa: F401
 
-        from realtime_framework.evaluation.harbor_viewer import create_app as benchmark_app
+        from realtime_framework.evaluation.harbor.viewer import create_app as benchmark_app
 
         return benchmark_app(folder, static_dir=Path(static_dir))
 
