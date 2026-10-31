@@ -1,0 +1,8 @@
+endpoint:
+  api: openrouter
+  model: bytedance-seed/seed-2-1-turbo
+  api_key_env: OPENROUTER_API_KEY
+  upstream_provider: seed
+  # Below the model's 235929: this and the input share a 262144-token context window.
+  native_output_limit: 65536
+reasoning_effort: low
