@@ -1,40 +1,58 @@
+# Generated evaluation outputs
 results/
 results_v1/
 results_v2/
 results_v3/
+/harbor-public/
+log/
 *.log
+audit_backup/
+audit_backup_*/
+
+# Editors and IDEs
+.idea/
+*.iml
+.vscode/
+*.code-workspace
+.cursor/
+.zed/
+.fleet/
+*.swp
+*.swo
+*~
+
+# Python
 __pycache__/
 *.py[cod]
-.secrets.env
+*.egg-info/
+.venv/
+.venv-harbor/
+.venv-mage/
+.venv-task-pages/
+
+# Test, lint, type-check, and coverage caches
+.pytest_cache/
+.pytest-cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Secrets
 .env
+.secrets.env
+
+# Temporary files
+temp/
+
+# Operating system files
+.DS_Store
+Thumbs.db
 
 # Assistant and tool configuration
 /[Aa][Gg][Ee][Nn][Tt][Ss].md
 /CLAUDE.md
 .claude/
 .cloud/
-.vscode/
-
-# Python test, lint, type-check, coverage, and environment caches
-.pytest_cache/
-.pytest-cache/
-.mypy_cache/
-.ruff_cache/
-.cache/
-.venv/
-.venv-harbor/
-.venv-mage/
-.venv-task-pages/
-*.egg-info/
-.coverage
-.coverage.*
-htmlcov/
-
-# Generated evaluation outputs
-/harbor-public/
-log/
-audit_backup/
-audit_backup_*/
-
-# Temporary files
-temp/
