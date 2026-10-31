@@ -31,5 +31,5 @@
 | `gh_synthblast` | Activate every objective pad in two arenas and reach Level 3 within 180 seconds. |
 | `gh_norman_necromancer` | Aim spells and time resurrections to bring the soul counter to 200. |
 | `gh_xx142_b2exe` | Coordinate a 13-second route with a replay ghost to open the timed door and escape. |
-| `gh_evolve` | Allocate RNA and DNA to acquire four evolution upgrades. |
+| `gh_evolve` | Allocate RNA and DNA to acquire four different evolution upgrades. |
 | `gh_highway_404` | Collect a teapot and survive 30 seconds on a collapsing highway. |

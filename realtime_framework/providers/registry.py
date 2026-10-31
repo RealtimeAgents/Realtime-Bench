@@ -84,7 +84,7 @@ from realtime_framework.entity.context_policy import ContextLayers, layer_error,
 # The removed context_preset, refused wherever it is set.
 CONTEXT_PRESET_REMOVED = (
     "context_preset was removed; set the model's context settings in a context section "
-    "(kimi_k3 was context: {reasoning_replay: true}); see docs/model_configuration.md"
+    "(kimi_k3 was context: {reasoning_replay: true}); see docs/reference.md"
 )
 
 

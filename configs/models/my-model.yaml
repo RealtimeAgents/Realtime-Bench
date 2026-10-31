@@ -7,4 +7,4 @@ endpoint:
   # native_output_limit: 32768  # Optional max output tokens; omit for the provider default.
 # reasoning_effort: high  # Optional; omit for the provider default.
 # context:  # Optional; context settings this model needs instead of the standard ones, such as
-#   reasoning_replay: true  # send the model its past reasoning back (docs/model_configuration.md)
+#   reasoning_replay: true  # send the model its past reasoning back (docs/reference.md)

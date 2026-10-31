@@ -159,7 +159,7 @@ Push to your fork and open a pull request. In the description:
 
 ## Other contributions
 
-- **Model APIs:** see [adding a model API](docs/model_configuration.md#add-a-model-api).
+- **Model APIs:** see [adding a model API](docs/custom_drivers.md#add-a-model-api).
 - **Framework code** lives in `realtime_framework/`. Keep pull requests focused, describe how you
   validated them, and say so explicitly if they change task objectives, timing or scoring.
 

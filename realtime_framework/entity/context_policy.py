@@ -346,7 +346,7 @@ _KINDS = {
 
 
 def settings_table() -> str:
-    """The guide's tables (docs/model_configuration.md, Context settings): every setting, from
+    """The guide's tables (docs/reference.md, Context settings): every setting, from
     SETTINGS and the defaults file's standard values, and the approved deviations."""
     standard = context_defaults()["standard"]
     lines = [
